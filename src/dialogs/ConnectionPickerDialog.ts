@@ -51,12 +51,12 @@ export function makeDriverAction(
   const dbxSource = ["cache", "sundb", "oscar"].includes(kind);
   const hint = busy
     ? state?.can_download
-      ? dbxSource ? "正在下载并校验 dbx 固定原件…" : "正在下载并校验官方驱动…"
+      ? dbxSource ? "正在下载并校验自有镜像原件（dbx 固定提交）…" : "正在下载并校验官方驱动…"
       : "正在检查本地驱动…"
     : !state
       ? "正在检查当前架构的完整本地驱动…"
       : state.can_download
-        ? dbxSource ? "下载驱动：从 dbx 固定提交下载原件并校验完整性（第三方来源）" : "下载驱动：从官方源直接下载并校验完整性"
+        ? dbxSource ? "下载驱动：从自有镜像 Navkit-drivers 下载原件并校验完整性（原件来自 dbx 固定提交）" : "下载驱动：从官方源直接下载并校验完整性"
         : `获取驱动：无法自动下载（${state.message || "受授权或平台限制"}），需按官方渠道手动获取`;
   button.dataset.mode = mode;
   button.innerHTML = svg(

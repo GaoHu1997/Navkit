@@ -1,7 +1,8 @@
 //! Fixed, product-specific original JDBC packages with explicit provenance. No JAR is bundled in NavKit.
 //!
 //! 参考 dbx（https://github.com/t8y2/dbx）的分层支持策略：协议兼容数据库走原生驱动、
-//! 其余数据库走具体产品 JDBC。每个产品只允许固定的 Maven/厂商或明确标源 dbx 原始制品（jar/zip/pom 的
+//! 其余数据库走具体产品 JDBC。每个产品只允许固定的 Maven/厂商或明确标源的 dbx 原始制品
+//! （现经由自有镜像仓库 GaoHu1997/Navkit-drivers 字节级托管；jar/zip/pom 的
 //! 大小/SHA-256/条目数/展开大小全部固定），所有 URL 拼写均经真实驱动 `acceptsURL`/
 //! `getPropertyInfo`/死端口连接验证；不会被验证支持的 TLS 形态一律显式拒绝而不是静默明文。
 //!

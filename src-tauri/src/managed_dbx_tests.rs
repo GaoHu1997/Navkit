@@ -1,4 +1,4 @@
-//! Explicit third-party dbx originals; never substitute IRIS or label these as official downloads.
+//! Explicit dbx originals on the self-hosted Navkit-drivers mirror; never substitute IRIS or label these as official downloads.
 use super::*;
 fn request(kind: &str) -> ConnectionRequest {
     ConnectionRequest { kind: crate::models::DbKind::of(kind), host: "127.0.0.1".into(), port: 1,
@@ -10,8 +10,8 @@ fn dbx_originals_keep_exact_provenance_urls_and_refuse_tls_downgrade() {
     for (kind, expected) in [("cache", "jdbc:Cache://127.0.0.1:1/USER"), ("sundb", "jdbc:sundb://127.0.0.1:1/test"), ("oscar", "jdbc:oscar://127.0.0.1:1/OSRDB")] {
         let v = vendor(kind).unwrap(); let mut req = request(kind);
         assert_eq!(connection_url(&req, &v, &[]).unwrap(), expected);
-        assert!(v.jar.url.starts_with("https://raw.githubusercontent.com/t8y2/dbx/71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a/"));
-        assert!(v.limits.contains("并非厂商官方下载")); assert!(v.pom.is_none() && v.license.is_none());
+        assert!(v.jar.url.starts_with("https://raw.githubusercontent.com/GaoHu1997/Navkit-drivers/main/"));
+        assert!(v.limits.contains("dbx 的固定提交 71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a")); assert!(v.pom.is_none() && v.license.is_none());
         for bad in ["ssl=true", "tls=true", "sslmode=verify-full", "sslmode=prefer", "ssl_verify=false", "schema=ignored", "catalog=ignored"] {
             req.params = bad.into();
             assert!(params(&v, &req).and_then(|pairs| connection_url(&req, &v, &pairs.unwrap())).is_err(), "{kind}: {bad}");
@@ -36,7 +36,7 @@ async fn original_dbx_packages_default_routes_and_full_downloads() {
         let jar = dir.join("driver.jar"); fs::copy(&source, &jar).unwrap();
         fs::write(dir.join("manifest.json"), serde_json::to_vec(&Manifest { format:1, kind:v.kind.into(), version:v.version.into(), class:v.class.into() }).unwrap()).unwrap();
         let ready = status_at(&v, &dir, kind); assert_eq!(ready.status, "ready", "{kind}: {}", ready.message);
-        assert!(ready.message.contains("并非厂商官方下载")); assert!(!ready.message.contains("官方完整 JDBC 包"));
+        assert!(ready.message.contains("dbx 的固定提交")); assert!(!ready.message.contains("官方完整 JDBC 包"));
         assert_eq!(std::env::split_paths(&classpath_for(&jar).unwrap()).collect::<Vec<_>>(), [jar.clone()]);
         let saved = fs::read(&jar).unwrap(); fs::remove_file(&jar).unwrap();
         assert!(verify_package(&dir, &v).is_err()); assert!(classpath_for(&jar).is_err());
@@ -51,7 +51,7 @@ async fn original_dbx_packages_default_routes_and_full_downloads() {
         for bad in ["NoClassDefFoundError", "ClassNotFoundException", "sidecar 已退出", &req.password] { assert!(!error.contains(bad), "{kind}: {error}"); }
         let downloaded = download(kind, Some(v.version)).await.expect("complete fixed-commit original HTTPS download");
         assert_eq!(downloaded.status, "ready", "{kind}: {}", downloaded.message);
-        assert!(downloaded.message.contains("并非厂商官方下载")); assert!(!downloaded.can_download);
+        assert!(downloaded.message.contains("dbx 的固定提交")); assert!(!downloaded.can_download);
         assert_eq!(verify_package(&dir, &v).unwrap(), jar); assert_eq!(digest_file(&source).unwrap(), v.jar.sha256);
         println!("{kind}: original DBX package/integrity/Java/default route/full HTTPS download PASS; vendor SQL/auth/TLS UNVERIFIED");
     }

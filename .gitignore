@@ -46,3 +46,5 @@ docs/design/shots/
 Thumbs.db
 .DS_Store
 tools/acceptance/
+tools/usertest-ipc-20261107/
+design-plans/

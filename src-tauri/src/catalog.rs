@@ -184,7 +184,7 @@ pub static CATALOG: &[KindMeta] = &[
         1972,
         "relational",
         "InterSystems ODBC",
-        "可直接下载参考项目 dbx 固定提交的 Caché 原 JDBC 2010.2.3.702（第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。",
+        "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。",
     ),
     k("custom_mysql", "Custom (MySQL)", 3306, Protocol::Mysql, "relational"),
     k("dolt", "Dolt", 3307, Protocol::Mysql, "relational"),
@@ -408,7 +408,7 @@ pub static CATALOG: &[KindMeta] = &[
         40000,
         "domestic",
         "SUNDB ODBC Driver",
-        "可直接下载参考项目 dbx 固定提交的 SUNDB 8-1.0.2 原 JDBC（第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。",
+        "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。",
     ),
     odbc(
         "oscar",
@@ -416,7 +416,7 @@ pub static CATALOG: &[KindMeta] = &[
         2003,
         "domestic",
         "Shentong ODBC Driver",
-        "可直接下载参考项目 dbx 固定提交的 OSCAR JDBC 原 JAR（第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。",
+        "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。",
     ),
     odbc(
         "xugu",
