@@ -1,0 +1,15 @@
+[package]
+name = "navkit_sim_odbc"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[profile.release]
+panic = "abort"
+
+# Intentionally std-only; this is a test driver, never installed as a vendor driver.

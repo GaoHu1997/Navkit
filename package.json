@@ -1,0 +1,39 @@
+{
+  "name": "navkit",
+  "private": true,
+  "version": "1.0.0",
+  "description": "NavKit 数据库管理工具 (Tauri 2 + Rust + 原生 TypeScript)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test:ui": "node --test tools/tests/data-grid-filter-sort.test.mjs tools/acceptance/object-tools.test.mjs tools/tests/portable-packaging.test.mjs tools/tests/transfer-feedback.test.mjs tools/tests/driver-download.test.mjs tools/tests/ribbon-layout.test.mjs tools/tests/tree-drag-sort.test.mjs tools/tests/sql-completion-execution.test.mjs tools/tests/tool-commands.test.mjs tools/tests/query-builder.test.mjs tools/tests/column-order.test.mjs tools/tests/chart-data.test.mjs tools/tests/manual-transaction.test.mjs tools/tests/manual-transaction-controller.test.mjs tools/tests/fixture-transport.test.mjs tools/tests/datasource-sync.test.mjs",
+    "test:rust": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --lib --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance",
+    "test:sync": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance -- --nocapture",
+    "test:sync:live": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --test e2e_sync_live_matrix --test transfer_sync_acceptance -- --ignored --nocapture",
+    "test:sync:simulated": "node tools/acceptance/sync/run-simulations.mjs",
+    "test:desktop": "node tools/acceptance/e2e/desktop14-runner-e2c772c4.mjs"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.4",
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/lang-sql": "^6.8.0",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/search": "^6.5.8",
+    "@codemirror/state": "^6.5.1",
+    "@codemirror/view": "^6.36.2",
+    "@lezer/highlight": "^1.2.1",
+    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-dialog": "^2.8.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.7",
+    "playwright-core": "^1.64.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}

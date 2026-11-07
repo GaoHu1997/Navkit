@@ -1,0 +1,48 @@
+# Node / 前端构建
+node_modules/
+dist/
+dist-portable/
+preview.html
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 测试与验收的大型数据产物
+artifacts/
+tools/acceptance/datasources/
+tools/acceptance/pg/
+tools/acceptance/reference-transfer-*/
+tools/acceptance/desktop14-*/
+tools/acceptance/simulation/
+tools/artifacts/
+tools/fulltest-*/
+tools/driver-mirror/
+tools/db_art/
+
+# 本地数据与临时文件
+data/
+testdata/accept.db
+testdata/big_export.csv
+testdata/demo.db
+testdata/import_rows.json
+.db.sqlite*
+*.db-journal
+*.db-wal
+*.log
+
+# 本地工作目录
+.zcode/
+.agents/
+.dist-portable-data-preserve/
+dynamodb-local-metadata.json
+
+# 大体积二进制与证据归档
+docs/验收证据/
+docs/ui-align/*.png
+docs/design/shots/
+
+# 系统文件
+Thumbs.db
+.DS_Store
+tools/acceptance/

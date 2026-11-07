@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NavKit",
+  "version": "1.0.0",
+  "identifier": "com.navkit.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5183/index.html",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "NavKit - 数据库管理",
+        "width": 1600,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 552,
+        "resizable": true,
+        "center": true,
+        "decorations": false,
+        "dragDropEnabled": false,
+        "theme": "Light"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      }
+    }
+  }
+}

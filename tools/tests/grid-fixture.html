@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>列宽拖动回归测试（内存数据）</title><link rel="stylesheet" href="/src/styles/base.css"></head>
+<body style="padding:20px;background:#f0f0f0">
+  <h1 style="font-size:16px;margin-bottom:12px">列宽拖动回归测试（仅内存数据）</h1>
+  <p>拖动表头分界线；滚动后再次拖动；方向键调整列宽。表头正常点击不应被拖动吞掉。</p>
+  <div id="fixture" style="width:650px;height:340px;display:flex;margin-top:12px;border:1px solid #aab5c0"></div>
+  <div role="status" id="status">普通表头点击次数 0</div>
+  <script type="module">
+    import { DataGrid } from '/src/ui/DataGrid.ts';
+    let clicks = 0;
+    const grid = new DataGrid({ onSort: () => { document.getElementById('status').textContent = `普通表头点击次数 ${++clicks}`; } });
+    const columns = Array.from({length:12}, (_, i) => ({name:`字段${i + 1}`,type:'TEXT',nullable:true,primary_key:false,auto_increment:false}));
+    const rows = Array.from({length:60}, (_, r) => columns.map((_, c) => `第${r + 1}行·值${c + 1}`));
+    grid.setData({columns,rows,orderRules:[{column:'字段2',ascending:false},{column:'字段1',ascending:true}]});
+    document.getElementById('fixture').appendChild(grid.el);
+  </script>
+</body>
+</html>

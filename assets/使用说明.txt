@@ -1,0 +1,55 @@
+NavKit — 数据库管理工具 绿色版
+================================
+
+使用方法
+--------
+1. 双击 navkit.exe 运行。
+2. 若系统缺少 Microsoft Edge WebView2 运行时，双击 MicrosoftEdgeWebview2Setup.exe
+   安装一次（仅此一次），之后无需重复安装。
+
+便携特性
+--------
+- 所有配置、连接信息、收藏、日志、缓存都写入本目录下的 data\ 文件夹。
+- 不将应用配置写入 AppData；已安装驱动不需要永久注册修改。
+- 可信本地 ODBC DLL 在 Windows 连接时使用唯一临时用户 DSN，仅记录驱动路径，
+  连接成功或失败后删除；不永久安装驱动。强制杀进程时不能保证临时 DSN 清理。
+- 连接密码使用 AES-256-GCM 加密后保存在 data\connections.json，
+  密钥保存在 data\key.bin。
+- 直接把整个文件夹拷到 U 盘或另一台电脑即可继续使用。
+
+支持的数据库
+------------
+- 内置驱动：SQLite / MySQL(MariaDB) / PostgreSQL
+- MySQL 协议族：TiDB、OceanBase、PolarDB、TDSQL、Doris、StarRocks、SelectDB、Databend 等
+- PostgreSQL 协议族：openGauss、KingbaseES、HighGo、Redshift、Cloudberry 等
+- 分析型 / 时序 / NoSQL / 图 / 消息队列等：ClickHouse、Elasticsearch、MongoDB、
+  Redis、SQL Server、Neo4j、InfluxDB、TDengine 等
+- 系统 ODBC 驱动：达梦 DM、Hive（需自行安装厂商驱动）
+- 工具 → 驱动管理：已安装驱动、DSN、可信 64 位原生 DLL 和连接串模板。
+  自定义驱动会显示在新建连接选择器；JDBC JAR 不是原生驱动，不支持直接加载。
+- 标记“规划中”的类型不可选中，不代表已支持。
+
+筛选、同步和更新
+----------------
+- 筛选可逐条件选择 AND/OR、括号和大小写敏感；排序可添加多个字段与调整优先级。
+- 工具 → 数据同步：SQLite、MySQL 协议、PostgreSQL 协议之间表结构/数据同步，
+  可逐列映射名称和目标类型。MySQL 重建表 DDL 自动提交，不能整体撤销。
+- 取消同步为数据库操作之间协作停止，不强制中断正在执行的语句。
+- 更新程序时直接替换 navkit.exe，保留 data\；不得删除密码密钥、连接或备份。
+- 数据源可拖入文件夹或拖到连接上半/下半以插到前/后；分组与顺序重启保留。
+- SQL 提示使用当前模式的真实表、视图、字段和别名；运行优先选区，没有选区执行全文。
+- 查询创建工具只预览并插入单表/视图 SELECT，不自动执行；结果图表只用当前真实快照。
+- 手动事务仅支持原生 SQLite/MySQL/PostgreSQL 协议；绑定查询页，失败只能回滚，关闭须确认。
+  SQLite 仅 main；MySQL 数据库须全 InnoDB，无触发器单表写入。事务内不能解释计划。
+- 字段物理上下移动仅支持原生 MySQL/MariaDB，复用完整定义并校验实际保存顺序。
+- 查询停止按钮没有原生中断接口，明确禁用，不把丢弃结果当作取消。
+
+快捷键
+--------
+Ctrl+N     新建连接        Ctrl+Q    新建查询
+Ctrl+S     保存            Ctrl+W    关闭当前标签页
+Ctrl+F     查找/替换       F5        查询页执行，其它页刷新
+Ctrl+Enter / Ctrl+Shift+Enter  运行选区，无选区则运行全文
+Shift+F10  打开 SQL 选区菜单；Esc 关闭并返回编辑器
+Alt+↑/↓    数据源同组排序；Ctrl+X/V 移组/插前；Ctrl+Shift+V 插后
+Alt+F4     退出

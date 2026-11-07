@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>导入导出与同步回归测试（隔离模拟 IPC）</title><link rel="stylesheet" href="/src/styles/base.css"></head><body><main style="padding:24px"><button id="sync" class="btn">打开同步</button><button id="import" class="btn">打开导入</button><button id="export" class="btn">打开导出</button><pre id="result"></pre></main><script type="module">
+import { openSyncDialog } from '/src/dialogs/SyncDialog.ts';
+import { openImportWizard, openExportWizard } from '/src/dialogs/ImportExportDialog.ts';
+const connections=['source','target'].map((id,i)=>({id,name:i?'SQLite 目标':'PostgreSQL 源',kind:i?'sqlite':'postgresql',host:'',port:0,user:'',password:'',database:'',file:'',params:'',group:'',read_only:false,keep_alive:false}));
+const tasks=new Map();
+window.__PREVIEW_MOCK__={
+ open_connection:()=>({ok:true,message:'connected'}),list_databases:({id})=>[[id==='source'?'public':'main','']],list_tables:()=>[['items','table']],
+ sync_type_mapping:()=>[{source:'id',source_type:'BIGINT',target_type:'INTEGER'},{source:'name',source_type:'VARCHAR(80)',target_type:'TEXT'}],
+ get_table_schema:()=>({columns:[{name:'id'},{name:'name'}]}),preview_csv:()=>[['id','name'],[['1','测试'],['2','第二行']]],
+ run_sync:async({opts})=>{tasks.set(opts.task_id,{task_id:opts.task_id,status:'running',message:'正在写入',processed:1,total:2}); await new Promise(r=>setTimeout(r,700)); const t=tasks.get(opts.task_id); if(t.status==='cancelled')throw new Error('任务已取消，未提交的目标修改已回滚');document.querySelector('#result').textContent=JSON.stringify(opts,null,2);t.status='completed';return {rows:opts.mode==='structure'?0:2,created:true,warnings:[]}},
+ transfer_task_progress:({taskId})=>tasks.get(taskId),cancel_transfer_task:({taskId})=>{const t=tasks.get(taskId);if(t)t.status='cancelled'},
+ run_import_task:async({opts})=>{tasks.set(opts.task_id,{task_id:opts.task_id,status:'completed',message:'导入完成',processed:2,total:2});document.querySelector('#result').textContent=JSON.stringify(opts,null,2);return 2},
+ run_export_task:async({opts})=>{tasks.set(opts.task_id,{task_id:opts.task_id,status:'completed',message:'导出完成',processed:2,total:2});document.querySelector('#result').textContent=JSON.stringify(opts,null,2);return 2},
+};
+document.querySelector('#sync').onclick=()=>openSyncDialog(connections,connections[0],{schema:'public',table:'items'});
+document.querySelector('#import').onclick=()=>openImportWizard(connections[1],'main','items',()=>{});
+document.querySelector('#export').onclick=()=>openExportWizard(connections[0],'public','items',()=>{});
+</script></body></html>
