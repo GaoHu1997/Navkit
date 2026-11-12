@@ -88,9 +88,13 @@ fn walk_tree_fingerprint(hasher: &mut Sha256, dir: &Path, prefix: &str) {
 }
 
 fn status_fingerprint() -> u64 {
+    status_fingerprint_at(&storage::data_dir().join("managed-drivers"))
+}
+
+fn status_fingerprint_at(managed_root: &Path) -> u64 {
     let mut hasher = Sha256::new();
     // 1) 全部托管驱动文件：JDBC 包、依赖 JAR、Oracle 客户端、H2 jar、artifacts 下载件。
-    walk_tree_fingerprint(&mut hasher, &storage::data_dir().join("managed-drivers"), "");
+    walk_tree_fingerprint(&mut hasher, managed_root, "");
     // 2) ODBC 清单：驱动名/库路径与其库文件 size+mtime（安装/卸载/替换都会变化）。
     match super::list_odbc_inventory() {
         Ok(inventory) => {
@@ -130,7 +134,7 @@ pub struct DriverStatus {
     pub download_path: Option<String>,
 }
 #[derive(Debug, Clone)]
-struct DownloadSpec { url: &'static str, sha256: &'static str, size: u64 }
+pub(crate) struct DownloadSpec { pub(crate) url: &'static str, pub(crate) sha256: &'static str, pub(crate) size: u64 }
 
 // Pinned official assets. Digests/sizes are published by the official GitHub Releases API:
 // https://api.github.com/repos/duckdb/duckdb-odbc/releases/tags/v2.0.0.1
@@ -386,6 +390,7 @@ fn manual_reason(kind: &str) -> &'static str {
         "bigquery" | "spanner" => "官方 JDBC 驱动的 Maven 制品是缺少依赖闭包的壳包（经真实加载验证缺类）；请从官方渠道获取完整驱动发行包并使用自定义 JDBC 配置。",
         "dremio" => "官方 JDBC 仅通过 Dremio 官网分发（需接受许可），Maven Central 没有官方制品；请从官方获取并使用自定义 JDBC 配置。",
         "inceptor" | "argodb" => "星环 Inceptor/ArgoDB 的自有认证扩展未经核验；官方 Hive standalone JDBC 不作为其专有 SDK 的替代，请安装星环/Hive ODBC 驱动或使用自定义 JDBC。",
+        "gbase8c" => "GBase 8c 需要手动获取厂商驱动，不能复用 GBase 8a 驱动。已知第三方固定提交 71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a 的 agents/drivers/gbase8c/libs/gbase8c-jdbc-3.0.0B02.jar 仅是候选来源；大小、SHA-256、驱动类尚未核验，也未发布到自有镜像 GaoHu1997/Navkit-drivers，不作为运行时下载来源。请显式配置厂商 ODBC 或自定义 JDBC、实际端口和 TLS 参数；不会伪造下载或代接受许可。",
         "gbase" | "yashandb" | "sundb" | "oscar" | "xugu" => "此厂商驱动通常随授权客户端/数据库安装介质提供；请向厂商获取完整同架构 ODBC 客户端。当前没有经核验的公开直链，不会伪造下载或自动接受许可。",
         "access" => "Access ODBC 需要与应用同架构的 Microsoft Access/ACE 完整组件；安装受 Office 版本与许可影响，当前不静默运行安装器。",
         "odbc" | "jdbcx" => "通用连接没有唯一可下载驱动。请在驱动管理中选择已安装的同架构驱动、完整原生库或 DSN。",
@@ -482,7 +487,7 @@ fn trusted_url(url: &reqwest::Url) -> bool {
     url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
         && matches!(url.host_str(), Some("github.com" | "api.github.com" | "raw.githubusercontent.com" | "release-assets.githubusercontent.com" | "objects.githubusercontent.com" | "repo.maven.apache.org" | "download.oracle.com" | "sfc-repo.snowflakecomputing.com" | "download.dremio.com"))
 }
-fn client() -> Result<reqwest::Client> {
+pub(crate) fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder().user_agent("NavKit-DriverManager/1.0").no_gzip()
         .connect_timeout(Duration::from_secs(20)).timeout(Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -492,7 +497,7 @@ fn client() -> Result<reqwest::Client> {
 async fn download_file(spec: &DownloadSpec, path: &Path) -> Result<()> {
     download_file_limited(spec, path, MAX_DOWNLOAD).await
 }
-async fn download_file_limited(spec: &DownloadSpec, path: &Path, limit: u64) -> Result<()> {
+pub(crate) async fn download_file_limited(spec: &DownloadSpec, path: &Path, limit: u64) -> Result<()> {
     transfer::download(spec, path, limit).await
 }
 fn extract_verified_zip(archive: &Path, destination: &Path) -> Result<Vec<ManifestFile>> {
@@ -727,17 +732,22 @@ mod tests {
     }
     fn temporary() -> Staging { let path = std::env::temp_dir().join(format!("navkit-download-test-{}", uuid::Uuid::new_v4())); fs::create_dir(&path).unwrap(); Staging(path) }
     #[test] fn status_fingerprint_tracks_managed_driver_files() {
-        let first = status_fingerprint();
-        assert_eq!(first, status_fingerprint(), "无变化时指纹必须稳定");
-        let dir = storage::data_dir().join("managed-drivers").join("fingerprint-probe-test");
-        fs::create_dir_all(&dir).unwrap();
+        // Empty and absent directories are different cache inputs. Use a known
+        // empty, private root so probe cleanup restores the exact initial state
+        // without writing into the portable application's real driver directory.
+        let staging = temporary();
+        let fingerprint = || status_fingerprint_at(&staging.0);
+        let first = fingerprint();
+        assert_eq!(first, fingerprint(), "无变化时指纹必须稳定");
+        let dir = staging.0.join("fingerprint-probe-test");
+        fs::create_dir(&dir).unwrap();
         fs::write(dir.join("probe.bin"), b"hello").unwrap();
-        let with_file = status_fingerprint();
+        let with_file = fingerprint();
         assert_ne!(with_file, first, "新增驱动文件必须改变指纹");
         fs::write(dir.join("probe.bin"), b"hello-world").unwrap();
-        assert_ne!(status_fingerprint(), with_file, "文件内容变化必须改变指纹");
+        assert_ne!(fingerprint(), with_file, "文件内容变化必须改变指纹");
         fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(status_fingerprint(), first, "删除后指纹必须还原");
+        assert_eq!(fingerprint(), first, "删除后指纹必须还原");
     }
     #[test] fn status_cache_returns_same_list_for_same_fingerprint() {
         let fingerprint = status_fingerprint();
@@ -770,13 +780,31 @@ mod tests {
     }
     #[test] fn builtin_and_manual_are_honest() {
         assert_eq!(status_from_inventory("mysql", None, "").unwrap().status, "builtin");
-        let manual = status_from_inventory("odbc", None, "").unwrap(); assert_eq!(manual.status, "manual"); assert!(!manual.can_download);
+        // 通用 ODBC / JDBCX 已从数据源目录移除：不再作为可管理/可下载数据源出现（旧连接仍按 Odbc 兜底）。
+        assert!(crate::catalog::meta("odbc").is_none());
+        assert!(crate::catalog::meta("jdbcx").is_none());
+        assert!(status_from_inventory("odbc", None, "").is_err());
+        assert!(status_from_inventory("jdbcx", None, "").is_err());
         let downloadable = status_from_inventory("dameng", None, "").unwrap();
         assert_ne!(downloadable.status, "builtin");
         assert!(managed_jdbc::supports("dameng"));
         if downloadable.status == "missing" { assert!(downloadable.can_download); }
         let inventory = super::super::OdbcInventory { drivers: vec![super::super::InstalledOdbcDriver { name: "DM8 ODBC DRIVER".into(), library: "Z:\\does-not-exist.dll".into() }], dsns: vec![], architecture: std::env::consts::ARCH.into() };
         assert_ne!(status_from_inventory("dameng", Some(&inventory), "").unwrap().status, "ready");
+    }
+    #[test] fn gbase8c_stays_manual_and_never_borrows_8a_driver() {
+        let status = status_from_inventory("gbase8c", None, "").unwrap();
+        assert_eq!(status.status, "manual");
+        assert!(!status.can_download);
+        assert!(status.library.is_none());
+        assert!(status.message.contains("GBase 8a"));
+        assert!(status.message.contains("gbase8c-jdbc-3.0.0B02.jar"));
+        assert!(status.message.contains("未核验"));
+        let inventory = super::super::OdbcInventory { drivers: vec![super::super::InstalledOdbcDriver { name: "GBase 8a ODBC Driver".into(), library: "Z:\\missing-8a.dll".into() }], dsns: vec![], architecture: std::env::consts::ARCH.into() };
+        let status = status_from_inventory("gbase8c", Some(&inventory), "").unwrap();
+        assert_eq!(status.status, "manual");
+        assert!(status.library.is_none());
+        assert!(!managed_jdbc::supports("gbase8c"));
     }
     #[test] fn clean_staging_on_drop() { let staging = temporary(); let path = staging.0.clone(); fs::write(path.join("download.zip.partial"), b"partial").unwrap(); drop(staging); assert!(!path.exists()); }
     #[test] fn reject_changed_or_missing_manifest_files() {

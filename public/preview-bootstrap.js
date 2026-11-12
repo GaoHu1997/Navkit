@@ -48,7 +48,7 @@ try {
           { id: "f2", name: "统计订单", sql: "SELECT COUNT(*) FROM orders;", connection_id: "c2", timestamp: 0 },
         ];
 
-        // 自动运行任务（内存态）
+        // 自动任务（内存态）
         let storeJobs = [
           {
             id: "job-1",
@@ -139,6 +139,116 @@ try {
         // 仅预览界面状态夹具，不提供真实事务或数据库写入保证。
         const previewManualTransactions = new Map();
         const inactiveTransaction = () => ({ active: false, schema: "", owner: "", failed: false });
+
+        // ---- mock 公共工具：稳定 id / 指纹 / 时间 / 表结构夹具 ----
+        let mockSeq = 0;
+        const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+        });
+        const fingerprint = () => Array.from({ length: 64 }, () => "0123456789abcdef"[(Math.random() * 16) | 0]).join("");
+        const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+        const isoPlus = (ms) => new Date(Date.now() + ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+        const deadline = (id) => ({ execution_id: id, budget_ms: null, elapsed_ms: 0, deadline_reached: false, stop_confirmed: false });
+        const outcome = (id, extra) => ({
+          execution_id: id, state: "succeeded", result: null, error: null, deadline: deadline(id),
+          effects: "preview_fixture", transaction_state: "committed", ...(extra || {}),
+        });
+        // 最近一次 execute_sql 的结果集（按 连接|库 记录），供查询证据/缓存分页复用
+        const spoolStore = new Map();
+        // 与 get_table_schema 同源的表结构夹具；表设计快照复用同一份结构
+        const tableSchemaFixture = (schemaName, tableName) => ({
+          table: tableName || "account",
+          database: schemaName || "password_manager",
+          columns: [
+            { name: "id", type: "bigint", nullable: false, default: null, primary_key: true, auto_increment: true, comment: null },
+            { name: "account_name", type: "varchar", nullable: false, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "category", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "created_at", type: "datetime", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "description", type: "longtext", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "icon", type: "longtext", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "password", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "password_library_id", type: "bigint", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "updated_at", type: "datetime", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "user_id", type: "bigint", nullable: false, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "username", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+            { name: "website", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
+          ],
+          indexes: [
+            { name: "PRIMARY", columns: ["id"], unique: true, primary: true, method: null },
+          ],
+          foreign_keys: [],
+          comment: null,
+          engine: "InnoDB",
+          collation: "utf8mb4_0900_ai_ci",
+          row_count: 15,
+        });
+        const tableDesignCapabilities = () => ({
+          checks: { supported: true, reason: null },
+          triggers: { supported: true, reason: null },
+          options: { supported: true, reason: null },
+          rebuild: { supported: true, reason: null },
+          clear: { supported: true, reason: null },
+          copy_structure: { supported: true, reason: null },
+          copy_data: { supported: true, reason: null },
+          supported_options: ["engine", "charset", "collation", "row_format"],
+          limitations: [],
+        });
+        // 由 TableDesignSnapshot.schema 组装设计 payload（编辑器全页草稿基线）
+        const designPayloadOf = (schema) => ({
+          schema: schema.database, table: schema.table,
+          columns: schema.columns.map((c) => ({
+            name: c.name, data_type: c.type, nullable: c.nullable, default_value: c.default,
+            auto_increment: c.auto_increment, comment: c.comment,
+          })),
+          primary_key: schema.columns.filter((c) => c.primary_key).map((c) => c.name),
+          comment: schema.comment,
+          indexes: schema.indexes.filter((i) => !i.primary).map((i) => ({ name: i.name, columns: i.columns, unique: !!i.unique })),
+          foreign_keys: [],
+          checks: [],
+          triggers: [],
+          options: { engine: schema.engine, charset: "utf8mb4", collation: schema.collation },
+        });
+        const snapshotOfDesign = (args, ownerId) => {
+          const design = (args && args.design) || {};
+          const schema = tableSchemaFixture(design.schema, design.table);
+          if (Array.isArray(design.columns)) {
+            schema.columns = design.columns.map((c) => ({
+              name: c.name, type: c.data_type || "text", nullable: c.nullable !== false,
+              default: c.default_value ?? null, primary_key: (design.primary_key || []).includes(c.name),
+              auto_increment: !!c.auto_increment, comment: c.comment ?? null,
+            }));
+          }
+          if (Array.isArray(design.indexes)) {
+            schema.indexes = [
+              ...(design.primary_key || []).length ? [{ name: "PRIMARY", columns: design.primary_key, unique: true, primary: true, method: null }] : [],
+              ...design.indexes.map((i) => ({ name: i.name, columns: i.columns, unique: !!i.unique, primary: false, method: null })),
+            ];
+          }
+          if (design.comment !== undefined) schema.comment = design.comment;
+          return {
+            schema, objects: { checks: [], triggers: [], completeness: "complete", limitations: [], table_definition: null },
+            options: { engine: schema.engine, charset: "utf8mb4", collation: schema.collation },
+            design, revision: "preview-rev-0001", source_fingerprint: fingerprint(),
+            owner_id: ownerId || "", completeness: "complete", capabilities: tableDesignCapabilities(),
+          };
+        };
+        // 内存态调度任务 / 模板（scheduler_* 命令）
+        let schedulerJobs = [];
+        let schedulerTemplates = [];
+        const schedulerRecord = (job) => ({
+          job, schedule_revision: job.revision || "rev-1",
+          next_run_utc: job.enabled ? isoPlus(60000) : null,
+          queued: null, blocked_run_id: null, paused_reason: null,
+        });
+        const runSummary = (job, status) => ({
+          id: uuid(), job_id: job ? job.id : uuid(), job_revision: (job && job.revision) || "rev-1",
+          schedule_revision: "rev-1", scheduled_at_utc: nowIso(), claimed_at_utc: nowIso(),
+          started_at_utc: nowIso(), completed_at_utc: status === "running" ? null : nowIso(),
+          status: status || "succeeded", resources_pending: false, cancel_requested: false,
+          actions: [], journal: [],
+        });
+
         const responses = {
           manual_transaction_status: args => previewManualTransactions.get(args.id) || inactiveTransaction(),
           manual_transaction_start: args => {
@@ -247,37 +357,6 @@ try {
             }
             return [];
           },
-          execute_sql: (args) => {
-            const sql = String((args && args.sql) || "");
-            if (/note_category/i.test(sql)) {
-              return {
-                sets: [
-                  {
-                    columns: [
-                      { name: "id", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
-                      { name: "created_at", type: "datetime", nullable: true, primary_key: false, auto_increment: false },
-                      { name: "name", type: "varchar", nullable: true, primary_key: false, auto_increment: false },
-                      { name: "quick_link_id", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
-                      { name: "sort_order", type: "int", nullable: true, primary_key: false, auto_increment: false },
-                      { name: "updated_at", type: "datetime", nullable: true, primary_key: false, auto_increment: false },
-                      { name: "user_id", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
-                    ],
-                    rows: [
-                      ["1", "2026-05-12 09:20:50.42", "默认", "705", "3", "2026-05-12 10:29:39.18", "1"],
-                      ["2", "2026-05-12 09:21:14.24", "代码", "705", "1", "2026-05-12 10:29:39.18", "1"],
-                      ["3", "2026-05-12 09:21:32.11", "权益", "705", "0", "2026-05-12 10:29:39.18", "1"],
-                      ["33", "2026-05-12 10:11:31.82", "测试", "705", "2", "2026-05-12 10:29:39.18", "1"],
-                    ],
-                    total: 4,
-                    affected: 0,
-                  },
-                ],
-                messages: [],
-                elapsed_ms: 251,
-              };
-            }
-            return { sets: [], messages: [], elapsed_ms: 1 };
-          },
           list_objects: (args) => {
             const schema = (args && args.schemaName) || "";
             if (schema === "dbswitch") {
@@ -318,32 +397,7 @@ try {
             }
             return [];
           },
-          get_table_schema: (args) => ({
-            table: (args && args.table) || "account",
-            database: (args && args.schemaName) || "password_manager",
-            columns: [
-              { name: "id", type: "bigint", nullable: false, default: null, primary_key: true, auto_increment: true, comment: null },
-              { name: "account_name", type: "varchar", nullable: false, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "category", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "created_at", type: "datetime", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "description", type: "longtext", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "icon", type: "longtext", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "password", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "password_library_id", type: "bigint", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "updated_at", type: "datetime", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "user_id", type: "bigint", nullable: false, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "username", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-              { name: "website", type: "varchar", nullable: true, default: null, primary_key: false, auto_increment: false, comment: null },
-            ],
-            indexes: [
-              { name: "PRIMARY", columns: ["id"], unique: true, primary: true, method: null },
-            ],
-            foreign_keys: [],
-            comment: null,
-            engine: "InnoDB",
-            collation: "utf8mb4_0900_ai_ci",
-            row_count: 15,
-          }),
+          get_table_schema: (args) => tableSchemaFixture(args && args.schemaName, args && args.table),
           // 表数据分页（预览 mock）：在固定行集上真实执行筛选与排序，
           // 请求结构与后端一致（filters 分组 OR、组间按 filter_logic 连接；order_rules 依次优先）。
           page_table: (args) => {
@@ -418,8 +472,9 @@ try {
           },
           execute_sql: (args) => {
             const sql2 = String((args && args.sql) || "");
+            let result;
             if (/note_category/i.test(sql2)) {
-              return {
+              result = {
                 sets: [
                   {
                     columns: [{ name: "id", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
@@ -440,8 +495,13 @@ try {
                 messages: [],
                 elapsed_ms: 251,
               };
+            } else {
+              result = { sets: [], messages: [], elapsed_ms: 1 };
             }
-            return { sets: [], messages: [], elapsed_ms: 1 };
+            // 记录最近一次执行结果，供 query_result_snapshot / fetch_query_rows 复用同一行集
+            spoolStore.set(`${(args && args.id) || ""}|${(args && args.database) || ""}`,
+              result.sets.map((s) => ({ columns: s.columns, rows: s.rows })));
+            return result;
           },
           update_row: () => 1,
           insert_row: () => 1,
@@ -604,7 +664,7 @@ try {
             }
             return Promise.reject(new Error("对象不存在"));
           },
-          // ---- 自动运行 ----
+          // ---- 自动任务 ----
           list_jobs: () => storeJobs,
           save_job: (args) => {
             const job = (args && args.job) || {};
@@ -640,6 +700,51 @@ try {
             if (i >= 0) users.splice(i, 1);
           },
           alter_db_user_password: () => {},
+          read_db_user: (args) => {
+            const name = String((args && args.user) || "") + "@" + String((args && args.host) || "");
+            const row = users.find((u) => u[0] === name) || [name, "", "0", "0", "0", "0", "否"];
+            return {
+              account: {
+                user: (args && args.user) || "", host: (args && args.host) || "",
+                plugin: "caching_sha2_password", password_expired: false,
+                password_lifetime_days: null, account_locked: false,
+                max_questions: Number(row[2]) || 0, max_updates: Number(row[3]) || 0,
+                max_connections: Number(row[4]) || 0, max_user_connections: Number(row[5]) || 0,
+                ssl_type: row[1] || "", ssl_cipher: "", x509_issuer: "", x509_subject: "",
+              },
+              server_privileges: [
+                "Alter", "Alter Routine", "Create", "Create Routine", "Create Temporary Tables",
+                "Create User", "Create View", "Delete", "Drop", "Event", "Execute", "File", "Index",
+                "Insert", "Lock Tables", "Process", "References", "Reload", "Replication Client",
+                "Replication Slave", "Select", "Show Databases", "Show View", "Shutdown", "Super",
+                "Trigger", "Update",
+              ].map((name) => ({ name, granted: name === "Select", grantable: false }))
+                .concat([{ name: "Grant Option", granted: false, grantable: false }]),
+              object_privileges: [],
+              roles: [],
+              members: [],
+              supports_roles: false,
+              warnings: ["预览环境：角色页需要 MySQL 8.0+ 的 mysql.role_edges。"],
+            };
+          },
+          preview_db_user_changes: (args) => {
+            const draft = (args && args.draft) || {};
+            const statements = [];
+            if (draft.new_user && draft.new_user !== draft.user) {
+              statements.push("RENAME USER '" + draft.user + "'@'" + draft.host + "' TO '" + draft.new_user + "'@'" + draft.new_host + "'");
+            }
+            if (draft.password) statements.push("ALTER USER '" + draft.user + "'@'" + draft.host + "' IDENTIFIED BY '***'");
+            return { statements, warnings: statements.length ? [] : ["没有需要应用的变更。"] };
+          },
+          apply_db_user_changes: (args) => {
+            const draft = (args && args.draft) || {};
+            if (draft.new_user && draft.new_user !== draft.user) {
+              const old = String(draft.user) + "@" + String(draft.host);
+              const row = users.find((u) => u[0] === old);
+              if (row) row[0] = String(draft.new_user) + "@" + String(draft.new_host);
+            }
+            return { statements: [], executed: 0 };
+          },
           server_info: () => ({
             product: "MySQL",
             version: "8.0.35-28",
@@ -659,11 +764,13 @@ try {
           datasource_sync_get_config: () => ({ ...previewSyncConfig }),
           datasource_sync_set_config: (args) => {
             const c = args?.config ?? {};
+            const sameEndpoint = (c.url ?? "") === previewSyncConfig.url && (c.user ?? "") === previewSyncConfig.user;
+            const headers = c.headers ?? (sameEndpoint ? previewSyncConfig.headers : "");
             previewSyncConfig = {
               url: c.url ?? "", user: c.user ?? "", auto_every: c.auto_every ?? -1,
               remember_password: c.remember_password ?? true,
               password_set: !!c.password, passphrase_set: !!c.passphrase,
-              headers_set: !!c.headers, last_sync: null,
+              headers_set: !!headers.trim(), headers, last_sync: null,
             };
             return { ...previewSyncConfig };
           },
@@ -694,19 +801,625 @@ try {
             support: "",
             dataDir: "data",
           }),
+          // ---- 软件更新（需求 1.2：静态预览给同形夹具，真实桌面走 updater 命令）----
+          update_check: () => ({ current_version: "1.0.0", update_available: false, manifest: null }),
+          update_download: () => { throw new Error("静态预览没有真实更新下载通道"); },
+          update_status: () => ({ phase: "idle", done: 0, total: 0, speed: 0, message: "", staged_file: null }),
+          update_apply: () => { throw new Error("静态预览没有真实更新安装通道"); },
+          // ---- 数据字典导出（需求 1.1）----
+          dictionary_metadata: () => ({
+            name: "password_manager",
+            doc_title: "password_manager数据库设计文档",
+            tables: [
+              {
+                name: "account", comment: "账号表", db_type: "MySQL",
+                columns: [
+                  { order: 1, name: "id", type_name: "bigint", length: "", primary_key: true, auto_increment: true, nullable: false, default_value: "", comment: "主键" },
+                  { order: 2, name: "user_name", type_name: "varchar", length: "50", primary_key: false, auto_increment: false, nullable: false, default_value: "", comment: "用户名" },
+                ],
+              },
+            ],
+            views: [{ name: "v_account", comment: "账号视图", script: "CREATE VIEW v_account AS SELECT * FROM account;", db_type: "MySQL" }],
+            routines: [{ name: "sp_demo", comment: "", script: "CREATE PROCEDURE sp_demo() BEGIN SELECT 1; END", db_type: "MySQL" }],
+          }),
+          dictionary_export: (args) => {
+            if (!args.filePath) throw new Error("缺少导出路径");
+            return 2048;
+          },
+          // ---- 通用 ----
+          open_path_in_explorer: () => null,
+          // =====================================================================
+          // 全量命令覆盖：前端可能调用的每一个 IPC 命令在这里都必须有响应，
+          // 否则静态预览会以「未实现的命令」IpcError 弹错（tools/tests/preview-mock-coverage.test.mjs 防回归）。
+          // =====================================================================
+
+          // ---- 受控执行通道（api.ts 预览分支已拦截，这里兜底同形响应）----
+          execution_capabilities: () => ({
+            version: 1, protocol: "preview", read_only: false,
+            arbitrary_sql: { level: "supported", reason: "" },
+            cancel: { level: "supported", reason: "" },
+            deadline: { level: "supported", reason: "" },
+            manual_transaction: { level: "supported", reason: "" },
+            safe_browse: { level: "supported", reason: "" },
+          }),
+          issue_execution_grant: (args) => ({ ...(args.request || {}), execution_grant: "preview_fixture" }),
+          execute_sql_v2: (args) => {
+            const request = (args && args.request) || {};
+            const legacy = responses.execute_sql({ id: request.connection_id, sql: request.sql, database: request.namespace, transactionOwner: request.transaction_owner, origin: request.origin });
+            return outcome(request.execution_id, { result: legacy });
+          },
+          cancel_execution: (args) => ({ execution_id: (args && args.executionId) || "", accepted: false, state: "unknown", message: "预览环境没有可停止的真实执行" }),
+          execution_status: (args) => ({ execution_id: (args && args.executionId) || "", state: "unknown", deadline: deadline((args && args.executionId) || ""), resources_pending: false }),
+
+          // ---- 查询结果缓存 / 行写入 ----
+          fetch_query_rows: (args) => {
+            const key = `${(args && args.connectionId) || ""}|${(args && args.namespace) || ""}`;
+            const set = (spoolStore.get(key) || [])[Number(args && args.index) || 0];
+            if (!set) return { rows: [], total: 0, truncated: false, message: "预览没有可用的执行缓存" };
+            const offset = Number(args && args.offset) || 0;
+            const limit = Number(args && args.limit) || 0;
+            return { rows: set.rows.slice(offset, offset + limit), total: set.rows.length, truncated: false, message: "" };
+          },
+          export_query_spooled: () => 10,
+          drop_query_spool: (args) => {
+            spoolStore.delete(`${(args && args.connectionId) || ""}|${(args && args.namespace) || ""}`);
+            return null;
+          },
+          query_result_snapshot: (args) => {
+            const ctx = (args && args.context) || {};
+            const sets = spoolStore.get(`${ctx.connection_id || ""}|${ctx.namespace || ""}`) || [];
+            const set = sets[Number(ctx.result_index) || 0] || { columns: [], rows: [] };
+            const keyIdx = new Set(set.columns.map((c, i) => (c.primary_key ? i : -1)).filter((i) => i >= 0));
+            if (!keyIdx.size && set.columns.length) keyIdx.add(0);
+            return {
+              rows: set.rows.map(() => ({ token: uuid(), row_token: uuid(), values: set.columns.map(() => ({ kind: "text", value: "" })) })),
+              loaded_rows: set.rows.length,
+              total_rows: set.rows.length,
+              editability: {
+                source_execution_id: ctx.execution_id || uuid(),
+                result_index: Number(ctx.result_index) || 0,
+                generation: uuid(),
+                result_token: uuid(),
+                mode: "single_table",
+                reason: "预览夹具提供的写入证据",
+                schema: "main",
+                table: "preview_rows",
+                metadata_revision: fingerprint(),
+                columns: set.columns.map((c, i) => ({
+                  result_column_id: `c${i}`, result_index: i, name: c.name, base_column: c.name,
+                  data_type: c.type || "text", writable: !keyIdx.has(i), key: keyIdx.has(i),
+                  generated: false, insertable: true, nullable: c.nullable !== false,
+                  auto_increment: !!c.auto_increment, default_value: null,
+                  reason: keyIdx.has(i) ? "主键列不直接可写" : "预览夹具列",
+                })),
+                key_column_ids: [...keyIdx].map((i) => `c${i}`),
+                actions: {
+                  update: { supported: true, reason: "" },
+                  delete: { supported: true, reason: "" },
+                  insert: { supported: true, reason: "" },
+                },
+              },
+            };
+          },
+          preview_query_row_mutation: (args) => ({
+            plan_id: uuid(), sql: "/* 预览写入 */ UPDATE ...", binds: [],
+            base_revision: "preview-rev-0001", expected_rows: 1, summary: "预览：写入 1 行",
+          }),
+          execute_row_mutation: (args) => ({
+            plan_id: (args && args.planId) || "", status: "applied", transaction: "committed",
+            affected: 1, verified: true, mismatches: [], sql: "/* 预览写入 */",
+          }),
+          release_query_result: () => null,
+          preview_row_mutation: (args) => {
+            const draft = (args && args.draft) || {};
+            const verb = draft.kind === "insert" ? "INSERT INTO" : draft.kind === "delete" ? "DELETE FROM" : "UPDATE";
+            return {
+              plan_id: uuid(), sql: `/* 预览 */ ${verb} \`${draft.table || "t"}\` ...`, binds: [],
+              base_revision: "preview-rev-0001", expected_rows: 1,
+              summary: draft.kind === "insert" ? "插入 1 行" : draft.kind === "delete" ? "删除 1 行" : "更新 1 行",
+            };
+          },
+
+          // ---- 表设计（设计器全页草稿）----
+          read_table_design_snapshot: (args) => {
+            const schema = tableSchemaFixture(args && args.schema, args && args.table);
+            return {
+              schema,
+              objects: { checks: [], triggers: [], completeness: "complete", limitations: [], table_definition: null },
+              options: { engine: schema.engine, charset: "utf8mb4", collation: schema.collation },
+              design: designPayloadOf(schema),
+              revision: "preview-rev-0001",
+              source_fingerprint: fingerprint(),
+              owner_id: (args && args.ownerId) || "",
+              completeness: "complete",
+              capabilities: tableDesignCapabilities(),
+            };
+          },
+          preview_table_design: (args) => ({
+            request_sql: "ALTER TABLE `…`（预览模拟，不执行真实 DDL）",
+            steps: [{ label: "应用表结构", sql: "ALTER TABLE `…`（预览模拟）" }],
+            destructive: false,
+            revision: "preview-rev-0002",
+            capabilities: tableDesignCapabilities(),
+            limitations: ["静态预览不执行真实 DDL"],
+          }),
+          execute_table_design: (args) => ({
+            outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+            receipt: {
+              steps: [{ label: "应用表结构", sql: "ALTER TABLE `…`（预览模拟）", status: "applied" }],
+              verified: true, unverified: false, mismatches: [], transaction: "committed",
+              schema: snapshotOfDesign(args).schema,
+              snapshot: snapshotOfDesign(args, args && args.request && args.request.owner_id),
+            },
+          }),
+          apply_table_design: (args) => ({
+            steps: [{ label: "应用表结构", sql: "ALTER TABLE `…`（预览模拟）", status: "applied" }],
+            verified: true, unverified: false, mismatches: [], transaction: "committed",
+            schema: snapshotOfDesign(args).schema,
+          }),
+
+          // ---- 表操作（清空 / 复制结构 / 复制数据）----
+          preview_table_operation: (args) => {
+            const op = (args && args.operation) || {};
+            const labels = { clear: "清空表数据", copy_structure: "复制表结构", copy_data: "复制表数据" };
+            return {
+              request_sql: `/* ${labels[op.kind] || op.kind}（预览模拟） */`,
+              steps: [{ label: labels[op.kind] || op.kind, sql: `/* ${labels[op.kind] || op.kind}（预览模拟） */` }],
+              destructive: op.kind === "clear",
+              revision: "preview-rev-0001",
+              capabilities: tableDesignCapabilities(),
+              limitations: ["静态预览不执行真实写入"],
+              operation: op,
+            };
+          },
+          execute_table_operation: (args) => {
+            const op = (args && args.operation) || {};
+            const labels = { clear: "清空表数据", copy_structure: "复制表结构", copy_data: "复制表数据" };
+            return {
+              outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+              receipt: {
+                kind: op.kind, source_table: op.table, target_table: op.target_table ?? null,
+                affected_rows: op.kind === "clear" ? 15 : 15, copied_rows: op.kind === "copy_data" ? 15 : 0,
+                verified: true, mismatches: [], transaction: "committed",
+                steps: [{ label: labels[op.kind] || op.kind, sql: "/* 预览模拟 */", status: "applied" }],
+                snapshot: null,
+              },
+            };
+          },
+          list_table_constraints: () => ({ checks: [], triggers: [], completeness: "complete", limitations: [], table_definition: null }),
+          drop_table_trigger: () => 1,
+
+          // ---- 连接健康 ----
+          check_connection_health: (args) => ({
+            connection_id: (args && args.id) || "", state: "healthy", last_checked_at: nowIso(),
+            last_error: null, probe_skipped_reason: null, interval_secs: 30, timeout_secs: 5,
+            enabled: true, generation: null, resources_pending: false, next_due_in_ms: 30000,
+          }),
+          get_connection_health: (args) => ({
+            connection_id: (args && args.id) || "", state: "healthy", last_checked_at: nowIso(),
+            last_error: null, probe_skipped_reason: null, interval_secs: 30, timeout_secs: 5,
+            enabled: true, generation: null, resources_pending: false, next_due_in_ms: 30000,
+          }),
+
+          // ---- 受控批任务（数据生成 / SQL 文件）----
+          register_batch_execution: (args) => {
+            const request = (args && args.request) || {};
+            const task = request.task || {};
+            const rows = task.kind === "generated_rows" ? Number(task.request && task.request.rows) || 0 : null;
+            return {
+              execution_id: uuid(), connection_id: request.connection_id || "", namespace: request.namespace || "",
+              owner_id: request.owner_id || "", task_kind: task.kind || "generated_rows",
+              execution_grant: "preview_ticket", expires_in_ms: 120000,
+              summary: task.kind === "sql_file" ? "SQL 文件（预览模拟）" : `生成 ${rows} 行`,
+              total_rows: rows, source_bytes: task.kind === "sql_file" ? 2048 : null,
+            };
+          },
+          run_batch_execution: (args) => {
+            const ticket = (args && args.ticket) || {};
+            const rows = Number(ticket.total_rows) || 0;
+            return {
+              context: { execution_id: ticket.execution_id, connection_id: ticket.connection_id, namespace: ticket.namespace, owner_id: ticket.owner_id },
+              kind: ticket.task_kind, status: "succeeded",
+              metrics: { scanned: rows || 1, executed: rows, errors: 0, elapsed_ms: 36 },
+              scan_complete: true, parse_error: null,
+              affected_rows: rows, total_rows: ticket.total_rows ?? null,
+              transaction_state: "committed",
+              logs: [
+                { sequence: 1, level: "info", phase: "queued", statement: null, row: null, message: "任务已排队（预览模拟）", sql_template: null },
+                { sequence: 2, level: "info", phase: "execute", statement: 1, row: rows || null, message: rows ? `写入 ${rows} 行` : "没有可执行语句", sql_template: "INSERT /* 预览 */", elapsed_ms: 24, affected_rows: rows },
+                { sequence: 3, level: "success", phase: "commit", statement: null, row: null, message: "事务已提交", sql_template: null },
+              ],
+              next_sequence: 4, dropped_before_sequence: 0,
+              outcome: outcome(ticket.execution_id, { result: { sets: [], messages: [], elapsed_ms: 36 } }),
+            };
+          },
+          batch_execution_status: (args) => responses.run_batch_execution(args),
+
+          // ---- 驱动管理 ----
+          download_database_driver: (args) => ({
+            kind: (args && args.kind) || "", version: (args && args.version) || "", status: "ready",
+            architecture: "x64", message: "预览：驱动已就绪", can_download: false,
+            library: "preview.dll", download_path: "drivers/preview",
+          }),
+          delete_managed_driver: () => null,
+          list_custom_drivers: () => [],
+          save_custom_driver: (args) => [(args && args.driver) || {}],
+          delete_custom_driver: () => [],
+          test_custom_driver: () => ({ ok: true, message: "连接成功（预览模拟）", version: "1.0", charset: "UTF8" }),
+          list_odbc_inventory: () => ({
+            drivers: [{ name: "ODBC Driver 17 for SQL Server", library: "msodbcsql17.dll" }],
+            dsns: [], architecture: "x64",
+          }),
+          validate_connection_options: () => [],
+
+          // ---- Java 运行时 ----
+          java_runtime_status: () => ({
+            installed: true, version: "17.0.10", path: "C:/Program Files/Java/jdk-17",
+            source: "system", message: "检测到系统 Java 运行时（预览模拟）", can_install: false, download_size: 0,
+          }),
+          install_java_runtime: () => ({
+            installed: true, version: "17.0.10", path: "C:/Program Files/Java/jdk-17",
+            source: "system", message: "预览模拟，不安装真实运行时", can_install: false, download_size: 0,
+          }),
+
+          // ---- 数据库会话 / 进程 ----
+          list_db_processes: () => [
+            { id: "8", user: "root", host: "localhost:52100", db: "dbswitch", command: "Query", state: "Sending data", elapsed_secs: 3, sql: "SELECT * FROM dbswitch_job_details", is_self: false },
+            { id: "9", user: "root", host: "localhost", db: "mysql", command: "Sleep", state: "", elapsed_secs: null, sql: "", is_self: true },
+          ],
+          kill_db_process: () => "OK",
+
+          // ---- 对象目录 / 对象定义 / 对象删除 ----
+          list_object_catalog: (args) => {
+            const schema = (args && args.schema) || "";
+            const connId = (args && args.id) || "";
+            const objects = responses.list_objects({ schemaName: schema }).map((o) => ({
+              object: { connection_id: connId, catalog: (args && args.catalog) || null, schema, kind: o.type, name: o.name, identity_arguments: null, parent: null },
+              object_key: JSON.stringify([connId, null, schema, o.type, o.name, null, null]),
+              display_name: o.name, backend_object_id: null, owner: null, enabled: true,
+              definition_readable: true,
+              actions: {
+                read: { level: "supported", reason: "" },
+                definition: { level: "supported", reason: "" },
+                read_definition: { level: "supported", reason: "" },
+              },
+              properties: { engine: o.engine || "", rows: String(o.rows ?? ""), comment: o.comment || "" },
+            }));
+            return {
+              objects, completeness: "complete",
+              sections: { table: { state: "known", reason: null }, view: { state: "known", reason: null } },
+              revision: "preview-rev-0001", next_cursor: null,
+            };
+          },
+          get_object_definition: (args) => {
+            const object = (args && args.object) || {};
+            const fallback = responses.get_table_ddl({ table: object.name });
+            let definition = "";
+            if (object.kind === "view" && object.name === "v_job_summary") {
+              definition = "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `dbswitch_job_details` GROUP BY job_name";
+            } else if (object.name === "sp_cleanup_logs") {
+              definition = "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
+            } else if (object.name === "fn_next_seq") {
+              definition = "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND";
+            }
+            return {
+              object, backend_object_id: null,
+              definition: definition || fallback,
+              revision: "preview-rev-0001", properties: {}, completeness: "complete",
+            };
+          },
+          read_object_mutation_baseline: (args) => ({
+            baseline_id: uuid(), object: (args && args.object) || {}, source_fingerprint: fingerprint(),
+            base_revision: "preview-rev-0001", backend_object_id: "1", metadata_state: "known", expires_in_ms: 60000,
+          }),
+          preview_object_mutation: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              plan_id: uuid(), baseline_id: draft.baseline_id || uuid(), object: draft.object || {},
+              source_fingerprint: draft.source_fingerprint || fingerprint(), base_revision: draft.base_revision || "preview-rev-0001",
+              review_digest: fingerprint(), request_sql: `DROP TRIGGER IF EXISTS \`${(draft.object && draft.object.name) || "t"}\`（预览模拟）`,
+              expires_in_ms: 60000, confirmation_required: true, transaction: "immediate",
+            };
+          },
+          execute_object_mutation: (args) => {
+            const work = (args && args.work) || {};
+            return {
+              outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+              receipt: {
+                plan_id: work.plan_id || "", baseline_id: (work.draft && work.draft.baseline_id) || "",
+                object: (work.draft && work.draft.object) || {}, backend_object_id: "1",
+                source_fingerprint: (work.draft && work.draft.source_fingerprint) || fingerprint(),
+                before_revision: "preview-rev-0001", after_revision: "preview-rev-0002",
+                status: "applied", verified: true, transaction: "committed", mismatches: [],
+              },
+            };
+          },
+
+          // ---- 例程（读 / 改 / 建 / 调用）----
+          read_routine_design: (args) => {
+            const name = (args && args.name) || "";
+            const definition = name === "sp_cleanup_logs"
+              ? "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND"
+              : name === "fn_next_seq"
+                ? "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND"
+                : `CREATE ROUTINE \`${name}\`（预览模拟）`;
+            return {
+              object: { connection_id: (args && args.id) || "", catalog: null, schema: (args && args.schemaName) || "", kind: (args && args.routineType) || "procedure", name, identity_arguments: (args && args.identityArguments) ?? "" },
+              definition, revision: "preview-rev-0001", overloads: 1, completeness: "complete",
+            };
+          },
+          read_exact_routine_design: (args) => {
+            const base = responses.read_routine_design(args && args.object);
+            return {
+              ...base,
+              object: (args && args.object) || base.object,
+              source_fingerprint: fingerprint(), backend_object_id: null,
+              creation_context: {}, security_completeness: "complete", replacement_reason: "",
+            };
+          },
+          preview_routine_replacement: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              object: draft.object, base_revision: draft.base_revision, backend_object_id: null,
+              source_fingerprint: draft.source_fingerprint,
+              request_sql: "ALTER ROUTINE …（预览模拟）",
+              steps: [{ label: "替换例程定义", sql: draft.definition || "（预览模拟）" }],
+              strategy: draft.allow_drop_recreate ? "drop_recreate" : "alter",
+              executable: true, warnings: ["静态预览不执行真实 DDL"],
+            };
+          },
+          execute_routine_replacement: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+              receipt: {
+                steps: [{ label: "替换例程定义", sql: draft.definition || "", status: "applied" }],
+                verified: true, mismatches: [], strategy: draft.allow_drop_recreate ? "drop_recreate" : "alter",
+                transaction: "committed", revision: "preview-rev-0002", definition: draft.definition || "",
+              },
+            };
+          },
+          apply_routine_replacement: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              steps: [{ label: "替换例程定义", sql: (draft && draft.definition) || "", status: "applied" }],
+              verified: true, mismatches: [], strategy: "alter", transaction: "committed",
+              revision: "preview-rev-0002", definition: (draft && draft.definition) || "",
+            };
+          },
+          read_routine_creation_baseline: (args) => ({
+            baseline_id: uuid(), object: (args && args.object) || {}, source_fingerprint: fingerprint(),
+            base_revision: "preview-absent-0001", completeness: "complete", absent: true,
+            expires_in_ms: 60000, strategy: "create_transactional", warnings: [],
+          }),
+          preview_routine_creation: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              baseline_id: draft.baseline_id, object: draft.object, source_fingerprint: draft.source_fingerprint,
+              base_revision: draft.base_revision,
+              steps: [{ label: "创建例程", sql: draft.definition || "" }],
+              request_sql: draft.definition || "", strategy: "create_transactional", executable: true,
+              expires_in_ms: 60000, warnings: ["静态预览不执行真实 DDL"],
+            };
+          },
+          execute_routine_creation: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+              receipt: {
+                object: draft.object, source_fingerprint: draft.source_fingerprint, baseline_id: draft.baseline_id,
+                status: "applied", verified: true,
+                steps: [{ label: "创建例程", sql: draft.definition || "", status: "applied", error: null }],
+                transaction: "committed",
+                snapshot: {
+                  object: draft.object, definition: draft.definition || "", revision: "preview-rev-0001",
+                  source_fingerprint: draft.source_fingerprint, overloads: 1, completeness: "complete",
+                  backend_object_id: null, creation_context: {}, security_completeness: "complete", replacement_reason: "",
+                },
+                warnings: [],
+              },
+            };
+          },
+          get_routine_call_metadata: (args) => ({
+            object: (args && args.object) || {}, backend_object_id: null, revision: "preview-rev-0001",
+            source_fingerprint: fingerprint(), parameters: [], result_type: null,
+            definition_revision: "preview-rev-0001", completeness: "complete",
+            call: { level: "supported", reason: "" }, notes: [],
+          }),
+          preview_routine_call: (args) => {
+            const draft = (args && args.draft) || {};
+            return {
+              plan_id: uuid(), metadata_revision: draft.metadata_revision || "preview-rev-0001",
+              source_fingerprint: draft.source_fingerprint || fingerprint(), object: draft.object || {},
+              sql_preview: `CALL \`${(draft.object && draft.object.name) || "routine"}\`(…)（预览模拟）`,
+              parameter_count: (draft.arguments || []).length, expires_in_ms: 60000, warnings: [],
+            };
+          },
+          execute_routine_call: (args) => ({
+            outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+            call: { sets: [], outputs: [], warnings: [] },
+          }),
+
+          // ---- 结构同步 ----
+          sync_diff: () => ({
+            source_rows: 15, target_rows: 15, keyed: true,
+            missing_in_target: 0, extra_in_target: 0, changed: 0, changed_samples: [],
+            target_missing_columns: [], target_extra_columns: [],
+            message: "预览：源表与目标表数据一致",
+          }),
+          preview_controlled_structure_sync: (args) => {
+            const fp = fingerprint();
+            const request = (args && args.request) || {};
+            const binding = {
+              principal: "preview", owner: (args && args.ownerId) || "",
+              source_connection_id: request.source_connection || "", source_fingerprint: fp,
+              source_schema: request.source_schema || "", source_table: request.source_table || "",
+              target_connection_id: request.target_connection || "", target_fingerprint: fp,
+              target_schema: request.target_schema || "", target_table: request.target_table || "",
+            };
+            return {
+              target_exists: true, changes: [], warnings: [], alterable: true, unsupported: [],
+              source_revision: "preview-rev-0001", target_revision: "preview-rev-0001",
+              summary: "结构与目标一致（预览模拟）", final_design: null, steps: [],
+              review_digest: fp, review_binding: binding,
+              request_sql: "/* 结构差异预览（预览模拟） */",
+              source_identity: { database: { kind: "mysql", identity: "preview", canonical_path: null }, schema: request.source_schema || "", table: request.source_table || "", rootpage: 2 },
+              target_identity: { database: { kind: "mysql", identity: "preview", canonical_path: null }, schema: request.target_schema || "", table: request.target_table || "", rootpage: 2 },
+              same_database: false, source_consistency: "ok", observation_digest: fp,
+              observation_binding: binding, observation_only: true,
+            };
+          },
+          execute_structure_sync: (args) => ({
+            outcome: outcome((args && args.request && args.request.execution_id) || uuid()),
+            receipt: {
+              report: responses.sync_diff(),
+              receipt: {
+                steps: [{ label: "应用结构差异", sql: "/* 预览模拟 */", status: "applied" }],
+                verified: true, unverified: false, mismatches: [], transaction: "committed",
+                schema: tableSchemaFixture("", ""),
+              },
+            },
+          }),
+          apply_structure_sync: () => ({
+            report: responses.sync_diff(),
+            receipt: {
+              steps: [{ label: "应用结构差异", sql: "/* 预览模拟 */", status: "applied" }],
+              verified: true, unverified: false, mismatches: [], transaction: "committed",
+              schema: tableSchemaFixture("", ""),
+            },
+          }),
+
+          // ---- 调度器 V2 ----
+          scheduler_list_jobs: () => schedulerJobs.map(schedulerRecord),
+          scheduler_save_job: (args) => {
+            const job = (args && args.job) || {};
+            if (!job.revision) job.revision = "rev-1";
+            const i = schedulerJobs.findIndex((j) => j.id === job.id);
+            if (i >= 0) schedulerJobs[i] = job; else schedulerJobs.push(job);
+            return schedulerRecord(job);
+          },
+          scheduler_delete_job: (args) => {
+            schedulerJobs = schedulerJobs.filter((j) => j.id !== (args && args.id));
+            return null;
+          },
+          scheduler_list_templates: () => schedulerTemplates.map((t) => ({
+            id: t.id, revision: t.revision, name: t.name, kind: t.kind,
+            connection_id: t.connection_id, namespace: t.namespace, read_only: !!t.read_only,
+          })),
+          scheduler_load_template: (args) => {
+            const t = schedulerTemplates.find((x) => x.id === (args && args.id));
+            if (!t) throw new Error("模板不存在（预览）");
+            return t;
+          },
+          scheduler_save_template: (args) => {
+            const template = (args && args.template) || {};
+            if (!template.revision) template.revision = "rev-1";
+            const i = schedulerTemplates.findIndex((t) => t.id === template.id);
+            if (i >= 0) schedulerTemplates[i] = template; else schedulerTemplates.push(template);
+            return template;
+          },
+          scheduler_preview_times: (args) => {
+            const schedule = (args && args.schedule) || {};
+            if (schedule.kind === "manual") return [];
+            return [1, 2, 3].map((n) => ({ utc: isoPlus(n * 3600000), local: isoPlus(n * 3600000), timezone: (schedule && schedule.timezone) || "UTC" }));
+          },
+          scheduler_prepare_approval: (args) => {
+            const job = schedulerJobs.find((j) => j.id === (args && args.id));
+            const digest = fingerprint();
+            return {
+              plan_id: uuid(), review_digest: digest, job_id: (args && args.id) || "",
+              job_revision: (job && job.revision) || "rev-1", expires_at_utc: isoPlus(600000),
+              actions: (job && job.actions || []).map((a, i) => ({
+                action_id: a.id || `action-${i}`, template_name: `模板 ${i + 1}`,
+                connection_label: "预览连接", namespace: "dbswitch", read_only: false,
+                details: ["预览模拟动作"], destructive: [],
+              })),
+            };
+          },
+          scheduler_approve_job: (args) => {
+            const record = schedulerRecord(schedulerJobs[0] || { id: "", revision: "rev-1", enabled: true });
+            return record;
+          },
+          scheduler_run_now: () => runSummary(schedulerJobs[0], "running"),
+          scheduler_history: () => [],
+          scheduler_cancel_run: (args) => {
+            const summary = runSummary(schedulerJobs[0], "cancelled");
+            summary.id = (args && args.runId) || summary.id;
+            return summary;
+          },
+          scheduler_prepare_legacy_migration: (args) => ({
+            plan_id: uuid(), review_digest: fingerprint(), source_digest: fingerprint(),
+            target_revision: "rev-1", timezone: (args && args.timezone) || "UTC",
+            prepared_at_utc: nowIso(), expires_at_utc: isoPlus(600000), items: [],
+          }),
+          scheduler_confirm_legacy_migration: (args) => ({
+            plan_id: (args && args.planId) || "", review_digest: (args && args.reviewDigest) || "",
+            source_digest: fingerprint(), jobs: [], blocked_count: 0,
+          }),
+
+          // ---- 任务型传输 / 批量导出 / SQL 文件 ----
+          transfer_task_progress: (args) => ({
+            task_id: (args && args.taskId) || "", status: "completed", phase: "done",
+            processed: 10, total: 10, message: "预览任务已完成",
+          }),
+          cancel_transfer_task: () => null,
+          run_import_task: () => 10,
+          run_export_task: () => 10,
+          run_batch_export: (args) => {
+            const request = (args && args.request) || {};
+            return {
+              items: (request.objects || []).map((o) => ({ object: o, file: `${o.name}.${request.format || "csv"}`, rows: 4, status: "completed", error: null })),
+              combined_file: null, message: "预览：批量导出完成（不写真实文件）",
+            };
+          },
+          run_sync_database: (args) => {
+            const req = (args && args.req) || {};
+            return (req.tables || []).map((t) => ({ source_table: t.source, target_table: t.target, rows: 4, created: false, skipped: false, error: null, warnings: [] }));
+          },
+          dump_database_to_file: () => [137, 48213],
+          read_sql_file: () => "",
+          run_sql_file: () => ({ total: 0, succeeded: 0, failed: 0, steps: [] }),
+
+          // ---- 其它 ----
+          insert_generated_rows: (args) => Number(args && args.req && args.req.rows) || 0,
+          manual_transaction_mutate: () => ({ sets: [], messages: ["预览：手动事务写入已模拟"], elapsed_ms: 1 }),
+          move_connection: (args) => {
+            const conn = store.connections.find((c) => c.id === (args && args.id));
+            if (conn && args.group) conn.group = args.group;
+            return store.connections.map((c) => ({ ...c }));
+          },
+          rename_backup: (args) => {
+            const key = `${(args && args.connectionId) || ""}/${(args && args.schemaName) || ""}`;
+            const list = backups[key] ?? [];
+            const item = list.find((b) => b.name === (args && args.file));
+            if (item && args && args.newName) item.name = args.newName;
+            return null;
+          },
+          record_job_history: (args) => {
+            jobHistory.unshift({
+              job_id: (args && args.jobId) || "", job_name: (args && args.jobName) || "",
+              started_at: nowIso(), elapsed_ms: Number(args && args.elapsedMs) || 0,
+              ok: !!(args && args.ok), detail: (args && args.detail) || "",
+            });
+            return null;
+          },
+          runtime_profile_view: () => null,
+          test_runtime_connection: () => ({ ok: true, message: "连接成功（预览模拟）", version: "8.0.35", charset: "utf8mb4" }),
         };
 
         // 数据源同步配置的预览内存态（set_config 写入、get_config 读回）。
         let previewSyncConfig = {
           url: "", user: "", auto_every: -1, remember_password: true,
-          password_set: false, passphrase_set: false, headers_set: false, last_sync: null,
+          password_set: false, passphrase_set: false, headers_set: false, headers: "", last_sync: null,
         };
 
-        // 预览 mock：api.ts 的 call() 优先读取 __PREVIEW_MOCK__，
-        // 纯浏览器环境下没有真实 IPC，再补一个最小 internals 以免 @tauri-apps/api 报错。
+        // 预览 mock：api.ts 的 call() 判定「真实 Tauri bridge」时禁用 mock；
+        // 浏览器预览注入的最小 internals 带 __previewShim 标记，api.ts 据此恢复 mock 优先。
+        // 生产/dev exe 内加载本文件时 __TAURI_INTERNALS__ 已是真实 bridge（无标记）→ 保持真实 IPC。
         window.__PREVIEW_MOCK__ = responses;
         if (!window.__TAURI_INTERNALS__) {
           window.__TAURI_INTERNALS__ = {
+            __previewShim: true,
             invoke: function (cmd, args) {
               const fn = responses[cmd];
               if (fn) return Promise.resolve(fn(args));

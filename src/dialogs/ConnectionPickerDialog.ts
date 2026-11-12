@@ -48,15 +48,15 @@ export function makeDriverAction(
   button.dataset.driverKind = kind;
   // 角标只放图标：下载=托盘箭头、获取=外链、检查中/下载中=旋转环（卡片角标空间小，文字会挤压）
   const mode = busy || !state ? "busy" : state.can_download ? "download" : "manual";
-  const dbxSource = ["cache", "sundb", "oscar"].includes(kind);
+  const mirroredSource = ["cache", "sundb", "oscar"].includes(kind);
   const hint = busy
     ? state?.can_download
-      ? dbxSource ? "正在下载并校验自有镜像原件（dbx 固定提交）…" : "正在下载并校验官方驱动…"
+      ? mirroredSource ? "正在下载并校验自有镜像原件（第三方固定版本）…" : "正在下载并校验官方驱动…"
       : "正在检查本地驱动…"
     : !state
       ? "正在检查当前架构的完整本地驱动…"
       : state.can_download
-        ? dbxSource ? "下载驱动：从自有镜像 Navkit-drivers 下载原件并校验完整性（原件来自 dbx 固定提交）" : "下载驱动：从官方源直接下载并校验完整性"
+        ? mirroredSource ? "下载驱动：从自有镜像 Navkit-drivers 下载原件并校验完整性（第三方固定版本）" : "下载驱动：从官方源直接下载并校验完整性"
         : `获取驱动：无法自动下载（${state.message || "受授权或平台限制"}），需按官方渠道手动获取`;
   button.dataset.mode = mode;
   button.innerHTML = svg(
@@ -223,7 +223,6 @@ export function openConnectionPicker(
         const el = document.createElement("button");
         el.type = "button";
         el.className = "conn-picker-cat";
-        el.style.cssText = "display:block;width:100%;text-align:left;border:0;background:transparent";
         el.textContent = c.label;
         el.addEventListener("click", () => {
           category = c.id;
@@ -422,11 +421,10 @@ export function openConnectionPicker(
         // 分类高亮；搜索时不高亮任何分类
         for (const [cid, el] of catEls) {
           el.classList.toggle("active", !query && cid === category);
-          el.style.background = !query && cid === category ? "rgba(0,0,0,0.08)" : "transparent";
           el.classList.toggle("dimmed", !!query);
         }
         content.innerHTML = "";
-        const visibleKinds = DB_KINDS.filter((k) => k.id !== "jdbcx");
+        const visibleKinds = DB_KINDS;
         const source = query
           ? visibleKinds.filter(matches)
           : visibleKinds.filter(

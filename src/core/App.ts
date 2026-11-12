@@ -3,18 +3,45 @@
  * 并按实际连接能力和当前上下文分发菜单命令；不以空操作冒充成功。
  */
 
-import { api, datasourceSyncApi, DB_META, type DriverDefinition } from "./api";
+import { api, datasourceSyncApi, DB_META, type DriverDefinition, type MutationDraft, type MutationReceipt, type DbValue } from "./api";
+import { toDbValue } from "./mutation";
+import { ConnectionHealthMonitor } from "./connection-health-client";
+import type { RuntimeProfileBindings } from "./runtime-profile";
+import { loadObjectCatalog } from "./object-catalog-loader";
+import { CATALOG_KINDS, TREE_CATALOG_KINDS, catalogTreeGroups, catalogTreeItem, catalogNotice, catalogInfo, catalogReadReason, catalogCallReason, type CatalogListing } from "./object-navigation";
+import { objectKey, objectLabel as catalogObjectLabel, type DatabaseObjectId, type ObjectDescriptor } from "./object-catalog";
+import { RoutineDocumentView } from "../ui/RoutineDocumentView";
+import { RoutineCallDialog } from "../dialogs/RoutineCallDialog";
 import { DatasourceSync, invalidatedDatasourceIds, type DatasourceSyncResult } from "./datasourceSync";
 import { ManualTransactions, type TransactionContext } from "./ManualTransactions";
-import { MANUAL_TRANSACTION_WRITE_COMMANDS, manualTransactionStatusText, manualTransactionUnavailableReason, type ManualTransactionStatus } from "./manualTransaction";
+import { ExecutionController, type ExecutionState, type Capabilities } from "./execution";
+import type { DraftSnapshot } from "./editing-state";
+import { chooseLeave, type LeavePromptItem } from "../dialogs/LeaveGuardDialog";
+import { showDraftText } from "../dialogs/TextDialog";
+import { encodeGridCopy, type CopyMode } from "./grid-clipboard";
+import { MANUAL_TRANSACTION_WRITE_COMMANDS, manualTransactionUnavailableReason, type ManualTransactionStatus } from "./manualTransaction";
 import { confirmTransactionAction } from "../dialogs/TransactionDialog";
-import { columnOrderCapability, mysqlColumnDefinitions, mysqlColumnOrderSql } from "./columnOrder";
+import { TableDesigner } from "../ui/TableDesigner";
+import { openTableOperationDialog } from "../dialogs/TableOperationDialog";
 import { loadObjectDetails } from "./objectDetails";
+import { hasSavedQueryScope, savedQueriesFor, queryFavorite, savedQueryConflict } from "./savedQueries";
+import { objectTools, objectGrid, objectLabel, objectProtocol, objectCapability, newObjectSql, dropObjectSql, type BrowserObject } from "./objectBrowser";
+import { formatSql } from "./sqlFormat";
+import { openObjectAction } from "../dialogs/ObjectActionDialog";
+import { openObjectMutationDialog } from "../dialogs/ObjectMutationDialog";
 import { openHistoryLogDialog } from "../dialogs/HistoryLogDialog";
 import { openServerMonitorDialog } from "../dialogs/ServerMonitorDialog";
 import { openDataGeneratorDialog } from "../dialogs/DataGeneratorDialog";
+import { openBatchExecutionDialog, openSqlFileExecutionDialog } from "../ui/BatchExecutionPanel";
 import { openQueryBuilderDialog } from "../dialogs/QueryBuilderDialog";
 import { queryBuilderUnavailableReason } from "./queryBuilder";
+import { explainQuerySql } from "./queryExecution";
+import { QueryResultPages } from "./queryResultPages";
+import { queryResultApi, type QueryResultIpcContext } from "./query-result-api";
+import { QueryResultPanel } from "../ui/QueryResultPanel";
+import { ColumnSidebar } from "../ui/ColumnSidebar";
+import { filterJoinControl, filterValueControl } from "../ui/TableFilterControls";
+import "../ui/data-grid-controls.css";
 import { openDriverManager } from "../dialogs/DriverManagerDialog";
 import { openSyncDialog } from "../dialogs/SyncDialog";
 import { DB_KINDS, kindMeta } from "./dbcatalog";
@@ -30,7 +57,6 @@ import type {
 } from "./types";
 import { DataGrid } from "../ui/DataGrid";
 import { MenuRenderer } from "../ui/MenuBar";
-import { ModelCanvas, type ErTable } from "../ui/ModelCanvas";
 import { SqlEditor } from "../ui/SqlEditor";
 import { TabStrip } from "../ui/TabStrip";
 import { Ribbon, RIBBON_MAIN } from "../ui/Ribbon";
@@ -38,14 +64,11 @@ import { navkitLogo } from "../ui/logo";
 import { InfoPanel } from "../ui/InfoPanel";
 import { TabToolbar, type TabToolItem } from "../ui/TabToolbar";
 import { TreePanel } from "../ui/TreePanel";
-import { Dialog } from "../ui/Dialog";
+import { Dialog, field, radioGroup, textInput } from "../ui/Dialog";
 import {
   ICON_WIN_MIN,
   ICON_WIN_MAX,
   ICON_WIN_CLOSE,
-  ICON_VIEW_DOTS,
-  ICON_VIEW_LIST,
-  ICON_VIEW_GRID,
   ICON_PANEL_LEFT,
   ICON_PANEL_RIGHT,
   ICON_MSG_INFO,
@@ -54,19 +77,24 @@ import {
   ICON_PAGE_PREV,
   ICON_PAGE_NEXT,
   ICON_PAGE_LAST,
-  ICON_MORE_DOTS,
-  ICON_COLUMNS_GRID,
+  ICON_GRID_VIEW,
+  ICON_FORM_VIEW,
   ICON_PLUS_LINE,
   ICON_MINUS_LINE,
   ICON_CHECK,
   ICON_CROSS,
-  ICON_KEY_GOLD,
-  ICON_TITLEBAR_SEARCH,
+  ICON_TITLEBAR_TASKS,
   ICON_EMPTY_CONNECT,
   svg,
   iconSvgByName,
   type IconDef,
 } from "../ui/icons";
+import { TaskCenterPanel, openTaskDetailDialog } from "../ui/TaskCenterPanel";
+import { taskCenter } from "./backgroundTasks";
+import { openDataDictionaryDialog } from "../dialogs/DataDictionaryDialog";
+import { openErDiagramDialog } from "../dialogs/ErDiagramDialog";
+import { openUpdateDialog } from "../dialogs/UpdateDialog";
+import { UpdateBadge } from "../ui/UpdateBadge";
 import {
   GRID_CONTEXT_MENU,
   OTHER_OBJECTS_MENU,
@@ -80,16 +108,19 @@ import {
 import { openConnectionDialog } from "../dialogs/ConnectionDialog";
 import { openConnectionPicker } from "../dialogs/ConnectionPickerDialog";
 import { openBackupDialog } from "../dialogs/BackupDialog";
-import { ChartPanel } from "../ui/ChartPanel";
-import { chartSourceError, createChartState, type ChartSource } from "./chart";
 import { openJobHistoryDialog, openScheduleJobDialog } from "../dialogs/ScheduleDialog";
-import { openChangePasswordDialog, openCreateUserDialog } from "../dialogs/UserDialog";
+import { addSnippet, querySnippets, removeSnippet } from "./snippets";
+import { defaultGeneratorFields, generateDataPreview, MAX_GENERATED_ROWS } from "./dataGenerator";
+import { openChangePasswordDialog, openCreateUserDialog, openEditUserDialog } from "../dialogs/UserDialog";
 import {
   openAboutDialog,
   openFavoritesDialog,
   openServerInfoDialog,
   openSettingsDialog,
 } from "../dialogs/SettingsDialog";
+import { openBatchExportWizard } from "../dialogs/BatchExportDialog";
+import { bindExportPath } from "./export-path";
+import { namespaceLabel, namespaceName, namespaceType } from "./namespace-label";
 import {
   openDumpDialog,
   openExportWizard,
@@ -103,16 +134,6 @@ interface Toast {
   kind: "info" | "error" | "success";
   text: string;
 }
-
-/** 查询页右侧的代码段清单（参考截图 5）。 */
-const QUERY_SNIPPETS: { name: string; tag: string; desc: string; sql: string }[] = [
-  { name: "SELECT 查询", tag: "查询", desc: "检索表中的记录", sql: "SELECT *\nFROM table_name\nWHERE condition;" },
-  { name: "INSERT 插入", tag: "DML", desc: "插入一条记录", sql: "INSERT INTO table_name (column_name)\nVALUES ('value');" },
-  { name: "UPDATE 更新", tag: "DML", desc: "按条件更新，执行前检查 WHERE", sql: "UPDATE table_name\nSET column_name = 'value'\nWHERE condition;" },
-  { name: "CASE 分支", tag: "流程控制", desc: "在查询中使用条件表达式", sql: "CASE\n  WHEN condition THEN 'yes'\n  ELSE 'no'\nEND" },
-  { name: "SQL 注释", tag: "注释", desc: "插入说明注释", sql: "-- 在这里填写说明\n" },
-  { name: "多字段排序", tag: "查询", desc: "依次使用多个字段排序", sql: "SELECT * FROM table_name\nORDER BY first_column ASC, second_column DESC;" },
-];
 
 export class App {
   private root: HTMLElement;
@@ -133,16 +154,30 @@ export class App {
   private infoPanel!: InfoPanel;
   private tabToolbar!: TabToolbar;
   private infoSplitter!: HTMLElement;
+  private taskPanel!: TaskCenterPanel;
+  private taskBadge!: HTMLElement;
+  private updateBadge!: UpdateBadge;
 
   private tabs: TabState[] = [];
+  private copyOwner: { tabId: string; kind: "grid" | "editor"; grid?: DataGrid } | null = null;
+  private copyContext: { tabId: string; grid: DataGrid } | null = null;
+  private draftPreparing = false;
+  private draftSyncApproved = false;
+  private deferredTabRemovals: Set<string> | null = null;
   private activeTabId: string | null = null;
   private treeNodes: TreeItem[] = [];
   private connections: ConnectionConfig[] = [];
   private groups: string[] = [];
   private settings!: AppSettings;
   private favorites: Favorite[] = [];
+  private favoritesError = "";
   private recent: RecentItem[] = [];
   private openConnections = new Set<string>();
+  private keepAliveMonitor?: ConnectionHealthMonitor;
+  private readonly runtimeProfiles: RuntimeProfileBindings = {
+    load: id => api.runtimeProfileView(id),
+    test: (request, id, submission, preserve) => api.testRuntimeConnection(request, id, submission, preserve),
+  };
   /** 已打开对象页的库（connId/db），树中图标保持绿色高亮。 */
   private openDbs = new Set<string>();
   private datasourceSyncStatus = "";
@@ -164,7 +199,7 @@ export class App {
       if (!context) throw new Error("创建事务查询页面失败");
       return context;
     },
-    removeTab: id => this.removeTabNow(id),
+    removeTab: id => { if (this.deferredTabRemovals) this.deferredTabRemovals.add(id); else this.removeTabNow(id); },
     focus: id => { const view = this.views.get(id); if (view instanceof QueryTabView) view.editor.focus(); },
     changed: () => {
       for (const view of this.views.values()) if (view instanceof QueryTabView) view.syncManualTransactionControls();
@@ -177,10 +212,11 @@ export class App {
   private showGridLines = true;
   private skipNull = false;
   private focusMode = false;
-  /** 状态栏数据显示模式（明细 / 列表 / 网格，互斥高亮）。 */
-  private viewMode: "detail" | "list" | "grid" = "grid";
-  /** 单元格内容面板的显示格式（文本▼下拉）。 */
-  private textFormat: "text" | "hex" | "image" | "web" = "text";
+  /** 工具栏读取当前数据页的格式；预览状态由各数据视图持有，不能跨页共享。 */
+  private get textFormat(): "text" | "hex" | "image" | "web" {
+    const view = this.activeView();
+    return view instanceof DataTabView ? view.previewFormat : "text";
+  }
   /** 表页信息面板数据缓存（conn/schema/table → 表信息 + DDL + 表结构）。 */
   private tableMetaCache = new Map<
     string,
@@ -197,9 +233,8 @@ export class App {
   private exitPending = false;
   private exitDialog: Dialog | null = null;
   private infoRequest = 0;
+  private objectDetailsRequest: { key: string; request: number; pending: boolean } | null = null;
   private newConnectionGroup = "";
-  /** 标题栏右侧文档标题（当前连接上下文）。 */
-  private titleDoc!: HTMLElement;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -213,7 +248,7 @@ export class App {
     this.shell = document.createElement("div");
     this.shell.className = "app-shell";
 
-    // 标题栏（v2 · 38px）：logo + 产品名 + 菜单并入 + 右侧文档标题/工具 + 窗口按钮
+    // 标题栏（v2 · 38px）：logo + 产品名 + 菜单并入 + 右侧工具 + 窗口按钮
     const titlebar = document.createElement("div");
     titlebar.className = "titlebar";
     const logo = document.createElement("div");
@@ -242,10 +277,7 @@ export class App {
     btns.appendChild(minBtn);
     btns.appendChild(maxBtn);
     btns.appendChild(closeBtn);
-    // 右侧文档标题 + 工具（搜索聚焦树 / 打开选项）
-    this.titleDoc = document.createElement("div");
-    this.titleDoc.className = "titlebar-doc";
-    this.titleDoc.textContent = "未连接";
+    // 右侧工具：后台任务中心（点击任务图标显示 / 再次点击关闭）
     const tools = document.createElement("div");
     tools.className = "titlebar-tools";
     const tbIcon = (body: string, title: string, onClick: () => void) => {
@@ -259,9 +291,22 @@ export class App {
       b.addEventListener("click", onClick);
       return b;
     };
-    tools.appendChild(
-      tbIcon(svg(ICON_TITLEBAR_SEARCH, 15), "搜索", () => this.tree?.focusSearch()),
-    );
+    // 更新徽标：位于后台任务图标左侧（发现新版本时才出现）
+    this.updateBadge = new UpdateBadge((kind, text) => this.toast(kind, text));
+    tools.appendChild(this.updateBadge.el);
+    this.taskPanel = new TaskCenterPanel();
+    this.taskPanel.onOpenTask = (task) => openTaskDetailDialog(task, (p) => {
+      void api.openPathInExplorer(p).catch((e) => this.toast("error", String(e)));
+    });
+    const taskBtn = tbIcon(svg(ICON_TITLEBAR_TASKS, 15), "后台任务", () => {
+      this.taskPanel.toggle(taskBtn);
+    });
+    this.taskBadge = document.createElement("span");
+    this.taskBadge.className = "task-badge";
+    this.taskBadge.hidden = true;
+    taskBtn.appendChild(this.taskBadge);
+    taskCenter.subscribe(() => this.refreshTaskBadge());
+    tools.appendChild(taskBtn);
     const spacer = document.createElement("div");
     spacer.className = "titlebar-spacer";
     spacer.setAttribute("data-tauri-drag-region", "");
@@ -269,7 +314,6 @@ export class App {
     titlebar.appendChild(titleText);
     titlebar.appendChild(titleSep);
     titlebar.appendChild(spacer);
-    titlebar.appendChild(this.titleDoc);
     titlebar.appendChild(tools);
     titlebar.appendChild(btns);
     // 拖动只绑定标题区域，不能把窗口按钮包含在拖动区域里。
@@ -378,7 +422,8 @@ export class App {
 
     this.connections = await api.listConnections();
     this.groups = await api.listGroups();
-    this.favorites = await api.listFavorites();
+    try { this.favorites = await api.listFavorites(); }
+    catch (e) { this.favoritesError = `收藏不可读取，原文件已保留；修复文件后请重启：${String(e)}`; }
     this.recent = await api.listRecent();
 
     this.menu = new MenuRenderer(this.menuHost, (id) => this.dispatchCommand(id), (id) => this.ribbonDisabled(id));
@@ -410,6 +455,7 @@ export class App {
     this.setupInfoSplitter();
     this.setupKeyboard();
     this.setupCloseGuard();
+    this.setupDraftSyncGuard();
 
     // 查看菜单勾选态持久化：恢复上次会话的界面显示偏好
     this.loadViewPrefs();
@@ -418,11 +464,18 @@ export class App {
     this.refreshTree();
     this.renderTabs();
     this.renderStatus();
-    // 自动运行：载入任务并启动调度（应用运行期间按间隔到期执行）
+    // 自动任务：载入任务并启动调度（应用运行期间按间隔到期执行）
+    window.addEventListener("beforeunload", e => {
+      if (!this.exitApproved && (this.draftPreparing || this.manualTransactionController.hasActive() || this.tabs.some(tab => this.views.get(tab.id)?.draftDirty()))) {
+        e.preventDefault(); e.returnValue = "";
+      }
+    });
     void this.reloadScheduleJobs();
     this.setupScheduleTimer();
     await this.datasourceSync.start();
     window.addEventListener("beforeunload", () => this.datasourceSync.stop());
+    // 更新徽标：探测已有安装包 + 定时检查新版本
+    this.updateBadge.start();
     // 调试钩子（仅开发预览用）
     (window as unknown as { __APP__?: App }).__APP__ = this;
   }
@@ -627,7 +680,7 @@ export class App {
       void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
         const w = getCurrentWindow();
         void w.onCloseRequested(async (evt) => {
-          if (this.exitApproved || (!this.settings.confirm_on_close && !this.manualTransactionController.hasActive() && !this.exitPending)) return;
+          if (this.exitApproved) return;
           evt.preventDefault();
           this.confirmExit();
         });
@@ -679,25 +732,22 @@ export class App {
     this.exitDialog = null;
     void (async () => {
       try {
-        await api.closeAllConnections();
+        const accepted = await this.guardLeave(this.tabs.map(t => t.id), "退出应用", async () => {
+          await api.closeAllConnections();
+          this.keepAliveMonitor?.stopAll();
+          this.exitApproved = true;
+          const internals = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+          if (internals) {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
+            await getCurrentWindow().close();
+          } else window.close();
+        });
+        if (!accepted) { this.exitApproved = false; this.exitPending = false; return; }
       } catch (error) {
         this.exitPending = false;
         this.toast("error", `关闭连接或回滚失败，未退出应用：${String(error)}`);
         return;
       }
-      this.exitApproved = true;
-      try {
-        const internals = (window as unknown as { __TAURI_INTERNALS__?: unknown })
-          .__TAURI_INTERNALS__;
-        if (internals) {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
-          await getCurrentWindow().close();
-          return;
-        }
-      } catch {
-        /* ignore */
-      }
-      window.close();
     })();
   }
 
@@ -762,7 +812,7 @@ export class App {
         if (m) {
           const connId = m[1].slice(5);
           n.children = this.favorites
-            .filter((f) => !f.connection_id || f.connection_id === connId)
+            .filter((f) => f.connection_id === connId && !!f.schema && f.schema === (m[2] ?? "main"))
             .map((f) => ({
               id: `${m[1]}${m[2] ? `/db/${m[2]}` : ""}/query/${f.id}`,
               label: f.name,
@@ -787,6 +837,7 @@ export class App {
     // 注意：所有节点 id 都以 "conn:" 开头，连接根节点是唯一没有 "/" 的
     if (node.id.startsWith("conn:") && !node.id.slice(5).includes("/")) return "connection";
     if (node.id.startsWith("group:")) return "folder";
+    const namespaceKind = namespaceType(this.connectionById(node.id.slice(5).split("/")[0]));
     if (node.id.includes("/obj/")) {
       if (node.id.includes("/obj/procedure/")) return "procedure";
       if (node.id.includes("/obj/function/")) return "function";
@@ -799,13 +850,13 @@ export class App {
       // 对象的右键菜单，而不是归到数据库菜单
       if (/\/view\//.test(node.id)) return "view";
       if (/\/table\//.test(node.id)) return "table";
-      return "database";
+      return namespaceKind;
     }
     if (node.id.includes("/table/")) return "table";
     if (node.id.includes("/view/")) return "view";
     if (node.id.includes("/proc/")) return "procedure";
     if (node.id.includes("/trigger/")) return "leaf";
-    return "database";
+    return namespaceKind;
   }
 
   /** 树节点右键菜单（备份分组节点有专属菜单）。 */
@@ -815,6 +866,15 @@ export class App {
         { id: "tree-new-backup", label: "新建备份..." },
         { id: "tree-open-backup-folder", label: "打开所在文件夹..." },
         { separator: true },
+        { id: "tree-refresh", label: "刷新" },
+      ];
+    }
+    if (node.objectDescriptor) {
+      const descriptor = node.objectDescriptor, readOnly = !!this.connectionById(descriptor.object.connection_id)?.read_only;
+      const readReason = catalogReadReason(descriptor, readOnly), callReason = catalogCallReason(descriptor, readOnly);
+      return [
+        { id: "tree-design-routine", label: "打开定义", disabled: !!readReason, disabledReason: readReason ?? undefined },
+        ...(["function", "procedure"].includes(descriptor.object.kind) ? [{ id: "tree-call-routine", label: "调用例程…", disabled: !!callReason, disabledReason: callReason ?? undefined }] : []),
         { id: "tree-refresh", label: "刷新" },
       ];
     }
@@ -896,6 +956,12 @@ export class App {
     this.tree.render();
   }
 
+  /** 目录失败保留明确unknown状态，不能退回按名称猜测身份。 */
+  async navigationCatalog(connectionId: string, schema: string, kinds = CATALOG_KINDS): Promise<CatalogListing> {
+    try { return await loadObjectCatalog({ connection_id: connectionId, catalog: null, schema, kinds }, { list: (scope, cursor) => api.listObjectCatalog(scope, cursor) }); }
+    catch (error) { return { objects: [], revision: "", sections: Object.fromEntries(kinds.map(kind => [kind, { state: "unknown" as const, reason: String(error) }])) }; }
+  }
+
   /** 加载节点的子节点。 */
   private async loadChildren(node: TreeItem): Promise<void> {
     // 分组节点统一拦截：查询分组懒加载收藏的保存查询、备份分组懒加载备份文件，
@@ -903,7 +969,7 @@ export class App {
     // 加载时构建完毕 —— 必须在下方表分支之前 return，否则 id 中的
     // "table/<表名>/grp-xx" 会落进表正则、被当成表名 "<表名>/grp-xx" 再生成
     // 一层「字段/索引/外键/触发器」分组，造成无限套叠（字段也跟着对不上）。
-    if (/\/grp-(column|index|fk|trigger|query|backup|table|view|function)$/.test(node.id)) {
+    if (/\/grp-(column|index|fk|trigger|query|backup|table|view|function|event|sequence|materialized)$/.test(node.id)) {
       if (/\/grp-query$/.test(node.id)) {
         this.refreshQueryGroups();
         return;
@@ -952,13 +1018,20 @@ export class App {
             has_children: true,
             expanded: false,
           }));
+          node.children.push({
+            id: `${node.id}/grp-query`, label: "查询", type: "folder", icon: "pict_query",
+            children: savedQueriesFor(this.favorites, connId, "main").map(favorite => ({
+              id: `${node.id}/query/${favorite.id}`, label: favorite.name, type: "query", icon: "info_pane_query",
+              children: [], expandable: false, has_children: false, expanded: false,
+            })), expandable: true, has_children: true, expanded: false,
+          });
           return;
         }
         node.children = dbs.map(([name]) => ({
           id: `${node.id}/db/${name}`,
           label: name,
-          type: "database" as ObjectType,
-          // 未打开的库不亮起、不带展开箭头（打开后由 syncConnIcons 补上）
+          type: namespaceType(cfg),
+          // 未打开的命名空间不亮起、不带展开箭头（打开后由 syncConnIcons 补上）
           icon: "info_pane_schema",
           children: [],
           expandable: this.openDbs.has(`${connId}/${name}`),
@@ -966,7 +1039,7 @@ export class App {
           expanded: false,
         }));
       } catch (e) {
-        this.toast("error", `无法列出数据库：${String(e)}`);
+        this.toast("error", `无法列出${namespaceName(cfg)}：${String(e)}`);
       }
       return;
     }
@@ -976,17 +1049,7 @@ export class App {
       const dbName = node.id.split("/db/")[1];
       try {
         const tables = await api.listTables(connId, dbName);
-        const routines = await api.listRoutines(connId, dbName);
-        const mkObj = (t: string, type: string, icon: string): TreeItem => ({
-          id: `${node.id}/obj/${type}/${t}`,
-          label: t,
-          type: type as TreeItem["type"],
-          icon,
-          children: [],
-          expandable: false,
-          has_children: false,
-          expanded: false,
-        });
+        const catalog = await this.navigationCatalog(connId, dbName, TREE_CATALOG_KINDS);
         const tbl = tables
           .filter(([, ty]) => ty === "table")
           .map(([t]) => ({
@@ -1011,12 +1074,9 @@ export class App {
             has_children: true,
             expanded: false,
           }));
-        const funcs = routines
-          .filter(([ty]) => ty === "function" || ty === "procedure")
-          .map(([ty, n]) => mkObj(n, ty, "info_pane_function"));
         // 查询分组：列出收藏夹中保存的查询（connection 匹配或通用）
         const savedQueries: TreeItem[] = this.favorites
-          .filter((f) => !f.connection_id || f.connection_id === connId)
+          .filter((f) => f.connection_id === connId && !!f.schema && f.schema === (node.id.split("/db/")[1] ?? "main"))
           .map((f) => ({
             id: `${node.id}/query/${f.id}`,
             label: f.name,
@@ -1041,7 +1101,7 @@ export class App {
           // 分组导航入口与命令条同名按钮同源（pict_* → pict.ts 具象图标），保证联动视觉一致
           group(`grp-table`, "表", "pict_table", tbl),
           group(`grp-view`, "视图", "pict_view", views),
-          group(`grp-function`, "函数", "pict_function", funcs),
+          ...catalogTreeGroups(node.id, catalog),
           group(`grp-query`, "查询", "pict_query", savedQueries),
           group(`grp-backup`, "备份", "pict_backup", []),
         ];
@@ -1065,7 +1125,8 @@ export class App {
           id: `${node.id}/column/${c.name}`,
           label: c.name,
           type: "column" as ObjectType,
-          icon: "info_pane_column",
+          // 主键字段用琥珀钥匙图标与普通字段区分。
+          icon: c.primary_key ? "info_pane_pk" : "info_pane_column",
           children: [],
           expandable: false,
           has_children: false,
@@ -1091,13 +1152,7 @@ export class App {
           has_children: false,
           expanded: false,
         }));
-        const trs: TreeItem[] = await this.loadTableTriggers(
-          connId,
-          kind,
-          schema ?? "",
-          table,
-          node.id,
-        );
+        const trs: TreeItem[] = await this.loadTableTriggers(connId, schema || (kind === "sqlite" ? "main" : ""), table, node.id);
         const group = (suffix: string, label: string, icon: string, kids: TreeItem[]): TreeItem => ({
           id: `${node.id}/${suffix}`,
           label,
@@ -1123,57 +1178,27 @@ export class App {
   /** 读取表上的触发器（按数据库类型）。baseId 为所属表节点 id。 */
   private async loadTableTriggers(
     connId: string,
-    kind: string,
     schema: string,
     table: string,
     baseId: string,
   ): Promise<TreeItem[]> {
-    const esc = (s: string) => s.replace(/'/g, "''");
-    let sql = "";
-    if (kind === "mysql") {
-      sql =
-        "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = " +
-        `'${esc(schema)}' AND EVENT_OBJECT_TABLE = '${esc(table)}'`;
-    } else if (kind === "sqlite") {
-      sql = `SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = '${esc(table)}'`;
-    } else {
-      sql = `SELECT tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname = '${esc(table)}' AND NOT tgisinternal`;
-    }
-    try {
-      const res = await api.executeSql(connId, sql);
-      const set = res.sets[0];
-      if (!set) return [];
-      const nameCol = set.columns.findIndex((c) => /name/i.test(c.name));
-      return set.rows
-        .map((r) => (nameCol >= 0 ? r[nameCol] : r[0]))
-        .filter((n): n is string => !!n)
-        .map((n) => ({
-          // 挂在所属表的路径下（baseId = 表节点 id），保证右键 / 双击
-          // 能解析到正确的表
-          id: `${baseId}/trigger/${n}`,
-          label: n,
-          type: "trigger" as ObjectType,
-          icon: "trigger",
-          children: [],
-          expandable: false,
-          has_children: false,
-          expanded: false,
-        }));
-    } catch {
-      return [];
-    }
+    const catalog = await this.navigationCatalog(connId, schema, ["trigger"]);
+    const notice = catalogNotice(catalog.sections);
+    if (notice) this.toast("info", notice);
+    return catalog.objects.filter(descriptor => descriptor.object.parent?.schema === schema && descriptor.object.parent.name === table)
+      .map(descriptor => catalogTreeItem(baseId, descriptor));
   }
 
   /** 打开数据库：亮起图标、显示展开箭头并加载子节点（双击 / 「打开数据库」）。 */
-  private async openDatabaseNode(node: TreeItem, connId: string, dbName: string): Promise<void> {
-    if (node.loading) return;
+  private async openDatabaseNode(node: TreeItem, connId: string, dbName: string): Promise<boolean> {
+    if (node.loading) return false;
     // 已加载且仍处于打开状态：只需重新展开，无需再次打开连接/库
     if (node.loaded && this.openDbs.has(`${connId}/${dbName}`)) {
       node.expandable = true;
       node.expanded = true;
       this.syncConnIcons();
       this.tree.render();
-      return;
+      return true;
     }
     node.loading = true;
     try {
@@ -1190,11 +1215,13 @@ export class App {
       this.syncConnIcons();
       this.tree.render();
       this.openObjectsTab(connId, dbName);
+      return true;
     } catch (e) {
       this.openDbs.delete(`${connId}/${dbName}`);
       node.loaded = false;
-      this.toast("error", `打开数据库失败：${String(e)}`);
+      this.toast("error", `打开${namespaceName(this.connectionById(connId))}失败：${String(e)}`);
       this.syncConnIcons();
+      return false;
     } finally {
       node.loading = false;
     }
@@ -1205,11 +1232,30 @@ export class App {
     const result = await api.ensureConnection(connId);
     if (!result.ok) throw new Error(result.message);
     this.openConnections.add(connId);
+    this.startKeepAlive(connId);
     this.syncConnIcons();
   }
 
+  /** PL-27：按后端代次和到期时间串行观察；禁用/不支持的连接不安排 SQL 探测。 */
+  private startKeepAlive(connId: string) {
+    this.keepAliveMonitor ??= new ConnectionHealthMonitor({
+      view: id => api.connectionHealth(id), check: id => api.checkConnectionHealth(id),
+      offline: (id, message) => this.toast("error", `连接 ${this.connectionById(id)?.name ?? id} 保活探测失败：${message}`),
+      schedule: (callback, delay) => window.setTimeout(callback, delay),
+      cancel: timer => window.clearTimeout(timer),
+    });
+    this.keepAliveMonitor.start(connId);
+  }
+
+  private stopKeepAlive(connId: string) { this.keepAliveMonitor?.stop(connId); }
+
   /** 关闭数据库：图标熄灭、收起并隐藏展开箭头。 */
-  private closeDatabaseNode(connId: string, dbName: string): void {
+  private async closeDatabaseNode(connId: string, dbName: string): Promise<boolean> {
+    const namespace = namespaceName(this.connectionById(connId));
+    return this.guardLeave(this.tabs.filter(tab => tab.connectionId === connId && tab.schema === dbName).map(tab => tab.id), `关闭${namespace}页面`, async () => {
+      const transaction = this.manualTransactionFor(connId);
+      if (transaction?.schema === dbName) throw new Error("请先在事务所属页提交或回滚");
+      this.suspendDatasourceTabs(new Set([connId]), `${namespace}已关闭，旧页面已暂停。SQL 草稿仍保留，请明确重新选择连接。`, dbName);
     this.openDbs.delete(`${connId}/${dbName}`);
     const node = this.tree.find(`conn:${connId}/db/${dbName}`);
     if (node) {
@@ -1220,28 +1266,25 @@ export class App {
     }
     this.syncConnIcons();
     this.tree.render();
+    });
   }
 
   /** 选中树节点：仅移动选中光标；库节点单击不打开、不亮起（双击/「打开数据库」才打开）。 */
   private async selectNode(node: TreeItem): Promise<void> {
-    this.infoRequest++;
-    this.updateInfoPanelForNode(node);
+    // 会打开对象页的选择交给标签页统一更新详情，避免先显示节点详情再立即覆盖。
     if (/grp-backup$/.test(node.id)) {
       const connId = node.id.slice(5).split("/db/")[0];
       const dbName = node.id.split("/db/")[1].replace(/\/grp-backup$/, "");
       this.openSpecialTab("backup", connId, dbName);
       return;
     }
-    if (/grp-(table|view|function)$/.test(node.id)) {
-      const connId = node.id.slice(5).split("/db/")[0];
-      const dbName = node.id.split("/db/")[1].replace(/\/(grp-\w+)$/, "");
+    if (/grp-(table|view|function|query|trigger|event|sequence|materialized)$/.test(node.id) && !/\/(table|view)\//.test(node.id)) {
+      const group = /^conn:([^/]+)(?:\/db\/([^/]+))?\/grp-(table|view|function|query|trigger|event|sequence|materialized)$/.exec(node.id);
+      if (!group) return;
+      const connId = group[1], dbName = group[2] ?? "main";
       this.syncDbIcons(node.id);
       // 「表」分组只展示表，「视图」只展示视图，「函数」只展示函数 / 存储过程
-      const filter: ObjectType = /grp-table$/.test(node.id)
-        ? "table"
-        : /grp-view$/.test(node.id)
-          ? "view"
-          : "function";
+      const filter: ObjectType = group[3] === "materialized" ? "materialized_view" : group[3] as ObjectType;
       this.openObjectsTab(connId, dbName, filter);
       return;
     }
@@ -1253,12 +1296,18 @@ export class App {
       return;
     }
     // 单击连接仅选中；双击才打开，避免单击时重建节点破坏双击目标。
+    this.updateInfoPanelForNode(node);
   }
 
   /** 打开备份 / 用户等特殊标签页。 */
   openSpecialTab(kind: "backup" | "users", connId: string, schema: string): void {
     const cfg = this.connections.find((c) => c.id === connId);
     if (!cfg) return;
+    if (kind === "backup") {
+      // 备份是对象浏览的一个类别，复用该连接固定在左侧的对象页。
+      this.openObjectsTab(connId, schema, "folder", false, "backup");
+      return;
+    }
     const existing = this.tabs.find(
       (t) => t.kind === kind && t.connectionId === connId && t.schema === schema,
     );
@@ -1270,7 +1319,7 @@ export class App {
     const tab: TabState = {
       id: `${kind[0]}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       kind,
-      title: kind === "backup" ? "备份" : "用户",
+      title: "用户",
       connectionId: connId,
       connectionName: cfg.name,
       schema,
@@ -1336,7 +1385,7 @@ export class App {
     const cfg = this.connections.find((c) => c.id === connId);
     if (!cfg) return;
     const existing = this.tabs.find(
-      (t) => t.kind === "viewdesign" && t.connectionId === connId && t.object === view,
+      (t) => t.kind === "viewdesign" && t.connectionId === connId && t.schema === schema && t.object === view,
     );
     if (existing) {
       this.activeTabId = existing.id;
@@ -1357,96 +1406,51 @@ export class App {
   }
 
   /** 打开函数 / 存储过程源码（可编辑重建）。 */
-  async openRoutineDesignTab(
-    connId: string,
-    schema: string,
-    name: string,
-    routineType: string,
-  ): Promise<void> {
-    const cfg = this.connections.find((c) => c.id === connId);
-    if (!cfg) return;
-    const existing = this.tabs.find(
-      (t) =>
-        t.kind === "routinedesign" && t.connectionId === connId && t.object === name,
-    );
-    if (existing) {
-      this.activeTabId = existing.id;
-      this.renderTabs();
-      return;
-    }
-    let sql = "";
+  async openRoutineDesignTab(connId: string, schema: string, name: string, routineType: string, exact?: DatabaseObjectId): Promise<void> {
+    if (!this.connections.some(c => c.id === connId)) return;
     try {
-      sql = await api.getRoutineDefinition(connId, schema, name, routineType);
-    } catch (e) {
-      this.toast("error", `读取定义失败：${String(e)}`);
+      let object = exact;
+      if (!object) {
+        const catalog = await loadObjectCatalog({ connection_id: connId, catalog: null, schema, kinds: [routineType] }, { list: (scope, cursor) => api.listObjectCatalog(scope, cursor) });
+        const matches = catalog.objects.filter(item => item.object.name === name && item.object.kind === routineType);
+        if (matches.length !== 1) throw new Error(matches.length ? "存在多个重载，请在完整对象目录中选择具体签名" : "没有取得此例程的完整可见身份；权限未知不等于不存在");
+        object = matches[0].object;
+      }
+      if (object.connection_id !== connId || object.schema !== schema || object.name !== name || object.kind !== routineType || object.parent) throw new Error("例程身份与当前连接 / 作用域不一致");
+      const key = objectKey(object), existing = this.tabs.find(t => t.kind === "routinedesign" && t.routineObject && objectKey(t.routineObject) === key);
+      if (existing) { this.activeTabId = existing.id; this.renderTabs(); return; }
+      const snapshot = await api.readRoutineDesignObject(object);
+      const tab = this.makeTab("routinedesign", catalogObjectLabel(object), connId, schema, name, routineType as ObjectType, snapshot.definition);
+      tab.routineObject = structuredClone(object); tab.routineSnapshot = snapshot;
+      this.tabs.push(tab); this.activeTabId = tab.id; this.renderTabs();
+    } catch (error) { this.toast("error", `读取精确例程失败：${String(error)}`); }
+  }
+
+  async openCatalogObject(descriptor: ObjectDescriptor, call = false): Promise<void> {
+    const object = descriptor.object;
+    const readOnly = !!this.connectionById(object.connection_id)?.read_only;
+    const reason = call ? catalogCallReason(descriptor, readOnly) : catalogReadReason(descriptor, readOnly);
+    if (reason) throw new Error(reason);
+    if (call) {
+      if (!["function", "procedure"].includes(object.kind)) throw new Error("所选对象不是可调用例程");
+      new RoutineCallDialog(object, `routine-call-${crypto.randomUUID()}`, {
+        metadata: value => api.routineCallMetadata(value), prepare: (draft, owner) => api.previewRoutineCall(draft, owner),
+        execute: (plan, request) => api.executeRoutineCall(plan, request), issueGrant: request => api.issueGrant(request),
+        cancelExecution: context => api.cancelExecution(context), executionStatus: context => api.executionStatus(context),
+      });
       return;
     }
-    const tab = this.makeTab(
-      "routinedesign",
-      name,
-      connId,
-      schema,
-      name,
-      routineType as ObjectType,
-      sql,
-    );
-    this.tabs.push(tab);
-    this.activeTabId = tab.id;
-    this.renderTabs();
-  }
-
-  /** 打开模型视图（当前库的 ER 关系图）。 */
-  openModelTab(connId: string, schema: string): void {
-    const cfg = this.connections.find((c) => c.id === connId);
-    if (!cfg) return;
-    const existing = this.tabs.find(
-      (t) => t.kind === "model" && t.connectionId === connId && t.schema === schema,
-    );
-    if (existing) {
-      this.activeTabId = existing.id;
-      this.renderTabs();
-      return;
-    }
-    const tab = this.makeTab("model", `模型 - ${schema}`, connId, schema, "");
-    this.tabs.push(tab);
-    this.activeTabId = tab.id;
-    this.renderTabs();
-  }
-
-  /** 只读取当前活动视图已经取得的数据，不从连接树或其它页借用结果。 */
-  private currentChartSource(): ChartSource | null {
-    const tab = this.activeTab;
-    if (!tab) return null;
-    const view = this.views.get(tab.id);
-    if (tab.kind === "query" && view instanceof QueryTabView) return view.chartSource();
-    if (tab.kind === "table" && view instanceof DataTabView && tab.page) {
-      return {
-        title: tab.object || tab.title,
-        description: `${tab.connectionName || tab.connectionId} / ${tab.schema} · 当前页已加载数据库数据（不含未提交编辑）`,
-        columns: tab.page.columns.map(column => column.name), rows: tab.page.rows,
-      };
-    }
-    return null;
-  }
-
-  private cmdCreateChart(): void {
-    const sourceTab = this.activeTab;
-    const source = this.currentChartSource();
-    const error = chartSourceError(source);
-    if (!sourceTab || !source || error) { this.toast("error", error ?? "当前没有可绘制的数据。"); return; }
-    const tab = this.makeTab("chart", `图表 - ${source.title}`, sourceTab.connectionId, sourceTab.schema, sourceTab.object);
-    tab.connectionName = sourceTab.connectionName;
-    tab.chart = createChartState(source);
-    this.tabs.push(tab);
-    this.activeTabId = tab.id;
-    this.renderTabs();
+    if (["function", "procedure"].includes(object.kind)) { await this.openRoutineDesignTab(object.connection_id, object.schema, object.name, object.kind, object); return; }
+    const definition = await api.objectDefinition(object);
+    if (objectKey(definition.object) !== objectKey(object)) throw new Error("对象定义身份不一致，拒绝展示错误对象");
+    showDraftText(`定义 · ${descriptor.display_name}`, definition.definition, `只读定义；完整性：${definition.completeness}。未验证的启停 / 删除 / 修改不发送SQL。`);
   }
 
   /** 打开（或聚焦）某连接的对象标签页。
    *  对象页每个连接共用一个：固定在标签条左侧（其它页签之前），
    *  单击树上不同分组 / 不同库只就地切换内容，不再新开页签。
    *  filter：对象来源（树上选中「表」分组只展示表、「视图」分组只展示视图、库节点展示全部）。 */
-  openObjectsTab(connId: string, schema: string, filter: ObjectType = "folder", markOpened = true): void {
+  openObjectsTab(connId: string, schema: string, filter: ObjectType = "folder", markOpened = true, browserKind: "objects" | "backup" = "objects"): void {
     const cfg = this.connections.find((c) => c.id === connId);
     if (!cfg) return;
     // 记录「已打开的库」，树中该库图标显示为绿色高亮。
@@ -1455,13 +1459,18 @@ export class App {
     if (markOpened) this.openDbs.add(`${connId}/${schema}`);
     this.openConnections.add(connId);
     this.syncConnIcons();
-    const title =
-      filter === "table" ? "表" : filter === "view" ? "视图" : filter === "function" ? "函数" : "对象";
+    const title = "对象";
     const existing = this.tabs.find(
-      (t) => t.kind === "objects" && t.connectionId === connId,
+      (t) => (t.kind === "objects" || t.kind === "backup") && t.connectionId === connId,
     );
     if (existing) {
-      // 共用对象页：切换内容（库 + 过滤）并聚焦，不新开页签
+      // 共用对象页：切换内容（库 + 过滤）并聚焦，不新开页签。
+      if (existing.kind !== browserKind) {
+        this.views.get(existing.id)?.destroy();
+        this.views.delete(existing.id);
+        existing.kind = browserKind;
+      }
+      existing.selectedRows.clear();
       existing.schema = schema;
       existing.objectType = filter;
       existing.title = title;
@@ -1471,7 +1480,7 @@ export class App {
     }
     const tab: TabState = {
       id: `o_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-      kind: "objects",
+      kind: browserKind,
       title,
       connectionId: connId,
       connectionName: cfg.name,
@@ -1493,7 +1502,7 @@ export class App {
       editing: null,
     };
     // 固定左侧：插到已有对象页之后、其余页签之前
-    const insertAt = this.tabs.filter((t) => t.kind === "objects").length;
+    const insertAt = this.tabs.filter((t) => t.kind === "objects" || t.kind === "backup").length;
     this.tabs.splice(insertAt, 0, tab);
     this.activeTabId = tab.id;
     this.renderTabs();
@@ -1501,6 +1510,7 @@ export class App {
 
   /** 双击树节点。 */
   private async openNode(node: TreeItem): Promise<void> {
+    if (node.objectDescriptor) { await this.openCatalogObject(node.objectDescriptor); return; }
     // 节点 id 形如：
     //   conn:<id>                     仅连接本身
     //   conn:<id>/table/<name>        表 / 视图（SQLite）
@@ -1544,8 +1554,7 @@ export class App {
     if (qIdx > 0 && parts.length > qIdx + 1) {
       const fav = this.favorites.find((f) => f.id === parts[qIdx + 1]);
       if (fav) {
-        const dq = parts.indexOf("db");
-        await this.openQueryTab(fav.connection_id ?? connId, fav.sql, dq >= 0 ? parts[dq + 1] : "");
+        await this.openSavedQuery(fav.id);
         return;
       }
     }
@@ -1611,7 +1620,59 @@ export class App {
   /** 供视图内部调用：刷新二级工具栏启用态。 */
   notifyToolbar(): void {
     const tab = this.activeTab;
-    if (tab) this.tabToolbar.setItems(this.guardedTabToolbarItems(tab));
+    this.tabToolbar.setItems(tab ? this.guardedTabToolbarItems(tab) : []);
+    this.syncObjectSearchInput();
+  }
+
+  /** 对象页搜索框展开状态（工具栏搜索图标切换）。 */
+  private objectSearchOpen = false;
+  private objectSearchInput: HTMLInputElement | null = null;
+
+  /** 展开时聚焦一次；普通工具栏刷新不重新创建或聚焦输入。 */
+  private cmdObjectSearch(): void {
+    this.objectSearchOpen = !this.objectSearchOpen;
+    this.notifyToolbar();
+    if (this.objectSearchOpen) this.objectSearchInput?.focus();
+  }
+
+  private syncObjectSearchInput(): void {
+    const tab = this.activeTab;
+    const view = tab?.kind === "objects" ? this.views.get(tab.id) : undefined;
+    const searchButton = this.tabToolbar.el.querySelector<HTMLButtonElement>('[data-command="object-search"]');
+    searchButton?.setAttribute("aria-expanded", String(this.objectSearchOpen && view instanceof ObjectsTabView));
+    if (!this.objectSearchOpen || !(view instanceof ObjectsTabView)) {
+      this.objectSearchInput?.remove();
+      this.objectSearchInput = null;
+      return;
+    }
+    if (this.objectSearchInput?.dataset.tabId === tab!.id) {
+      // 不改动活动输入的 value/selection，保留 IME 与光标。视图换作用域时才同步值。
+      if (document.activeElement !== this.objectSearchInput) this.objectSearchInput.value = view.searchValue();
+      return;
+    }
+    this.objectSearchInput?.remove();
+    const input = document.createElement("input");
+    input.type = "search";
+    input.className = "tab-tool-search";
+    input.dataset.tabId = tab!.id;
+    input.placeholder = "筛选对象名称";
+    input.setAttribute("aria-label", "筛选对象名称（Esc 清空并收起）");
+    input.value = view.searchValue();
+    let composing = false;
+    input.addEventListener("compositionstart", () => { composing = true; });
+    input.addEventListener("compositionend", () => { composing = false; view.setSearchValue(input.value); });
+    input.addEventListener("input", () => { if (!composing) view.setSearchValue(input.value); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !e.isComposing && !composing) {
+        e.preventDefault(); e.stopPropagation();
+        input.value = ""; view.setSearchValue("");
+        this.objectSearchOpen = false;
+        this.notifyToolbar();
+        this.tabToolbar.el.querySelector<HTMLButtonElement>('[data-command="object-search"]')?.focus();
+      }
+    });
+    this.tabToolbar.stableSlot.appendChild(input);
+    this.objectSearchInput = input;
   }
 
   /** 连接 id → 显示名（未找到时原样返回）。 */
@@ -1649,24 +1710,130 @@ export class App {
   }
 
   private activateTab(id: string): void {
+    if (this.draftPreparing) return;
     if (this.activeTabId === id) return;
     this.activeTabId = id;
     this.renderTabs();
   }
 
-  private closeTab(id: string): void {
+  private async closeTab(id: string): Promise<boolean> {
+    return this.closeTabs([id]);
+  }
+
+  private async closeTabs(ids: string[]): Promise<boolean> {
+    return this.guardLeave(ids, "关闭页面", async () => {
+      this.deferredTabRemovals = new Set();
+      try {
+        for (const id of ids) {
+          const tab = this.tabs.find(t => t.id === id);
+          if (tab && this.manualTransactionFor(tab.connectionId)?.owner === id && !await this.closeManualTransactionTab(tab)) {
+            throw new Error("事务关闭已取消或失败，所有页面保留");
+          }
+        }
+      } finally { this.deferredTabRemovals = null; }
+      for (const id of ids) this.removeTabNow(id);
+    });
+  }
+
+  /** 离页身份快照：保存或丢弃前确认页面仍指向同一连接、命名空间和对象。 */
+  private leaveIdentity(id: string): string {
     const tab = this.tabs.find(t => t.id === id);
-    if (!tab) return;
-    if (this.manualTransactionIsBusy(tab.connectionId)) {
-      this.toast("info", "事务操作进行中，请完成后再关闭页面");
-      return;
+    // 查询页保存后名称和对象会变化，不把可变标题计入上下文身份。
+    return JSON.stringify(tab ? [tab.kind, tab.connectionId, tab.schema, tab.kind === "query" ? null : tab.object, this.connectionById(tab.connectionId)] : null);
+  }
+
+  /** 离页前的保存提醒：查询 SQL 未保存时询问是否保存；其它编辑按用户选择丢弃或取消。 */
+  async guardLeave(ids: string[], cause: string, action: () => Promise<void>): Promise<boolean> {
+    if (this.draftPreparing) return false;
+    this.draftPreparing = true;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const inert = this.contentHost.inert;
+    try {
+      const views = ids.map(id => this.views.get(id)).filter((view): view is TabView => !!view);
+      views.forEach(view => view.flushDraft());
+      if (views.some(view => view.draftBusy())) throw new Error("查询、结构或事务操作进行中，请完成后重试");
+      this.contentHost.inert = true;
+      this.contentHost.setAttribute("aria-busy", "true");
+      const identities = ids.map(id => this.leaveIdentity(id));
+      const dirty = ids
+        .map(id => ({ id, view: this.views.get(id) }))
+        .filter((item): item is { id: string; view: TabView } => !!item.view && item.view.draftDirty());
+      if (dirty.length) {
+        const items: LeavePromptItem[] = dirty.map(({ id, view }) => {
+          const tab = this.tabs.find(candidate => candidate.id === id);
+          const savable = view instanceof QueryTabView && view.hasUnsavedSql() && !!tab
+            && !!this.connectionById(tab.connectionId) && !!tab.schema.trim();
+          return { title: tab?.title ?? id, kind: savable ? "query" : "other" };
+        });
+        const choice = await chooseLeave(items, cause);
+        if (choice === "cancel") return false;
+        if (choice === "save") {
+          for (const [index, { id, view }] of dirty.entries()) {
+            if (items[index].kind !== "query") continue;
+            const tab = this.tabs.find(candidate => candidate.id === id);
+            if (tab && view instanceof QueryTabView) await this.saveQueryAtLeave(tab, view);
+          }
+        }
+        if (ids.some((id, i) => identities[i] !== this.leaveIdentity(id))) throw new Error("编辑或上下文已变化，离页已取消");
+      }
+      await action();
+      dirty.forEach(({ id }) => {
+        const view = this.views.get(id);
+        if (view && !view.draftBusy()) view.discardDraft();
+      });
+      return true;
+    } catch (e) { this.toast("error", `未离开当前页面：${String(e)}`); return false; }
+    finally {
+      this.contentHost.inert = inert; this.draftPreparing = false;
+      // 离页结束必须重算工具栏：draftPreparing 期间按钮会被判为不可用，
+      // 否则「数据生成」等入口会一直停在置灰状态，直到用户手动刷新。
+      this.notifyToolbar();
+      this.ribbon.updateDisabled();
+      this.contentHost.removeAttribute("aria-busy");
+      if (previousFocus?.isConnected && !document.querySelector(".dialog-backdrop")) previousFocus.focus();
     }
-    const transaction = this.manualTransactionFor(tab.connectionId);
-    if (transaction?.owner === id) {
-      void this.closeManualTransactionTab(tab);
-      return;
-    }
-    this.removeTabNow(id);
+  }
+
+  /** 关闭时保存查询：已绑定查询直接覆盖，否则询问名称；取消时抛出以阻止离页。 */
+  private async saveQueryAtLeave(tab: TabState, view: QueryTabView): Promise<void> {
+    const sql = view.editor.getSql();
+    if (!sql.trim()) throw new Error("查询内容为空，无法保存");
+    const binding = { connectionId: tab.connectionId, schema: tab.schema };
+    if (!this.connectionById(binding.connectionId) || !binding.schema.trim()) throw new Error("保存查询前请选择连接和数据库");
+    const existing = tab.savedQueryId ? this.favorites.find(favorite => favorite.id === tab.savedQueryId) : undefined;
+    const save = async (name: string) => {
+      if (tab.connectionId !== binding.connectionId || tab.schema !== binding.schema) throw new Error("编辑器上下文已变化，请重新保存");
+      if (!this.connectionById(binding.connectionId)) throw new Error("连接已不存在，请重新选择连接和数据库");
+      const source = view.editor.getSql();
+      const favorite = queryFavorite(this.favorites, { id: existing?.id, name, sql: source, ...binding });
+      const items = await api.addFavorite(favorite);
+      tab.savedQueryId = favorite.id;
+      view.markClean(source);
+      this.publishFavorites(items, favorite.id);
+      this.toast("success", `查询「${name}」已保存`);
+    };
+    if (existing?.name) { await save(existing.name); return; }
+    const saved = await new Promise<boolean>(resolve => {
+      let settled = false;
+      const dialog = openObjectAction({
+        title: "保存查询", label: "查询名称", value: tab.title, context: `${tab.connectionName} / ${tab.schema}`, confirm: "保存",
+        submit: async name => { await save(name); settled = true; resolve(true); },
+      });
+      dialog.onClose(() => { if (!settled) resolve(false); });
+    });
+    if (!saved) throw new Error("保存查询已取消");
+  }
+  private setupDraftSyncGuard(): void {
+    const commit = this.datasourceSync.commit.bind(this.datasourceSync);
+    this.datasourceSync.commit = async (id, choices) => {
+      let result: DatasourceSyncResult | undefined;
+      const accepted = await this.guardLeave(this.tabs.map(tab => tab.id), "应用数据源同步", async () => {
+        this.draftSyncApproved = true;
+        try { result = await commit(id, choices); } finally { this.draftSyncApproved = false; }
+      });
+      if (!accepted || !result) throw new Error("数据源同步未应用，编辑或活动门禁已取消 / 失败");
+      return result;
+    };
   }
 
   private removeTabNow(id: string): void {
@@ -1708,7 +1875,7 @@ export class App {
       glyph.innerHTML = svg(ICON_EMPTY_CONNECT, 30);
       const title = document.createElement("div");
       title.className = "empty-state-title";
-      title.textContent = "还没有打开的连接";
+      title.textContent = "尚未打开工作页";
       const text = document.createElement("div");
       text.className = "empty-state-text";
       text.textContent = `新建一个连接开始工作。NavKit 支持 ${DB_KINDS.length} 种数据源，包括 MySQL、PostgreSQL、SQL Server 与国产数据库。`;
@@ -1726,7 +1893,7 @@ export class App {
       actions.appendChild(mkAction("打开现有连接", false, "open-connection"));
       empty.append(glyph, title, text, actions);
       this.contentHost.appendChild(empty);
-      this.tabToolbar.setItems([]);
+      this.notifyToolbar();
       this.updateInfoPanel();
       this.ribbon.setActive(null);
       return;
@@ -1735,12 +1902,21 @@ export class App {
     if (!view) {
       view = this.createView(tab);
       this.views.set(tab.id, view);
+      view.el.addEventListener("focusin", e => {
+        const grid = (view as TabView & { grid?: DataGrid }).grid;
+        if (grid?.el.contains(e.target as Node) && !(e.target instanceof HTMLInputElement)) {
+          this.copyOwner = { tabId: tab.id, kind: "grid", grid };
+          this.copyContext = null;
+        } else if ((e.target as HTMLElement).closest?.(".cm-editor")) {
+          this.copyOwner = { tabId: tab.id, kind: "editor" }; this.copyContext = null;
+        }
+      });
     }
     this.contentHost.innerHTML = "";
     this.contentHost.appendChild(view.el);
     if (!tab.datasourceStale) view.activate();
     this.ribbon.updateDisabled();
-    this.tabToolbar.setItems(this.guardedTabToolbarItems(tab));
+    this.notifyToolbar();
     this.renderStatus();
     // Ribbon 变体：SQL Server 连接时「用户」带下拉并在「其它」后插入「SQL Server 备份」
     {
@@ -1769,13 +1945,11 @@ export class App {
           ? "backup"
           : tab.kind === "schedule"
             ? "schedule"
-            : tab.kind === "model"
-              ? "model"
-              : tab.kind === "chart"
-                ? "chart"
-                : tab.kind === "users"
+            : tab.kind === "users"
                   ? "open-user"
-                  : tab.kind === "objects" && tab.objectType === "view"
+                  : tab.kind === "objects" && tab.objectType === "query"
+                    ? "open-query"
+                    : tab.kind === "objects" && tab.objectType === "view"
                     ? "open-view"
                     : tab.kind === "objects" && tab.objectType === "function"
                       ? "open-function"
@@ -1798,14 +1972,10 @@ export class App {
         return new UsersTabView(this, tab);
       case "schedule":
         return new ScheduleTabView(this, tab);
-      case "model":
-        return new ModelTabView(this, tab);
       case "viewdesign":
         return new SqlDesignTabView(this, tab, "view");
       case "routinedesign":
-        return new SqlDesignTabView(this, tab, "routine");
-      case "chart":
-        return new ChartTabView(this, tab);
+        return new RoutineTabView(this, tab);
       default:
         return new DataTabView(this, tab);
     }
@@ -1814,10 +1984,91 @@ export class App {
   /** 当前标签页对应的二级工具栏按钮。 */
   private guardedTabToolbarItems(tab: TabState): TabToolItem[] {
     return this.tabToolbarItems(tab).map(item => {
-      if (!MANUAL_TRANSACTION_WRITE_COMMANDS.has(item.id) && !(item.id === "save" && tab.kind !== "query")) return item;
+      if (!item.id.startsWith("object-") && item.id !== "beautify-sql" && !MANUAL_TRANSACTION_WRITE_COMMANDS.has(item.id) && !(item.id === "save" && tab.kind !== "query")) return item;
       const reason = this.commandUnavailableReason(item.id);
       return reason ? { ...item, disabled: true, disabledReason: reason } : item;
     });
+  }
+
+  /** 「文本▼」按钮上的标题 = 当前选中的显示格式（文本 / 十六进制 / 图像 / 网页）。 */
+  private textFormatLabel(format = this.textFormat): string {
+    const id = `text-format-${format === "text" ? "plain" : format}`;
+    return TEXT_FORMAT_MENU.find((it) => it.id === id)?.label ?? "文本";
+  }
+
+  /** 「文本▼」按钮图标：跟随当前显示格式（文本 / 十六进制 / 图像 / 网页）。 */
+  private textFormatIcon(): string {
+    return `text_format_${this.textFormat}`;
+  }
+
+  /** 仅所属数据页显式打开预览后显示；查询和其它页面没有此开关。 */
+  textPreviewActive(tabId = this.activeTabId): boolean {
+    const view = tabId ? this.views.get(tabId) : undefined;
+    return view instanceof DataTabView && view.previewPinned;
+  }
+
+  /** 关闭预览（预览面板的 × 按钮）：回到默认文本显示并刷新工具栏。 */
+  closeTextPreview(tabId = this.activeTabId): void {
+    const view = tabId ? this.views.get(tabId) : undefined;
+    if (!(view instanceof DataTabView) || !view.previewPinned) return;
+    view.previewFormat = "text";
+    view.previewPinned = false;
+    if (tabId === this.activeTabId) {
+      this.notifyToolbar();
+      this.refreshCellPreviews();
+    } else view.updateCellPreview();
+  }
+
+  /** 预览面板标题用的格式名（视图层读取）。 */
+  textFormatLabelPublic(): string {
+    return this.textFormatLabel();
+  }
+
+  /** 设置当前数据页的预览格式和开关；仍需有焦点/选中内容才占用高度。 */
+  setTextFormat(format: "text" | "hex" | "image" | "web"): void {
+    const view = this.activeView();
+    if (!(view instanceof DataTabView)) return;
+    if (view.previewFormat === format && view.previewPinned) return;
+    view.previewFormat = format;
+    view.previewPinned = true;
+    this.notifyToolbar();
+    this.refreshCellPreviews();
+  }
+
+  /** 「文本」分体按钮：左侧点击切换预览开关（选中 / 取消选中）。 */
+  toggleTextPreview(): void {
+    const view = this.activeView();
+    if (!(view instanceof DataTabView)) return;
+    if (view.previewPinned) this.closeTextPreview();
+    else this.setTextFormat(view.previewFormat);
+  }
+
+  /** 渲染所属数据页的单元格预览；关闭按钮绑定原页面而非点击时的活动页。 */
+  renderPreviewPanel(host: HTMLElement, value: string | null, tabId = this.activeTabId): void {
+    const view = tabId ? this.views.get(tabId) : undefined;
+    if (!(view instanceof DataTabView) || tabId !== this.activeTabId || !view.previewPinned) {
+      host.style.display = "none";
+      host.replaceChildren();
+      return;
+    }
+    host.classList.toggle("pinned", this.textPreviewActive(tabId));
+    host.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "cell-preview-head";
+    const title = document.createElement("span");
+    title.textContent = `预览 · ${this.textFormatLabel(view.previewFormat)}`;
+    head.appendChild(title);
+    if (this.textPreviewActive(tabId)) {
+      const close = document.createElement("button");
+      close.type = "button"; close.className = "cell-preview-close"; close.textContent = "×";
+      close.title = "关闭预览"; close.setAttribute("aria-label", "关闭单元格内容预览");
+      close.addEventListener("click", () => this.closeTextPreview(tabId));
+      head.appendChild(close);
+    }
+    const body = document.createElement("div");
+    body.className = "cell-preview-body";
+    renderCellPreview(body, value, view.previewFormat);
+    host.append(head, body);
   }
 
   private tabToolbarItems(tab: TabState): TabToolItem[] {
@@ -1843,7 +2094,8 @@ export class App {
         const view = this.views.get(tab.id);
         const rowSelected = view instanceof UsersTabView && (tab.selectedRows?.size ?? 0) > 0;
         return [
-          { id: "edit-user", label: "修改密码", icon: "design_table", disabled: !(isMysql && rowSelected) },
+          { id: "edit-user", label: "编辑用户", icon: "design_table", disabled: !(isMysql && rowSelected) },
+          { id: "change-password", label: "修改密码", icon: "editor", disabled: !(isMysql && rowSelected) },
           { id: "new-user", label: "新建用户", icon: "new_table", disabled: !isMysql },
           { id: "delete-user", label: "删除用户", icon: "delete_table", disabled: !(isMysql && rowSelected) },
           { id: "refresh", label: "刷新", icon: "dbn_refresh" },
@@ -1858,76 +2110,65 @@ export class App {
           { id: "job-history", label: "运行历史", icon: "editor" },
           { id: "refresh", label: "刷新", icon: "dbn_refresh" },
         ];
-      case "model":
-        return [
-          { id: "model-fit", label: "适应窗口", icon: "full_screen" },
-          { id: "model-zoom-in", label: "放大", icon: "bb_zoom_in" },
-          { id: "model-zoom-out", label: "缩小", icon: "bb_zoom_in" },
-          { id: "refresh", label: "刷新", icon: "dbn_refresh" },
-        ];
       case "viewdesign":
       case "routinedesign":
         return [
-          { id: "save", label: "保存", icon: "dbn_post" },
-          { id: "refresh", label: "重新载入定义", icon: "dbn_refresh" },
+          { id: "save", label: "保存", icon: "dbn_post", primary: true },
+          { id: "beautify-sql", label: "美化 SQL", icon: "editor" },
+          { id: "refresh", label: "重新载入定义", icon: "dbn_refresh", disabled: !!tab.designCreating, disabledReason: tab.designCreating ? "新建对象尚未保存，没有可重新载入的定义" : undefined },
         ];
       case "objects": {
         const view = this.views.get(tab.id);
-        const rowSelected =
-          view instanceof ObjectsTabView &&
-          view.grid.rows.length > 0 &&
-          (tab.selectedRows?.size ?? 0) > 0;
-        const selIsTable =
-          view instanceof ObjectsTabView && view.selectedObjectType() === "table";
-        return [
-          { id: "open-table", label: "打开表", icon: "open_table", disabled: !rowSelected },
-          { id: "design-table", label: "设计表", icon: "design_table", disabled: !selIsTable },
-          { id: "new-table", label: "新建表", icon: "new_table" },
-          { id: "delete-table", label: "删除表", icon: "delete_table", disabled: !selIsTable },
-          { id: "import", label: "导入向导", icon: "import_wizard" },
-          { id: "export", label: "导出向导", icon: "export_wizard" },
-        ];
+        return objectTools(tab.objectType, view instanceof ObjectsTabView ? view.selectedObject() : null, this.connectionById(tab.connectionId));
       }
       case "query":
+        // 事务入口在查询页：开始后此页执行的 SELECT / UPDATE / DELETE 都在该事务中，提交后才生效。
         return [
-          { id: "save", label: "保存", icon: "dbn_post" },
+          ...this.manualTransactionTools(tab),
+          { id: "save", label: "保存", icon: "dbn_post", primary: true },
           { id: "query-builder", label: "查询创建工具", icon: "query_builder" },
           { id: "beautify-sql", label: "美化 SQL", icon: "editor" },
           { id: "code-snippet", label: "代码段", icon: "query_pin_ent_preview_image" },
           { id: "export", label: "导出结果", icon: "data_sync_ent_preview_image" },
-          {
-            id: "chart",
-            label: "创建图表",
-            icon: "data_profiling_ent_preview_image",
-          },
-          ...this.manualTransactionTools(tab),
         ];
       case "structure": {
         const structure = this.views.get(tab.id);
         const view = structure instanceof StructureTabView ? structure : null;
+        const busy = view?.isSavingStructure() ?? false;
+        const save: TabToolItem = { id: "save", label: "保存", icon: "dbn_post", primary: true, disabled: busy };
+        const section = view?.designerTabName() ?? "字段";
+        if (section === "索引") return [save,
+          { id: "add-index", label: "添加索引", icon: "dbn_insert", disabled: busy },
+          { id: "delete-index", label: "删除索引", icon: "dbn_delete", disabled: busy }];
+        if (section === "外键") return [save,
+          { id: "add-foreign-key", label: "添加外键", icon: "dbn_insert", disabled: busy },
+          { id: "delete-foreign-key", label: "删除外键", icon: "dbn_delete", disabled: busy }];
+        if (section === "检查") return [save,
+          { id: "add-check", label: "添加检查约束", icon: "dbn_insert", disabled: busy },
+          { id: "delete-check", label: "删除检查约束", icon: "dbn_delete", disabled: busy }];
+        if (section === "触发器") return [save,
+          { id: "add-trigger", label: "添加触发器", icon: "dbn_insert", disabled: busy },
+          { id: "delete-trigger", label: "删除触发器", icon: "dbn_delete", disabled: busy }];
+        if (section !== "字段") return [save];
         const upReason = view ? view.fieldMoveReason(-1) : "请先等待结构加载完成";
         const downReason = view ? view.fieldMoveReason(1) : "请先等待结构加载完成";
-        const busy = view?.isSavingStructure() ?? false;
-        return [
-          { id: "save", label: "保存", icon: "dbn_post", disabled: busy },
+        return [save,
           { id: "add-field", label: "添加字段", icon: "dbn_insert", disabled: busy },
-          { id: "insert-field", label: "插入字段", icon: "dbn_edit", disabled: busy },
+          { id: "insert-field", label: "插入字段", icon: "insert_field", disabled: busy },
           { id: "delete-field", label: "删除字段", icon: "dbn_delete", disabled: busy },
           { id: "primary-key", label: "主键", icon: "dbn_edit", disabled: busy },
           { id: "move-up", label: "上移", icon: "dbn_prior", disabled: !!upReason, disabledReason: upReason ?? undefined },
           { id: "move-down", label: "下移", icon: "dbn_next", disabled: !!downReason, disabledReason: downReason ?? undefined },
         ];
       }
-      case "chart":
-        return [{ id: "refresh", label: "刷新", icon: "dbn_refresh" }];
       default: {
         const view = this.views.get(tab.id);
         const hasRows = view instanceof DataTabView && view.rowCount > 0;
-        return [
-          { id: "text", label: "文本", icon: "editor", dropdown: true },
+        // 表数据页不设事务入口：表格改动由底部「提交改动」（对勾）直接提交到数据库。
+        const tools: TabToolItem[] = [
+          { id: "text", label: this.textFormatLabel(), icon: this.textFormatIcon(), active: view instanceof DataTabView && view.previewPinned, split: true },
           { id: "filter", label: "筛选", icon: "data_filter" },
           { id: "sort", label: "排序", icon: "tab_sort" },
-          { id: "columns", label: "列", icon: "columns", disabled: !hasRows },
           { id: "import", label: "导入", icon: "data_transfer_ent_preview_image" },
           { id: "export", label: "导出", icon: "data_sync_ent_preview_image", disabled: !hasRows },
           {
@@ -1936,20 +2177,27 @@ export class App {
             icon: "data_generation_ent_preview_image",
             disabled: this.connectionById(tab.connectionId)?.read_only ?? false,
           },
+          // 最右侧字段选择按钮控制内嵌侧栏；空结果仍可选择字段。
           {
-            id: "chart",
-            label: "创建图表",
-            icon: "data_profiling_ent_preview_image",
+            id: "columns",
+            label: "选择显示字段",
+            icon: "columns",
+            iconOnly: true,
+            alignRight: true,
+            disabled: view instanceof DataTabView ? view.columnToolDisabled() : true,
           },
-          ...this.manualTransactionTools(tab).map(item => ({ ...item, alignRight: true })),
         ];
+        return tools;
       }
     }
   }
 
   /** 点击树或对象清单后只更新详情，不隐式连接、不替换树节点。 */
   private updateInfoPanelForNode(node: TreeItem): void {
+    if (node.objectDescriptor) { this.showCatalogDetails(node.objectDescriptor); return; }
+    if (node.catalogNotice) { this.infoRequest++; this.objectDetailsRequest = null; this.infoPanel.setState({ icon: node.icon, title: node.label, fields: [{ label: "目录读取状态", value: node.catalogNotice }] }); return; }
     if (node.id.startsWith("group:")) {
+      this.infoRequest++; this.objectDetailsRequest = null;
       const group = node.id.slice(6);
       this.infoPanel.setState({ icon: node.icon, title: group, subtitle: "连接组", fields: [
         { label: "连接数量", value: String(this.connections.filter((c) => c.group === group).length) },
@@ -1964,7 +2212,7 @@ export class App {
     const dbIdx = parts.indexOf("db");
     const schema = dbIdx >= 0 ? parts[dbIdx + 1] : "";
     const backup = node.id.includes("grp-backup");
-    const object = node.type === "connection" || node.type === "database" || node.id.endsWith("grp-backup") ? "" : node.label;
+    const object = node.type === "connection" || node.type === "database" || node.type === "schema" || node.id.endsWith("grp-backup") ? "" : node.label;
     const tableIndex = parts.indexOf("table");
     const viewIndex = parts.indexOf("view");
     const parentTable = tableIndex >= 0 ? parts[tableIndex + 1] : viewIndex >= 0 ? parts[viewIndex + 1] : undefined;
@@ -1973,22 +2221,45 @@ export class App {
       : { parentTable });
   }
 
+  showCatalogDetails(descriptor: ObjectDescriptor): void {
+    this.objectDetailsRequest = null;
+    const request = ++this.infoRequest, state = catalogInfo(descriptor, this.connectionName(descriptor.object.connection_id));
+    this.infoPanel.setState(state);
+    if (catalogReadReason(descriptor)) return;
+    void api.objectDefinition(descriptor.object).then(result => {
+      if (request !== this.infoRequest) return;
+      if (objectKey(result.object) !== objectKey(descriptor.object)) throw new Error("对象定义回执身份不一致");
+      this.infoPanel.setState({ ...state, fields: [...state.fields, { label: "定义完整性", value: result.completeness }, { label: "定义", value: result.definition }] });
+    }).catch(error => { if (request === this.infoRequest) this.infoPanel.setState({ ...state, fields: [...state.fields, { label: "定义读取失败", value: String(error) }] }); });
+  }
+
   showObjectDetails(cfg: ConnectionConfig, schema: string, object: string, type: ObjectType,
     options?: import("./objectDetails").ObjectDetailsOptions): void {
+    const key = JSON.stringify([cfg, schema, object, type, options?.category ?? "object", options?.backupName ?? null, options?.parentTable ?? null]);
+    const previous = this.objectDetailsRequest;
+    const sameObject = previous?.key === key && previous.request === this.infoRequest;
+    if (sameObject && previous.pending) return;
     const request = ++this.infoRequest;
-    this.infoPanel.setState({ icon: type === "connection" ? connIconOf(cfg) : "info_pane_database",
+    const current = { key, request, pending: true };
+    this.objectDetailsRequest = current;
+    // 同一对象的刷新保留已显示的内容；仅真正切换对象时显示加载态。
+    if (!sameObject) this.infoPanel.setState({ icon: type === "connection" ? connIconOf(cfg) : `info_pane_${type}`,
       title: object || schema || cfg.name, subtitle: "读取详细信息", fields: [] });
     void loadObjectDetails(cfg, schema, object, type, options).then((state) => {
       if (request === this.infoRequest) this.infoPanel.setState(state);
     }).catch((e) => {
       if (request === this.infoRequest) this.infoPanel.setState({ icon: "info_pane_database", title: object || schema || cfg.name,
         fields: [{ label: "读取失败", value: String(e) }] });
-    });
+    }).finally(() => { current.pending = false; });
   }
 
   /** 右侧信息面板内容。 */
   private updateInfoPanel(): void {
     const tab = this.activeTab;
+    if (!tab || !["objects", "backup", "users"].includes(tab.kind) || tab.datasourceStale) {
+      this.infoRequest++;
+      this.objectDetailsRequest = null;
+    }
     if (tab?.datasourceStale) {
       this.infoPanel.setState({ icon: "info_pane_database", title: "数据源已变化", subtitle: tab.datasourceStale, fields: [] });
       return;
@@ -2017,14 +2288,16 @@ export class App {
       return;
     }
     if (tab.kind === "query") {
-      // 参考截图 5：查询页右侧为代码段面板
+      // 查询页右侧为代码段面板：与「代码段」对话框共用同一数据源（内置 + 自定义），
+      // 支持在面板内新增 / 删除自定义代码段。
       const view = this.activeView();
-      this.infoPanel.setSnippets(QUERY_SNIPPETS, (item) => {
+      const refresh = () => this.updateInfoPanel();
+      this.infoPanel.setSnippets(querySnippets(), (item) => {
         if (view instanceof QueryTabView) {
           view.editor.insertText(item.sql ?? "");
           view.editor.focus();
         }
-      });
+      }, { onAdd: () => this.cmdCodeSnippet(refresh), onDelete: (name) => { removeSnippet(name); refresh(); } });
       return;
     }
     if (tab.kind === "structure" && tab.schemaInfo) {
@@ -2126,6 +2399,7 @@ export class App {
         }
       }
       this.infoPanel.setTableState({
+        identity: JSON.stringify([tab.connectionId, tab.schema, tab.object]),
         title: tab.object,
         refs: this.connectionRef(tab.connectionId),
         info,
@@ -2177,11 +2451,14 @@ export class App {
   ): Promise<void> {
     const cfg = this.connections.find((c) => c.id === connId);
     if (!cfg) return;
+    // SQLite 平铺树节点（无 /db/ 段）schema 为空：归一为 main，使手动事务绑定、
+    // 受控执行命名空间与网格操作使用一致的命名空间（MySQL/PG 空 schema 仍要求显式选择）。
+    const effectiveSchema = schema || (cfg.kind === "sqlite" ? "main" : "");
     const existing = this.tabs.find(
       (t) =>
         t.kind === "table" &&
         t.connectionId === connId &&
-        t.schema === schema &&
+        t.schema === effectiveSchema &&
         t.object === table,
     );
     if (existing) {
@@ -2195,7 +2472,7 @@ export class App {
       title: table,
       connectionId: connId,
       connectionName: cfg.name,
-      schema,
+      schema: effectiveSchema,
       object: table,
       objectType: type,
       sql: "",
@@ -2273,9 +2550,8 @@ export class App {
           name,
           type === "procedure" ? "procedure" : "function",
         );
-        tab.sql = def;
         const view = this.views.get(tab.id);
-        if (view instanceof QueryTabView) view.editor.setSql(def);
+        if (view instanceof QueryTabView && !view.editor.getSql()) { view.editor.setSql(def); view.markClean(def); }
         this.renderTabs();
       } catch (e) {
         this.toast("error", `读取定义失败：${String(e)}`);
@@ -2284,19 +2560,21 @@ export class App {
   }
 
   /** 打开一个查询标签页（schema 为选中的数据库，下拉框会定位到它）。 */
-  async openQueryTab(connId?: string, sql = "", schema = ""): Promise<TabState> {
+  async openQueryTab(connId?: string, sql = "", schema = "", connect = true, favorite?: Favorite): Promise<TabState> {
     let cfg: ConnectionConfig | undefined;
     if (connId) cfg = this.connections.find((c) => c.id === connId);
-    if (cfg) await this.ensureConnection(cfg.id);
+    if (cfg && connect) await this.ensureConnection(cfg.id);
     const tab: TabState = {
       id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       kind: "query",
-      title: cfg ? `查询 - ${cfg.name}` : "查询 1",
-      connectionId: cfg?.id ?? "",
-      connectionName: cfg?.name ?? "",
+      title: favorite?.name ?? (cfg ? `查询 - ${cfg.name}` : "查询 1"),
+      connectionId: cfg?.id ?? favorite?.connection_id ?? "",
+      connectionName: cfg?.name ?? favorite?.connection_id ?? "",
       schema,
-      object: "",
+      object: favorite?.name ?? "",
       objectType: "query",
+      savedQueryId: favorite?.id,
+      datasourceStale: favorite?.connection_id && !cfg ? "保存查询的原连接已不存在，SQL 已保留；请明确选择新连接" : undefined,
       sql,
       results: null,
       activeResult: 0,
@@ -2365,11 +2643,9 @@ export class App {
     this.renderTabs();
   }
 
-  /** 打开备份 / 自动运行 / 模型 / 图表的空列表页（与参考程序空态一致）。 */
-  openEmptyListTab(kind: "backup" | "schedule" | "model" | "chart"): void {
-    const title = kind === "backup" ? "备份"
-      : kind === "schedule" ? "自动运行"
-      : kind === "model" ? "模型" : "图表";
+  /** 打开备份 / 自动任务的空列表页（与参考程序空态一致）。 */
+  openEmptyListTab(kind: "backup" | "schedule"): void {
+    const title = kind === "backup" ? "备份" : "自动任务";
     const existing = this.tabs.find((t) => t.kind === kind);
     if (existing) {
       this.activeTabId = existing.id;
@@ -2434,6 +2710,18 @@ export class App {
 
   /** 弹出右键菜单。 */
   showContextMenu(entries: MenuEntry[], x: number, y: number): void {
+    entries = entries.map(entry => {
+      const reason = entry.id?.startsWith("object-") ? this.commandUnavailableReason(entry.id) : null;
+      return reason ? { ...entry, disabled: true } : entry;
+    });
+    if (entries.some(entry => entry.id === "grid-copy")) {
+      const grid = (this.activeView() as (TabView & { grid?: DataGrid }) | undefined)?.grid;
+      if (grid && this.activeTabId) {
+        this.copyContext = { tabId: this.activeTabId, grid };
+        this.copyOwner = { tabId: this.activeTabId, kind: "grid", grid };
+      }
+      entries = [...entries.slice(0, 3), { id: "grid-copy-headers", label: "复制含列名" }, { id: "grid-copy-safe", label: "安全粘贴到表格（转义公式）" }, ...entries.slice(3)];
+    }
     this.menu.showContext(entries, x, y);
   }
 
@@ -2446,44 +2734,19 @@ export class App {
   async refreshActive(): Promise<void> {
     const tab = this.activeTab;
     if (!tab) return;
-    if (tab.kind === "table" || tab.kind === "structure") this.tableMetaCache.delete(`${tab.connectionId}/${tab.schema}/${tab.object}`);
     const view = this.views.get(tab.id);
-    await view?.reload();
+    await this.guardLeave([tab.id], "重新载入", async () => {
+      if (tab.kind === "table" || tab.kind === "structure") this.tableMetaCache.delete(`${tab.connectionId}/${tab.schema}/${tab.object}`);
+      if (view instanceof DataTabView || view instanceof StructureTabView) await view.reloadAfterLeave();
+      else await view?.reload();
+    });
     this.updateInfoPanel();
     this.renderStatus();
   }
 
   // ------------------------------------------------------------ 状态栏
 
-  /** 标题栏右侧文档标题（对齐设计稿：对象页「库 — 连接」，备份/用户等「连接 — 类型」，查询页显示页签标题）。 */
-  private renderTitleDoc(): void {
-    const tab = this.activeTab;
-    const cfg = tab ? this.connections.find((c) => c.id === tab.connectionId) : undefined;
-    let doc = "未连接";
-    if (tab) {
-      if (tab.kind === "objects" && tab.schema) {
-        doc = cfg ? `${tab.schema} — ${cfg.name}` : tab.schema;
-      } else if (
-        tab.kind === "backup" ||
-        tab.kind === "schedule" ||
-        tab.kind === "model" ||
-        tab.kind === "chart" ||
-        tab.kind === "users"
-      ) {
-        doc = cfg ? `${tab.schema || cfg.name} — ${tab.title.replace(/ — .*/, "")}` : tab.title;
-      } else if (tab.kind === "query" || tab.kind === "result") {
-        doc = tab.title;
-      } else if (cfg) {
-        doc = `${tab.title.replace(/ @.*$/, "") || tab.title} — ${cfg.name}`;
-      } else {
-        doc = tab.title;
-      }
-    }
-    this.titleDoc.textContent = doc;
-  }
-
   renderStatus(): void {
-    this.renderTitleDoc();
     this.statusBar.innerHTML = "";
     const tab = this.activeTab;
     const view = tab ? this.views.get(tab.id) : undefined;
@@ -2515,18 +2778,12 @@ export class App {
     if (tab) {
       if (tab.kind === "objects" && view instanceof ObjectsTabView) {
         // 参考图 1：`N 表` + 连接图标 + 连接名 + 库图标 + 库名
-        mkCell(`${view.filteredCount()} 表`);
+        mkCell(`${view.filteredCount()} 个${objectLabel(tab.objectType)}`);
         mkCell(cfg?.name ?? "", connIconOf(cfg));
         mkCell(tab.schema, "info_pane_database");
       } else if (view instanceof DataTabView) {
-        // 参考图 6：左 = SELECT 语句（选中列时显示"已选择 1 列"）；
-        // 右 = 第 N 条记录（共 M 条）于第 K 页
+        // 只显示分页位置；状态栏左侧不再重复 SQL 提示。
         const info = view.statusInfo();
-        if (view.grid.selectedColumn >= 0) {
-          mkCell("已选择 1 列");
-        } else {
-          mkCell(info.sql);
-        }
         mkSpacer();
         mkCell(info.pageText);
       } else if (tab.kind === "backup" && view instanceof BackupTabView) {
@@ -2540,12 +2797,8 @@ export class App {
       } else if (tab.kind === "structure") {
         mkCell(`字段数: ${tab.schemaInfo?.columns.length ?? 0}`);
       } else if (view instanceof QueryTabView) {
-        // 参考截图 5：状态栏左侧显示 SQL（等宽字体），右侧显示运行时间与记录数
-        const info = view.statusInfo();
-        mkCell(info.sql);
+        // 查询统计归属结果页底部左侧；应用状态栏不再重复。
         mkSpacer();
-        if (info.elapsed) mkCell(info.elapsed);
-        mkCell(info.pageText);
       } else {
         mkCell(tab.title, cfg ? connIconOf(cfg) : undefined);
       }
@@ -2555,7 +2808,7 @@ export class App {
 
     mkSpacer();
 
-    // 右：视图切换 3 个 + 面板开关 2 个
+    // 右：面板开关 2 个
     const toggles = document.createElement("div");
     toggles.className = "statusbar-toggle";
     const mkToggle = (
@@ -2571,23 +2824,19 @@ export class App {
       b.addEventListener("click", onClick);
       toggles.appendChild(b);
     };
-    // 数据显示模式（明细 / 列表 / 网格）互斥高亮
-    const cycle = () => {
-      this.viewMode = this.viewMode === "grid" ? "detail" : this.viewMode === "detail" ? "list" : "grid";
-      this.renderStatus();
-    };
-    mkToggle(svg(ICON_VIEW_DOTS), "明细视图", this.viewMode === "detail", cycle);
-    mkToggle(svg(ICON_VIEW_LIST), "列表视图", this.viewMode === "list", cycle);
-    mkToggle(svg(ICON_VIEW_GRID), "网格视图", this.viewMode === "grid", cycle);
     mkToggle(svg(ICON_PANEL_LEFT), "显示/隐藏左侧栏", this.sidebarVisible, () => {
       this.sidebarVisible = !this.sidebarVisible;
-      this.sidebar.classList.toggle("hidden", !this.sidebarVisible);
+      // 与菜单 / 专注模式 / 启动恢复共用同一套显隐机制（display），避免 class 与 display 双轨。
+      this.sidebar.classList.remove("hidden");
+      this.sidebar.style.display = this.sidebarVisible ? "" : "none";
+      this.splitter.style.display = this.sidebarVisible ? "" : "none";
       this.renderStatus();
       this.saveViewPrefs();
     });
     mkToggle(svg(ICON_PANEL_RIGHT), "显示/隐藏信息面板", this.infoPanelVisible, () => {
       this.infoPanelVisible = !this.infoPanelVisible;
       this.infoPanel.setVisible(this.infoPanelVisible);
+      this.infoSplitter.style.display = this.infoPanelVisible ? "" : "none";
       this.renderStatus();
       this.saveViewPrefs();
     });
@@ -2618,6 +2867,14 @@ export class App {
     setTimeout(() => el.remove(), 4200);
   }
 
+  /** 标题栏任务图标徽标：显示运行中的后台任务数。 */
+  private refreshTaskBadge(): void {
+    if (!this.taskBadge) return;
+    const n = taskCenter.runningCount();
+    this.taskBadge.textContent = n > 0 ? String(n) : "";
+    this.taskBadge.hidden = n === 0;
+  }
+
   // ------------------------------------------------------------ 最近 / 收藏
 
   private async pushRecent(
@@ -2638,54 +2895,72 @@ export class App {
   // ------------------------------------------------------------ 命令
 
   private commandUnavailableReason(id: string): string | null {
+    if (this.draftPreparing) return "正在处理离页操作，请等待完成";
+    // 独立工具先开窗口，再选择自己的连接；不借用当前（可能已失效）的数据库标签。
+    if (id === "server-monitor" || id === "history-log") return null;
     const tab = this.activeTab;
     const cfg = this.tree ? this.connectionById(this.currentConnectionId()) : undefined;
     const view = tab ? this.views.get(tab.id) : undefined;
     const query = view instanceof QueryTabView;
+    if (query && view.resultBusy() && ["run", "run-selected", "explain", "export"].includes(id)) return "查询执行、缓存读取或导出进行中，请等待完成";
+    if (id.startsWith("object-")) {
+      if (!tab || !(view instanceof ObjectsTabView)) return "请先打开对象列表";
+      const item = objectTools(tab.objectType, view.selectedObject(), this.connectionById(tab.connectionId)).find(i => i.id === id);
+      if (!item) return "当前类别不支持此操作";
+      if (item.disabled) return item.disabledReason ?? "此操作不可用";
+      if (tab.objectType === "query") return null;
+      if (tab.datasourceStale) return tab.datasourceStale;
+      if (["object-new", "object-new-procedure", "object-delete", "object-import"].includes(id)) {
+        if (this.manualTransactionFor(tab.connectionId) || this.manualTransactionIsBusy(tab.connectionId)) return "请先完成此连接的手动事务";
+      }
+      return null;
+    }
     if (tab?.datasourceStale) {
       const localCommands = new Set(["options", "about", "official-doc", "shortcut-help", "driver-manager", "new-connection", "exit", "next-window", "close-window", "close-others", "close-all", "tab-close", "tab-close-others", "tab-close-left", "tab-close-right", "tab-close-all", "toggle-sidebar", "toggle-statusbar", "toggle-toolbar", "toggle-info-panel", "focus-mode", "manage-favorites"]);
       const editorCommands = new Set(["save", "save-as", "undo", "redo", "cut", "copy", "paste", "find", "find-next", "replace", "select-all", "beautify-sql", "code-snippet", "add-favorite"]);
-      if (!localCommands.has(id) && !(query && editorCommands.has(id))) return tab.datasourceStale;
+      const designEditor = tab?.kind === "viewdesign" || tab?.kind === "routinedesign";
+      const localEditor = id === "beautify-sql" ? query || designEditor : query;
+      if (!localCommands.has(id) && !(localEditor && editorCommands.has(id))) return tab.datasourceStale;
     }
     const data = view instanceof DataTabView;
     const selectedCommands = ["data-sync", "data-generation", "import", "tree-import", "transfer", "data-transfer", "new-table", "tree-new-table", "delete-table", "truncate-table", "restore-backup", "connection-properties", "remove-connection", "open-connection"];
     const writeConnection = selectedCommands.includes(id) ? cfg?.id || tab?.connectionId || "" : tab?.connectionId || cfg?.id || "";
-    if (MANUAL_TRANSACTION_WRITE_COMMANDS.has(id) || (id === "save" && !query)) {
-      if (this.manualTransactionFor(writeConnection)) return "此连接有手动事务，请先在所属查询页提交或回滚，再使用自动提交写入工具";
-      if (this.manualTransactionIsBusy(writeConnection)) return "此连接的事务操作正在进行";
-    }
-    const transaction = this.manualTransactionFor(tab?.connectionId || "");
-    if (query && ["run", "run-selected", "explain"].includes(id)) {
-      if (this.manualTransactionIsBusy(tab?.connectionId || "")) return "事务操作正在进行，请等待完成";
-      if (transaction && (transaction.owner !== tab?.id || transaction.schema !== tab?.schema)) return "此连接事务由另一个查询页或模式持有，请返回所属查询页执行";
-      if (transaction?.failed) return "事务执行失败，必须回滚后才能继续执行";
-      if (transaction && id === "explain") return "手动事务仅支持 SELECT/WITH 和 DML；解释计划请先提交或回滚";
-    }
+      if (MANUAL_TRANSACTION_WRITE_COMMANDS.has(id) || (id === "save" && !query)) {
+        if (this.manualTransactionFor(writeConnection)) return "此连接有手动事务，请先在所属页面提交或回滚，再使用自动提交写入工具";
+        if (this.manualTransactionIsBusy(writeConnection)) return "此连接的事务操作正在进行";
+      }
+      const transaction = this.manualTransactionFor(tab?.connectionId || "");
+      if (query && ["run", "run-selected", "explain"].includes(id)) {
+        if (this.manualTransactionIsBusy(tab?.connectionId || "")) return "事务操作正在进行，请等待完成";
+        if (transaction?.failed) return "事务执行失败，必须回滚后才能继续执行";
+        if (transaction) {
+          const ownedByThisPage = transaction.owner === tab?.id && transaction.schema === tab?.schema;
+          if (!ownedByThisPage) return "此连接的事务由其它页面持有，请在该页面提交或回滚后再执行";
+          // EXPLAIN 不属于手动事务允许的查询/DML 语句，事务期间禁用解释。
+          if (id === "explain") return "手动事务期间不能解释 SQL，请先提交或回滚事务";
+        }
+      }
     switch (id) {
       case "begin-transaction": {
-        if (!(query || data) || !tab) return "请在查询或表数据页面开始事务";
+        if (!query || !tab) return "请在查询页面开始事务";
         const reason = manualTransactionUnavailableReason(this.connectionById(tab.connectionId));
         if (reason) return reason;
         if (this.manualTransactionIsBusy(tab.connectionId)) return "事务操作正在进行";
-        if (transaction) return "此连接已有手动事务，请先在所属查询页提交或回滚";
+        if (transaction) return "此连接已有手动事务，请先在所属页面提交或回滚";
         if (view instanceof QueryTabView && view.isExecuting()) return "SQL正在执行，请等待完成";
-        if (view instanceof DataTabView && view.hasPendingChanges()) return "请先保存或取消表格中待提交的改动";
         return null;
       }
       case "commit-transaction":
       case "rollback-transaction": {
-        if (!query || !tab) return "请返回事务所属查询页面";
-        if (this.manualTransactionIsBusy(tab.connectionId) || (view instanceof QueryTabView && view.isExecuting())) return "SQL或事务操作正在进行";
+        if (!(query || data) || !tab) return "请返回事务所属页面";
+        if (this.manualTransactionIsBusy(tab.connectionId) || (view instanceof DataTabView && view.committing) || (view instanceof QueryTabView && view.isExecuting())) return "SQL或事务操作正在进行";
         if (!transaction) return "此连接没有手动事务";
-        if (transaction.owner !== tab.id || transaction.schema !== tab.schema) return "此事务由另一个查询页或模式持有";
+        if (transaction.owner !== tab.id || transaction.schema !== tab.schema) return "此事务由另一个页面或模式持有";
         return id === "commit-transaction" && transaction.failed ? "事务执行失败，必须回滚，不能提交" : null;
       }
-      case "chart":
-        return chartSourceError(this.currentChartSource());
       // data-sync / data-generation 是全局工具：不因当前选中的库不支持而禁用
       // 按钮（runCommand 里回落到受支持连接；对话框内的数据源下拉会过滤掉
       // 不支持的连接），否则用户换一个要同步的库都进不去工具。
-      case "server-monitor":
       case "open-user":
       case "open-connection":
       case "close-connection":
@@ -2695,6 +2970,7 @@ export class App {
       case "save":
         if (query) return null;
         if (!(data || view instanceof StructureTabView || tab?.kind === "viewdesign" || tab?.kind === "routinedesign")) return "当前页面没有可保存的内容";
+        if (tab && (tab.kind === "viewdesign" || tab.kind === "routinedesign")) return objectCapability(this.connectionById(tab.connectionId), tab.objectType, tab.designCreating ? "create" : "update");
         return this.connectionById(tab?.connectionId ?? "")?.read_only ? "此连接只读，不能保存数据库改动" : null;
       case "save-as":
         return query || data ? null : "另存为适用于查询或表数据页";
@@ -2712,10 +2988,15 @@ export class App {
       case "run":
       case "run-selected":
       case "explain":
-      case "beautify-sql":
       case "code-snippet":
       case "add-favorite":
         return query ? null : "此命令仅适用于查询编辑器";
+      case "beautify-sql":
+        // 不在例程执行 / 重读期间改写草稿；其它页面的美化只做本地排版。
+        if (view instanceof RoutineTabView && view.draftBusy()) return "例程正在执行或重新载入，请稍后再美化 SQL";
+        return query || tab?.kind === "viewdesign" || tab?.kind === "routinedesign"
+          ? null
+          : "此命令仅适用于查询编辑器或视图 / 例程设计器";
       case "delete-row":
       case "grid-delete":
       case "grid-insert":
@@ -2724,9 +3005,23 @@ export class App {
         return this.connectionById(tab.connectionId)?.read_only ? "此连接只读，不能修改记录" : null;
       case "grid-rollback":
         return data ? null : "当前页面没有数据表待提交改动";
+      case "grid-copy":
+      case "grid-copy-row":
+      case "grid-copy-cell":
+      case "grid-copy-headers":
+      case "grid-copy-safe": {
+        const grid = (view as (TabView & { grid?: DataGrid }) | undefined)?.grid;
+        if (!grid) return "当前页面没有结果网格";
+        try {
+          const context = this.copyContext;
+          if (context && context.tabId !== tab?.id) return "菜单所属页面已变化，请重新选择";
+          const snapshot = grid.freezeCopy(!!context);
+          return id === "grid-copy-cell" ? snapshot.cell === undefined ? "没有可复制的单元格" : null : snapshot.rows.length && snapshot.columns.length ? null : "请先选择已加载的行";
+        } catch (e) { return String(e); }
+      }
       case "copy":
       case "select-all":
-        return query || data || view instanceof ObjectsTabView ? null : "当前页面没有可复制或选择的内容";
+        return query || data || view instanceof ObjectsTabView || view instanceof SqlDesignTabView ? null : "当前页面没有可复制或选择的内容";
       case "structure":
         return this.currentTableRef() ? null : "请先选择一个数据表";
       case "filter":
@@ -2787,7 +3082,7 @@ export class App {
     }
     if (id.startsWith("fav-open:")) {
       const fav = this.favorites.find((f) => f.id === id.slice(9));
-      if (fav) void this.openQueryTab(fav.connection_id ?? undefined, fav.sql);
+      if (fav) void this.openSavedQuery(fav.id);
       return;
     }
     if (id.startsWith("recent-open:")) {
@@ -2814,6 +3109,7 @@ export class App {
     const unavailable = this.commandUnavailableReason(id);
     if (unavailable) { this.toast("error", unavailable); return; }
     try {
+      if (id.startsWith("object-") && id !== "object-search") { await this.runObjectAction(id); return; }
       switch (id) {
         case "new-connection":
           this.cmdNewConnection();
@@ -2870,6 +3166,8 @@ export class App {
           this.cmdNewConnection("mongodb");
           break;
         case "new-query":
+          await this.cmdNewQuery();
+          break;
         case "open-query":
           // 与树中选中 / 鼠标点选的数据库联动
           await this.focusDbGroup("query");
@@ -2911,18 +3209,6 @@ export class App {
         case "schedule":
           this.openScheduleTab();
           break;
-        case "model": {
-          const mt = this.backupTarget();
-          if (mt) {
-            this.openModelTab(mt.connId, mt.schema);
-          } else {
-            this.toast("error", "请先在左侧树中选择一个数据库");
-          }
-          break;
-        }
-        case "chart":
-          this.cmdCreateChart();
-          break;
         case "data-sync": {
           const cfg = this.connectionById(this.currentConnectionId());
           if (!cfg) { this.toast("error", "请先选择源连接"); break; }
@@ -2939,8 +3225,7 @@ export class App {
           break;
         case "server-monitor": {
           const cfg = this.connectionById(this.currentConnectionId());
-          if (cfg) openServerMonitorDialog(cfg);
-          else this.toast("error", "请先选择一个连接");
+          openServerMonitorDialog(this.connections, cfg, api, id => this.ensureConnection(id));
           break;
         }
         case "data-generation": {
@@ -2953,6 +3238,23 @@ export class App {
             () => { void this.refreshActive(); }, undefined, this.connections);
           break;
         }
+        case "data-dictionary": {
+          const cfg = this.connectionById(this.currentConnectionId());
+          const schema = this.currentDbTarget()?.schema ?? "";
+          openDataDictionaryDialog(this.connections, cfg, schema, (path) => {
+            this.toast("success", `数据字典已导出：${path}`);
+          });
+          break;
+        }
+        case "er-diagram": {
+          const cfg = this.connectionById(this.currentConnectionId());
+          const schema = this.currentDbTarget()?.schema ?? "";
+          openErDiagramDialog(this.connections, cfg, schema);
+          break;
+        }
+        case "check-update":
+          openUpdateDialog();
+          break;
         case "group-new-connection": {
           const node = this.tree.find(this.tree.selectedNodeId ?? "");
           this.newConnectionGroup = node?.id.startsWith("group:") ? node.id.slice(6) : "";
@@ -2995,8 +3297,22 @@ export class App {
         case "grid-sort":
           this.cmdSort();
           break;
+        case "header-sort-asc":
+        case "header-sort-desc":
+        case "header-sort-remove": {
+          const col = this.headerSortColumn;
+          this.headerSortColumn = null;
+          const view = this.activeView();
+          if (col && view instanceof DataTabView) {
+            view.applyHeaderSort(col, id === "header-sort-asc" ? "asc" : id === "header-sort-desc" ? "desc" : "remove");
+          }
+          break;
+        }
         case "columns":
           this.cmdColumns();
+          break;
+        case "object-search":
+          this.cmdObjectSearch();
           break;
         case "open-connection":
           await this.cmdOpenConnection();
@@ -3026,7 +3342,7 @@ export class App {
         case "dump-sql":
         case "sql-dump":
         case "tree-dump":
-          this.cmdDump();
+          this.cmdDump(id === "tree-dump");
           break;
         case "transfer":
         case "data-transfer":
@@ -3063,7 +3379,9 @@ export class App {
         case "grid-copy":
         case "grid-copy-row":
         case "grid-copy-cell":
-          await this.cmdCopy();
+        case "grid-copy-headers":
+        case "grid-copy-safe":
+          await this.cmdCopy(id === "grid-copy-row" ? "rows" : id === "grid-copy-cell" ? "cell" : id === "grid-copy-headers" ? "rows_with_headers" : id === "grid-copy-safe" ? "spreadsheet_safe" : "default", id !== "copy");
           break;
         case "paste":
           await this.cmdPaste();
@@ -3148,12 +3466,16 @@ export class App {
           break;
         case "begin-transaction":
           await this.manualTransactionController.begin();
+          // 查询页事务开始后刷新工具栏（出现提交 / 回滚按钮）。
+          this.notifyToolbar();
           break;
         case "commit-transaction":
           await this.manualTransactionController.finish(true);
+          await this.refreshDataTabs(this.activeTab?.connectionId ?? "");
           break;
         case "rollback-transaction":
           await this.manualTransactionController.finish(false);
+          await this.refreshDataTabs(this.activeTab?.connectionId ?? "");
           break;
         case "query-builder":
           this.cmdQueryBuilder();
@@ -3171,21 +3493,21 @@ export class App {
           this.cmdCycleTab(1);
           break;
         case "close-window":
-          if (this.activeTabId) this.closeTab(this.activeTabId);
+          if (this.activeTabId) await this.closeTab(this.activeTabId);
           break;
         case "close-others":
         case "tab-close-others":
-          this.cmdCloseOthers();
+          await this.cmdCloseOthers();
           break;
         case "tab-close-left":
-          this.cmdCloseSide("left");
+          await this.cmdCloseSide("left");
           break;
         case "tab-close-right":
-          this.cmdCloseSide("right");
+          await this.cmdCloseSide("right");
           break;
         case "close-all":
         case "tab-close-all":
-          this.cmdCloseAll();
+          await this.cmdCloseAll();
           break;
         case "official-doc":
           this.cmdOfficialDoc();
@@ -3229,31 +3551,32 @@ export class App {
         case "db-open": {
           const db = this.currentDbName();
           const connId = this.currentConnectionId();
+          const namespace = namespaceName(this.connectionById(connId));
           if (!connId || !db) {
-            this.toast("error", "请先在左侧树中选择一个数据库");
+            this.toast("error", `请先在左侧树中选择一个${namespace}`);
             break;
           }
           const dbNode = this.tree.find(`conn:${connId}/db/${db}`);
           if (dbNode) {
-            await this.openDatabaseNode(dbNode, connId, db);
+            if (!await this.openDatabaseNode(dbNode, connId, db)) break;
           } else {
             this.openDbs.add(`${connId}/${db}`);
             this.openConnections.add(connId);
             this.syncConnIcons();
             this.openObjectsTab(connId, db);
           }
-          this.toast("success", `数据库「${db}」已打开`);
+          this.toast("success", `${namespace}「${db}」已打开`);
           break;
         }
         case "db-close": {
           const db = this.currentDbName();
           const connId = this.currentConnectionId();
+          const namespace = namespaceName(this.connectionById(connId));
           if (!connId || !db) {
-            this.toast("error", "请先在左侧树中选择一个数据库");
+            this.toast("error", `请先在左侧树中选择一个${namespace}`);
             break;
           }
-          this.closeDatabaseNode(connId, db);
-          this.toast("info", `数据库「${db}」已关闭`);
+          if (await this.closeDatabaseNode(connId, db)) this.toast("info", `${namespace}「${db}」已关闭`);
           break;
         }
         case "db-new":
@@ -3265,15 +3588,6 @@ export class App {
         case "tree-edit-db":
           this.cmdEditConnection();
           break;
-        case "tree-model": {
-          const mt2 = this.backupTarget();
-          if (mt2) {
-            this.openModelTab(mt2.connId, mt2.schema);
-          } else {
-            this.toast("error", "请先在左侧树中选择一个数据库");
-          }
-          break;
-        }
         case "tree-new-query":
           await this.cmdNewQuery();
           break;
@@ -3294,6 +3608,12 @@ export class App {
         case "truncate-table":
           this.cmdTruncateTable();
           break;
+        case "copy-table-structure":
+          this.cmdCopyTable("copy_structure");
+          break;
+        case "copy-table-data":
+          this.cmdCopyTable("copy_data");
+          break;
         case "grid-insert":
           await this.cmdInsertRow();
           break;
@@ -3304,7 +3624,7 @@ export class App {
           this.cmdRollback();
           break;
         case "tab-close":
-          if (this.activeTabId) this.closeTab(this.activeTabId);
+          if (this.activeTabId) await this.closeTab(this.activeTabId);
           break;
         case "tab-duplicate":
           await this.cmdDuplicateTab();
@@ -3318,6 +3638,30 @@ export class App {
         case "delete-field":
           this.cmdDeleteField();
           break;
+        case "add-index":
+          this.cmdAddIndex();
+          break;
+        case "delete-index":
+          this.cmdDeleteIndex();
+          break;
+        case "add-foreign-key":
+          this.cmdAddForeignKey();
+          break;
+        case "delete-foreign-key":
+          this.cmdDeleteForeignKey();
+          break;
+        case "add-check":
+          this.cmdAddCheck();
+          break;
+        case "delete-check":
+          this.cmdDeleteCheck();
+          break;
+        case "add-trigger":
+          this.cmdAddTrigger();
+          break;
+        case "delete-trigger":
+          this.cmdDeleteTrigger();
+          break;
         case "primary-key":
           this.cmdTogglePrimaryKey();
           break;
@@ -3328,18 +3672,25 @@ export class App {
           else this.toast("error", "请先打开表结构并选择字段");
           break;
         }
+        case "text": {
+          this.toggleTextPreview();
+          break;
+        }
         case "text-format-plain":
         case "text-format-hex":
         case "text-format-image":
-        case "text-format-web":
-          this.textFormat = ({
+        case "text-format-web": {
+          const next = ({
             "text-format-plain": "text",
             "text-format-hex": "hex",
             "text-format-image": "image",
             "text-format-web": "web",
           } as const)[id];
-          this.refreshCellPreviews();
+          // 再点一次当前格式（含钉住的文本预览）= 关闭预览面板，回到默认不占高度。
+          if (this.textPreviewActive() && next === this.textFormat) this.closeTextPreview();
+          else this.setTextFormat(next);
           break;
+        }
         // 备份命令
         case "new-backup":
         case "tree-new-backup":
@@ -3351,26 +3702,28 @@ export class App {
         case "delete-backup":
           await this.cmdDeleteBackup();
           break;
+        case "rename-backup":
+          this.cmdRenameBackup();
+          break;
+        case "batch-execution-history":
+          openBatchExecutionDialog();
+          break;
+        case "tree-run-sql-file":
+          await this.cmdRunSqlFile();
+          break;
         // 视图 / 函数设计器：保存 = 重建对象
         case "tree-design-view":
           await this.cmdTreeDesignView();
           break;
+        case "tree-call-routine": {
+          const descriptor = this.tree.find(this.tree.selectedNodeId ?? "")?.objectDescriptor;
+          if (descriptor) await this.openCatalogObject(descriptor, true);
+          break;
+        }
         case "tree-design-routine":
           await this.cmdTreeDesignRoutine();
           break;
-        case "model-fit":
-        case "model-zoom-in":
-        case "model-zoom-out": {
-          const tab = this.activeTab;
-          const view = tab ? this.views.get(tab.id) : undefined;
-          if (view instanceof ModelTabView) {
-            if (id === "model-fit") view.fit();
-            else if (id === "model-zoom-in") view.zoomIn();
-            else view.zoomOut();
-          }
-          break;
-        }
-        // 自动运行
+        // 自动任务
         case "new-job":
           this.cmdNewJob();
           break;
@@ -3388,10 +3741,13 @@ export class App {
           break;
         // 用户管理
         case "edit-user":
-          this.cmdEditUserPassword();
+          this.cmdEditUser();
           break;
         case "new-user":
           this.cmdNewUserReal();
+          break;
+        case "change-password":
+          this.cmdEditUserPassword();
           break;
         case "delete-user":
           await this.cmdDropUser();
@@ -3407,9 +3763,8 @@ export class App {
     } catch (e) {
       this.toast("error", String(e));
     }
-    // 工具栏的启用态可能随命令变化
-    const tab = this.activeTab;
-    if (tab) this.tabToolbar.setItems(this.guardedTabToolbarItems(tab));
+    // 统一刷新按钮并保留稳定的对象搜索插槽。
+    this.notifyToolbar();
     this.renderStatus();
     // 「查看」等菜单的勾选态随命令实时刷新
     this.menu.renderBar(this.menuHost, this.contextMenus(), this.viewMenu());
@@ -3428,19 +3783,13 @@ export class App {
     }
     const group = this.newConnectionGroup;
     this.newConnectionGroup = "";
-    openConnectionDialog(null, this.groups, ({ config, password }) => {
+    openConnectionDialog(null, this.groups, async ({ config, password, runtimeProfile }) => {
       config.group = group;
-      void (async () => {
-        try {
-          this.connections = await api.saveConnection(config, password);
-          this.groups = await api.listGroups();
-          this.refreshTree();
-          this.toast("success", `连接「${config.name}」已创建`);
-        } catch (e) {
-          this.toast("error", String(e));
-        }
-      })();
-    }, kind, driver);
+      this.connections = await api.saveConnection(config, password, runtimeProfile);
+      this.groups = await api.listGroups();
+      this.refreshTree();
+      this.toast("success", `连接「${config.name}」已创建`);
+    }, kind, driver, this.runtimeProfiles);
   }
 
   private cmdEditConnection(): void {
@@ -3449,18 +3798,21 @@ export class App {
       this.toast("error", "请先在左侧树中选择一个连接");
       return;
     }
-    openConnectionDialog(cfg, this.groups, ({ config, password }) => {
-      void (async () => {
-        try {
-          this.connections = await api.saveConnection(config, password);
-          this.groups = await api.listGroups();
-          this.refreshTree();
-          this.toast("success", "连接属性已保存");
-        } catch (e) {
-          this.toast("error", String(e));
+    openConnectionDialog(cfg, this.groups, async ({ config, password, runtimeProfile }) => {
+      const changed = invalidatedDatasourceIds([cfg], [config]).has(cfg.id) || !!password || !!runtimeProfile;
+      const save = async () => {
+        this.connections = await api.saveConnection(config, password, runtimeProfile);
+        if (changed) {
+          this.stopKeepAlive(cfg.id); this.openConnections.delete(cfg.id);
+          this.suspendDatasourceTabs(new Set([cfg.id]), "连接端点或安全配置已修改，旧页暂停。请重新验证对象后再打开；SQL 稿可保存本机。");
         }
-      })();
-    });
+        this.groups = await api.listGroups(); this.refreshTree(); this.toast("success", "连接属性已保存");
+      };
+      if (changed) {
+        const ids = this.tabs.filter(tab => tab.connectionId === cfg.id).map(tab => tab.id);
+        if (!await this.guardLeave(ids, "修改连接配置", save)) throw new Error("连接修改已取消，原配置和编辑保留");
+      } else await save();
+    }, cfg.kind, undefined, this.runtimeProfiles);
   }
 
   /** 复制连接：在原配置基础上打开「新建连接」对话框。 */
@@ -3471,18 +3823,12 @@ export class App {
       return;
     }
     const copy: ConnectionConfig = { ...cfg, id: "", name: `${cfg.name} - 副本` };
-    openConnectionDialog(copy, this.groups, ({ config, password }) => {
-      void (async () => {
-        try {
-          this.connections = await api.saveConnection(config, password);
-          this.groups = await api.listGroups();
-          this.refreshTree();
-          this.toast("success", `连接「${config.name}」已创建`);
-        } catch (e) {
-          this.toast("error", String(e));
-        }
-      })();
-    });
+    openConnectionDialog(copy, this.groups, async ({ config, password, runtimeProfile }) => {
+      this.connections = await api.saveConnection(config, password, runtimeProfile);
+      this.groups = await api.listGroups();
+      this.refreshTree();
+      this.toast("success", `连接「${config.name}」已创建`);
+    }, cfg.kind, undefined, this.runtimeProfiles);
   }
 
   private cmdRemoveConnection(): void {
@@ -3502,13 +3848,16 @@ export class App {
         {
           label: "确定",
           primary: true,
-          onClick: () => {
-            void (async () => {
+          onClick: async () => {
+            const ids = this.tabs.filter(tab => tab.connectionId === cfg.id).map(tab => tab.id);
+            return await this.guardLeave(ids, "移除连接", async () => {
               this.connections = await api.deleteConnection(cfg.id);
               this.openConnections.delete(cfg.id);
+              this.stopKeepAlive(cfg.id);
+              this.suspendDatasourceTabs(new Set([cfg.id]), "连接已移除，页面已暂停；不能自动绑定同名连接。");
               this.refreshTree();
               this.toast("success", `连接「${cfg.name}」已移除`);
-            })();
+            });
           },
         },
         { label: "取消" },
@@ -3526,6 +3875,7 @@ export class App {
       const r = await api.openConnection(connId);
       if (r.ok) {
         this.openConnections.add(connId);
+        this.startKeepAlive(connId);
         this.syncConnIcons();
         this.toast("success", "连接已打开");
       } else {
@@ -3539,8 +3889,13 @@ export class App {
   private async cmdCloseConnection(): Promise<void> {
     const connId = this.currentConnectionId();
     if (!connId) return;
-    if (!await this.manualTransactionController.closeConnection(connId)) return;
+    const ids = this.tabs.filter(tab => tab.connectionId === connId).map(tab => tab.id);
+    if (!await this.guardLeave(ids, "断开连接", async () => {
+      if (!await this.manualTransactionController.closeConnection(connId)) throw new Error("断连或事务回滚已取消 / 失败");
+      this.suspendDatasourceTabs(new Set([connId]), "连接已断开，旧页暂停。SQL 编辑仍保留；重新选择连接才会重连。");
+    })) return;
     this.openConnections.delete(connId);
+    this.stopKeepAlive(connId);
     for (const key of [...this.openDbs]) {
       if (key.startsWith(`${connId}/`)) this.openDbs.delete(key);
     }
@@ -3613,6 +3968,8 @@ export class App {
   private sortMenuOnce: ((id: string) => void) | null = null;
   /** 一次性列菜单分发器。 */
   private colMenuOnce: ((id: string) => void) | null = null;
+  /** 表头右键排序的当前列（弹出菜单前设置，命令执行后清除）。 */
+  headerSortColumn: string | null = null;
   /** 最近鼠标位置（弹出菜单跟随）。 */
   private lastMouse = { x: 0, y: 0 };
 
@@ -3626,7 +3983,7 @@ export class App {
     this.toast("error", "只有表数据页支持排序");
   }
 
-  /** 列显示选择菜单。 */
+  /** 展开数据网格右侧字段操作栏。 */
   private cmdColumns(): void {
     const tab = this.activeTab;
     const view = this.activeView();
@@ -3634,25 +3991,9 @@ export class App {
       this.toast("error", "只有表数据页支持列设置");
       return;
     }
-    const all = view.allColumns();
-    if (!all.length) return;
-    const hidden = view.hiddenColumns();
-    const items: MenuEntry[] = all.map((c) => ({
-      id: `col-toggle:${c}`,
-      label: c,
-      checked: !hidden.has(c),
-    }));
-    this.menu.showContext(items, this.lastMouse.x || 80, this.lastMouse.y || 120);
-    this.colMenuOnce = (cmd: string) => {
-      if (cmd.startsWith("col-toggle:")) {
-        view.toggleColumn(cmd.slice(11));
-        this.notifyToolbar();
-      } else {
-        void this.runCommand(cmd);
-        return;
-      }
-      this.colMenuOnce = null;
-    };
+    const trigger = this.tabToolbar.el.querySelector<HTMLButtonElement>('[data-command="columns"]')
+      ?? document.elementFromPoint(this.lastMouse.x, this.lastMouse.y)?.closest<HTMLButtonElement>('[data-command="columns"]');
+    view.toggleColumnSidebar(trigger ?? undefined);
   }
 
   /** 在新查询标签页中执行一段 SQL。 */
@@ -3692,6 +4033,7 @@ export class App {
     const node = this.tree.find(this.tree.selectedNodeId ?? "");
     if (!node?.id.startsWith("group:")) return;
     const input = document.createElement("input");
+    input.type = "text";
     input.value = node.label;
     input.setAttribute("aria-label", "分组名称");
     new Dialog({ title: "重命名组", width: 380, render: (body) => body.appendChild(input), buttons: [
@@ -3730,16 +4072,14 @@ export class App {
    */
   private async focusDbGroup(grp: "table" | "view" | "function" | "backup" | "query"): Promise<void> {
     const t = this.currentDbTarget();
-    if (grp === "query") {
-      await this.cmdNewQuery();
-      if (t) this.selectDbTreeNode(t, "query");
-      return;
-    }
     if (!t?.schema) {
       this.toast("error", "请先在左侧树中选择一个数据库");
       return;
     }
     switch (grp) {
+      case "query":
+        this.openObjectsTab(t.connId, t.schema, "query");
+        break;
       case "table":
         this.openObjectsTab(t.connId, t.schema, "table");
         break;
@@ -3851,9 +4191,9 @@ export class App {
     });
   }
 
-  /** 打开日志窗口。 */
+  /** 打开日志窗口（数据源筛选取自已保存连接）。 */
   private cmdShowLog(): void {
-    openHistoryLogDialog();
+    openHistoryLogDialog(api, this.connections);
   }
 
   private async cmdNewQuery(): Promise<void> {
@@ -3881,8 +4221,8 @@ export class App {
     }
   }
 
-  /** 命名保存当前查询：写入收藏夹并同步树中的「查询」分组。 */
-  private cmdSaveQuery(): void {
+  /** 命名保存当前查询：保存为当前数据库下的查询对象。 */
+  private cmdSaveQuery(asNew = false): void {
     const tab = this.activeTab;
     const view = this.activeView();
     if (!(tab && view instanceof QueryTabView)) return;
@@ -3891,52 +4231,26 @@ export class App {
       this.toast("error", "查询内容为空");
       return;
     }
-    // 若该查询此前保存过（对象名 = 收藏名），沿用原名覆盖
-    const existingFav = this.favorites.find((f) => f.name === tab.object);
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.style.width = "220px";
-    nameInput.value = existingFav?.name ?? tab.object ?? "";
-    new Dialog({
-      title: "保存查询",
-      width: 380,
-      render: (body) => {
-        const row = document.createElement("div");
-        row.className = "field";
-        const lab = document.createElement("div");
-        lab.className = "field-label";
-        lab.textContent = "查询名:";
-        row.appendChild(lab);
-        row.appendChild(nameInput);
-        body.appendChild(row);
-        body.style.padding = "18px 14px";
+    if (!this.connectionById(tab.connectionId) || !tab.schema.trim()) {
+      this.toast("error", "保存查询前请选择连接和数据库");
+      return;
+    }
+    const existing = asNew ? undefined : this.favorites.find(f => f.id === tab.savedQueryId);
+    const binding = { connectionId: tab.connectionId, schema: tab.schema };
+    openObjectAction({
+      title: asNew ? "查询另存为" : "保存查询", label: "查询名称", value: existing?.name ?? tab.object,
+      context: `${tab.connectionName} / ${tab.schema}`,
+      confirm: "保存", submit: async name => {
+        if (tab.connectionId !== binding.connectionId || tab.schema !== binding.schema) throw new Error("编辑器上下文已变化，请关闭后重新保存");
+        if (!this.connectionById(binding.connectionId)) throw new Error("连接已不存在，请重新选择连接和数据库");
+        const source = view.editor.getSql();
+        const favorite = queryFavorite(this.favorites, { id: asNew ? undefined : tab.savedQueryId, name, sql: source, ...binding });
+        const items = await api.addFavorite(favorite);
+        tab.savedQueryId = favorite.id;
+        view.markClean(source);
+        this.publishFavorites(items, favorite.id);
+        this.toast("success", `查询「${name}」已保存`);
       },
-      buttons: [
-        {
-          label: "保存",
-          primary: true,
-          onClick: () => {
-            const name = nameInput.value.trim();
-            if (!name) return false;
-            void (async () => {
-              const fav: Favorite = {
-                id: existingFav?.id ?? `f_${Date.now().toString(36)}`,
-                name,
-                sql,
-                connection_id: tab.connectionId || null,
-                timestamp: Date.now(),
-              };
-              this.favorites = await api.addFavorite(fav);
-              tab.object = name;
-              tab.title = name;
-              this.refreshQueryGroups();
-              this.renderTabs();
-              this.toast("success", `查询「${name}」已保存`);
-            })();
-          },
-        },
-        { label: "取消" },
-      ],
     });
   }
 
@@ -3954,28 +4268,27 @@ export class App {
     }
   }
 
-  private async cmdCopy(): Promise<void> {
+  private async cmdCopy(mode: CopyMode = "default", explicitGrid = false): Promise<void> {
     const tab = this.activeTab;
     if (!tab) return;
     const view = this.views.get(tab.id);
-    if (view instanceof DataTabView || view instanceof ObjectsTabView) {
-      const rows = [...tab.selectedRows];
-      if (!rows.length) {
-        this.toast("info", "请先选择要复制的行");
-        return;
-      }
-      const text = (view as DataTabView | ObjectsTabView).grid.getText(rows, true);
-      await this.writeClipboard(text);
+    const context = this.copyContext;
+    if (view instanceof QueryTabView) {
+      const controlled = view.controlledCopyText(mode, explicitGrid);
+      if (controlled !== null) { await this.writeClipboard(controlled, "已复制当前可见的类型化结果；隐藏列未包含"); return; }
+    }
+    if (explicitGrid && context && context.tabId !== tab.id) throw new Error("复制菜单所属页面已变化，请重新选择");
+    const owner = this.copyOwner;
+    if (explicitGrid || (owner?.tabId === tab.id && owner.kind === "grid") || (!(view instanceof QueryTabView || view instanceof SqlDesignTabView) && (view as TabView & { grid?: DataGrid })?.grid)) {
+      const grid = explicitGrid && context ? context.grid : owner?.tabId === tab.id ? owner.grid : (view as TabView & { grid?: DataGrid })?.grid;
+      if (!grid) { this.toast("info", "没有可复制的网格"); return; }
+      const snapshot = grid.freezeCopy(explicitGrid && !!context);
+      await this.writeClipboard(encodeGridCopy(snapshot, mode), mode === "cell" ? "已复制单元格" : `已复制 ${snapshot.rows.length} 行 / ${snapshot.columns.length} 列（仅已加载范围）`);
       return;
     }
-    if (view instanceof QueryTabView) {
-      const text = view.editor.getSelection();
-      if (!text.trim()) {
-        this.toast("info", "编辑器没有选中的内容");
-        return;
-      }
-      await this.writeClipboard(text);
-    }
+    const editor = view instanceof QueryTabView ? view.editor : view instanceof SqlDesignTabView ? view.copyEditor() : undefined;
+    if (!editor?.hasSelection()) { this.toast("info", "编辑器没有选中文本，请选择内容后复制"); return; }
+    await this.writeClipboard(editor.getSelection());
   }
 
   private async cmdCut(): Promise<void> {
@@ -4032,12 +4345,12 @@ export class App {
     if (view instanceof QueryTabView) view.editor.findNext();
   }
 
-  private async writeClipboard(text: string): Promise<void> {
+  private async writeClipboard(text: string, success = "已复制到剪贴板"): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
-      this.toast("success", "已复制到剪贴板");
+      this.toast("success", success);
     } catch {
-      this.toast("error", "无法写入剪贴板");
+      showDraftText("剪贴板写入失败", text, "系统剪贴板未写入。请在下方选中文本并用 Ctrl+C 手动复制；不会保存复制历史。TSV 的 NULL 为 \\N，文本 \\N 带引号；单格纯文本不能保证类型可逆。");
     }
   }
 
@@ -4082,42 +4395,81 @@ export class App {
   }
 
   private async cmdAddFavorite(asNew = false): Promise<void> {
-    const tab = this.activeTab;
-    if (!tab || tab.kind !== "query") {
-      this.toast("error", "只有查询标签页可以加入收藏");
+    this.cmdSaveQuery(asNew);
+  }
+
+  savedQueries(connectionId: string, schema: string): Favorite[] {
+    if (this.favoritesError) throw new Error(this.favoritesError);
+    return savedQueriesFor(this.favorites, connectionId, schema);
+  }
+
+  async openSavedQuery(id: string): Promise<void> {
+    const favorite = this.favorites.find(f => f.id === id);
+    if (!favorite) throw new Error("此查询已被删除，请刷新列表");
+    if (!hasSavedQueryScope(favorite)) {
+      const tab = await this.openQueryTab(favorite.connection_id ?? undefined, favorite.sql, "", false);
+      tab.object = favorite.name; tab.title = `${favorite.name}（未保存）`;
+      tab.dirty = favorite.sql.length > 0;
+      const view = this.views.get(tab.id);
+      if (view instanceof QueryTabView) view.detachSavedQuery();
+      this.renderTabs();
+      this.toast("info", "旧版 SQL 已作为未保存查询打开，请选择数据库后保存");
       return;
     }
-    const view = this.views.get(tab.id);
-    if (!(view instanceof QueryTabView)) return;
-    const sql = view.editor.getSql();
-    if (!sql.trim()) {
-      this.toast("error", "查询内容为空");
-      return;
+    const existing = this.tabs.find(t => t.kind === "query" && t.savedQueryId === id);
+    if (existing) { this.activeTabId = existing.id; this.renderTabs(); return; }
+    const tab = await this.openQueryTab(favorite.connection_id ?? undefined, favorite.sql, favorite.schema ?? "", false, favorite);
+    tab.savedQueryId = favorite.id; tab.title = favorite.name; tab.object = favorite.name;
+    this.renderTabs();
+  }
+
+  private publishFavorites(items: Favorite[], changedId?: string): void {
+    this.favoritesError = "";
+    this.favorites = items;
+    for (const tab of this.tabs) {
+      if (!tab.savedQueryId) continue;
+      const favorite = items.find(f => f.id === tab.savedQueryId);
+      if (!favorite || !hasSavedQueryScope(favorite)) {
+        delete tab.savedQueryId;
+        const view = this.views.get(tab.id);
+        if (view instanceof QueryTabView) view.detachSavedQuery();
+      } else if (favorite.id === changedId) { tab.title = favorite.name; tab.object = favorite.name; }
     }
-    const name = asNew
-      ? `查询 ${Date.now().toString(36).slice(-4)}`
-      : `查询 ${this.favorites.length + 1}`;
-    const fav: Favorite = {
-      id: `f_${Date.now().toString(36)}`,
-      name,
-      sql,
-      connection_id: tab.connectionId || null,
-      timestamp: Date.now(),
-    };
-    this.favorites = await api.addFavorite(fav);
     this.refreshQueryGroups();
-    this.toast("success", `「${name}」已添加到收藏夹`);
+    for (const view of this.views.values()) if (view instanceof ObjectsTabView) void view.reload();
+    this.renderTabs();
+  }
+
+  renameSavedQuery(id: string): void {
+    const favorite = this.favorites.find(f => f.id === id);
+    if (!favorite || !hasSavedQueryScope(favorite)) return;
+    openObjectAction({ title: "重命名查询", context: `${favorite.name} · ${favorite.schema}`, label: "查询名称", value: favorite.name, confirm: "重命名", submit: async name => {
+      const current = this.favorites.find(f => f.id === id);
+      if (!current) throw new Error("查询已被删除");
+      const next = { ...current, name, timestamp: Date.now() };
+      if (savedQueryConflict(this.favorites, next)) throw new Error("同一归属中已有同名查询");
+      this.publishFavorites(await api.addFavorite(next), id);
+    } });
+  }
+
+  deleteSavedQuery(id: string, after?: () => void): void {
+    const favorite = this.favorites.find(f => f.id === id);
+    if (!favorite) return;
+    openObjectAction({ title: hasSavedQueryScope(favorite) ? "删除查询" : "删除未保存 SQL", context: `删除本地 SQL「${favorite.name}」（${hasSavedQueryScope(favorite) ? favorite.schema : "未保存 SQL"}）？已打开的 SQL 文本将保留。`, confirm: "删除", submit: async () => {
+      this.publishFavorites(await api.removeFavorite(id)); after?.();
+    } });
   }
 
   /** 打开收藏的查询：弹出收藏清单，点击即打开。 */
   private cmdOpenFavorite(): void {
+    if (this.favoritesError) { this.toast("error", this.favoritesError); return; }
     if (!this.favorites.length) {
       this.toast("info", "收藏夹为空");
       return;
     }
     const items: MenuEntry[] = this.favorites.map((f) => ({
       id: `fav-open:${f.id}`,
-      label: f.name,
+      label: hasSavedQueryScope(f) ? f.name : `${f.name}（未保存 SQL）`,
       icon: "object_star",
     }));
     items.push({ separator: true });
@@ -4126,17 +4478,14 @@ export class App {
   }
 
   private cmdManageFavorites(): void {
-    openFavoritesDialog(
-      this.favorites,
+    const dialog = openFavoritesDialog(
+      this.favorites.map(f => hasSavedQueryScope(f) ? f : { ...f, name: `${f.name}（未保存 SQL）` }),
       (id) => {
-        void (async () => {
-          this.favorites = await api.removeFavorite(id);
-          this.refreshQueryGroups();
-        })();
+        this.deleteSavedQuery(id, () => { dialog.close(); this.cmdManageFavorites(); });
       },
       (id) => {
         const fav = this.favorites.find((f) => f.id === id);
-        if (fav) void this.openQueryTab(fav.connection_id ?? undefined, fav.sql);
+        if (fav) void this.openSavedQuery(fav.id);
       },
     );
   }
@@ -4180,6 +4529,7 @@ export class App {
       running: view instanceof QueryTabView && view.isExecuting(),
       pendingEdits: view instanceof DataTabView && view.hasPendingChanges(),
       prepare: async () => {
+        if (view instanceof DataTabView) { view.prepareForTransaction(); return; }
         if (!(view instanceof QueryTabView)) throw new Error("当前页面不是查询编辑器");
         await view.prepareForTransaction();
       },
@@ -4193,18 +4543,19 @@ export class App {
   async refreshManualTransactionStatus(id: string): Promise<ManualTransactionStatus | undefined> {
     return this.manualTransactionController?.refresh(id);
   }
-  private async closeManualTransactionTab(tab: TabState): Promise<void> {
+  private async closeManualTransactionTab(tab: TabState): Promise<boolean> {
     const context = this.transactionContext(tab.id);
-    if (context) await this.manualTransactionController.closeOwner(context);
+    return context ? this.manualTransactionController.closeOwner(context) : false;
   }
   private manualTransactionTools(tab: TabState): TabToolItem[] {
     const beginReason = this.commandUnavailableReason("begin-transaction");
     const status = this.manualTransactionFor(tab.connectionId);
     const items: TabToolItem[] = [{
-      id: "begin-transaction", label: "开始事务", icon: "dbn_post", disabled: !!beginReason,
+      id: "begin-transaction", label: "开始事务", icon: "dbn_applyupdates", disabled: !!beginReason,
       disabledReason: beginReason ?? undefined,
     }];
-    if (tab.kind === "query" && status?.active) {
+    // 事务由本查询页持有时，就地提供提交 / 回滚（此后执行的 SQL 都在该事务连接上生效）。
+    if (status?.active && status.owner === tab.id && status.schema === tab.schema) {
       const commitReason = this.commandUnavailableReason("commit-transaction");
       const rollbackReason = this.commandUnavailableReason("rollback-transaction");
       items.push(
@@ -4225,102 +4576,166 @@ export class App {
     const reason = queryBuilderUnavailableReason(connection.kind);
     if (reason) { this.toast("error", reason); return; }
     const schema = tab.schema ?? "";
-    if (!schema) { this.toast("error", "请先在查询编辑器选择数据库 / 模式，等待元数据加载完成"); return; }
+    if (!schema) { this.toast("error", `请先在查询编辑器选择${namespaceName(connection)}，等待元数据加载完成`); return; }
     openQueryBuilderDialog(connection, schema, sql => {
       if (this.activeTab?.id !== tab.id || this.views.get(tab.id) !== view || tab.connectionId !== connection.id || tab.schema !== schema) {
-        throw new Error("目标查询页、连接或模式已改变，请关闭并重新打开查询创建工具。");
+        throw new Error(`目标查询页、连接或${namespaceName(connection)}已改变，请关闭并重新打开查询创建工具。`);
       }
       view.editor.replaceSelection(`\n${sql}\n`);
       queueMicrotask(() => view.editor.focus());
     });
   }
 
+  /** 美化当前 SQL：查询页与视图 / 例程设计器共用同一格式化器。 */
   private async cmdBeautifySql(): Promise<void> {
     const tab = this.activeTab;
-    if (!tab || tab.kind !== "query") {
-      this.toast("error", "请先打开查询标签页");
+    const editor = this.activeSqlEditor();
+    if (!tab || !editor) {
+      this.toast("error", "请先打开查询页或视图 / 例程设计器");
       return;
     }
-    const view = this.views.get(tab.id);
-    if (!(view instanceof QueryTabView)) return;
-    const sql = view.editor.getSql();
-    // 分段美化：字符串字面量（含 '' 转义）与反引号标识符原样保留，仅对代码段做大写与子句换行
-    const beautifySegment = (seg: string): string =>
-      seg
-        .replace(/\s+/g, " ")
-        .replace(/\s*,\s*/g, ", ")
-        .replace(
-          /\b(?:select|distinct|insert into|values|update|set|delete from|union all|union|all|and|or|not|in|is null|is not null|like|between|exists|as|asc|desc|from|where|group by|order by|having|limit|left join|right join|inner join|on)\b/gi,
-          (m) => m.toUpperCase(),
-        )
-        .replace(
-          /\b(?:FROM|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|LEFT JOIN|RIGHT JOIN|INNER JOIN)\b/g,
-          "\n$&",
-        )
-        .replace(/\bON\b/g, "\n  ON");
-    const beautified = sql
-      .split(/('(?:[^']|'')*'|"(?:[^"]|"")*"|`[^`]*`)/g)
-      .map((part, i) => (i % 2 === 1 ? part : beautifySegment(part)))
-      .join("")
-      .trim();
-    view.editor.setSql(beautified);
+    const sql = editor.getSql();
+    if (!sql.trim()) {
+      this.toast("error", "当前编辑器没有可美化的 SQL");
+      return;
+    }
+    const protocol = objectProtocol(this.connectionById(tab.connectionId));
+    const dialect = protocol === "mysql" || protocol === "postgres" || protocol === "sqlite" ? protocol : undefined;
+    const beautified = formatSql(sql, { dialect });
+    if (beautified === sql) {
+      this.toast("info", "SQL 已是美化后的排版");
+      editor.focus();
+      return;
+    }
+    editor.setSql(beautified);
+    editor.focus();
     this.toast("success", "SQL 已美化");
   }
 
-  /** 代码段对话框：内置常用 SQL 模板，插入当前查询编辑器。 */
-  private cmdCodeSnippet(): void {
+  /** 当前页面可美化的 SQL 编辑器（查询页 / 视图设计 / 例程设计）。 */
+  private activeSqlEditor(): SqlEditor | undefined {
+    const tab = this.activeTab;
+    if (!tab) return undefined;
+    const view = this.views.get(tab.id);
+    if (view instanceof QueryTabView) return view.editor;
+    if (view instanceof SqlDesignTabView) return view.copyEditor();
+    if (view instanceof RoutineTabView) return view.copyEditor();
+    return undefined;
+  }
+
+  /** 代码段对话框：与右侧信息面板共用同一数据源（内置 + 自定义），可新增定义。 */
+  private cmdCodeSnippet(afterChange?: () => void): void {
     const tab = this.activeTab;
     const view = tab ? this.views.get(tab.id) : undefined;
     if (!(view instanceof QueryTabView)) {
       this.toast("error", "请先打开查询标签页");
       return;
     }
-    const snippets: [string, string][] = [
-      ["SELECT 全表", "SELECT * FROM table_name LIMIT 100;"],
-      ["条件查询", "SELECT * FROM table_name\nWHERE column = 'value'\nORDER BY id\nLIMIT 100;"],
-      ["多表连接", "SELECT a.*, b.*\nFROM table_a a\nINNER JOIN table_b b ON b.a_id = a.id\nLIMIT 100;"],
-      ["分组统计", "SELECT column, COUNT(*) AS cnt\nFROM table_name\nGROUP BY column\nORDER BY cnt DESC;"],
-      ["插入数据", "INSERT INTO table_name (col1, col2) VALUES ('v1', 'v2');"],
-      ["更新数据", "UPDATE table_name SET col1 = 'v1' WHERE id = 1;"],
-      ["删除数据", "DELETE FROM table_name WHERE id = 1;"],
-      [
-        "建表",
-        "CREATE TABLE table_name (\n  id BIGINT PRIMARY KEY AUTO_INCREMENT,\n  name VARCHAR(100) NOT NULL,\n  created_at DATETIME\n);",
-      ],
-    ];
-    let selected = snippets[0][1];
+    let selected = querySnippets()[0]?.sql ?? "";
     new Dialog({
       title: "代码段",
-      width: 560,
+      width: 620,
       render: (body) => {
         const row = document.createElement("div");
         row.style.display = "flex";
         row.style.gap = "10px";
+        const side = document.createElement("div");
+        side.style.cssText = "width:190px;display:flex;flex-direction:column;gap:6px;";
         const list = document.createElement("div");
-        list.style.width = "150px";
-        list.style.border = "1px solid var(--line)";
-        list.style.background = "var(--bg-surface)";
-        list.style.overflow = "auto";
-        list.style.height = "240px";
+        list.style.cssText = "flex:1;border:1px solid var(--border);background:var(--bg-surface);overflow:auto;height:250px;";
         const ta = document.createElement("textarea");
-        ta.style.flex = "1";
-        ta.style.height = "240px";
+        ta.style.cssText = "flex:1;height:250px;font-family:var(--font-mono);";
         ta.value = selected;
-        for (const [name, snippet] of snippets) {
-          const item = document.createElement("div");
-          item.textContent = name;
-          item.style.padding = "4px 8px";
-          item.style.cursor = "default";
-          item.addEventListener("mousedown", () => {
-            list.querySelectorAll("div").forEach((x) => (x.style.background = ""));
-            item.style.background = "var(--bg-selected-soft)";
-            ta.value = snippet;
-            selected = snippet;
+        ta.setAttribute("aria-label", "代码段 SQL 内容");
+        ta.addEventListener("input", () => { selected = ta.value; });
+        let draftInput: HTMLInputElement | null = null;
+        const refreshList = () => {
+          const draft = draftInput?.closest(".snippet-name-draft");
+          list.replaceChildren();
+          for (const snippet of querySnippets()) {
+            const item = document.createElement("div");
+            item.style.cssText = "padding:4px 8px;cursor:default;display:flex;align-items:center;gap:4px;";
+            const name = document.createElement("button"); name.type = "button";
+            name.textContent = snippet.name;
+            name.style.cssText = "flex:1;min-width:0;padding:0;text-align:left;border:none;background:transparent;color:inherit;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            name.addEventListener("click", () => { ta.value = snippet.sql; selected = snippet.sql; });
+            item.appendChild(name);
+            if (snippet.custom) {
+              const del = document.createElement("button"); del.type = "button";
+              del.setAttribute("aria-label", `删除代码段 ${snippet.name}`);
+              del.textContent = "×";
+              del.title = "删除此自定义代码段";
+              del.style.cssText = "cursor:pointer;color:var(--fg-muted);padding:0 3px;border:none;background:transparent;font:inherit;border-radius:3px;";
+              del.addEventListener("mousedown", e => e.stopPropagation());
+              del.addEventListener("click", (e) => {
+                e.stopPropagation();
+                removeSnippet(snippet.name);
+                refreshList();
+                afterChange?.();
+              });
+              item.appendChild(del);
+            }
+            item.addEventListener("mousedown", () => {
+              list.querySelectorAll("div").forEach((x) => (x.style.background = ""));
+              item.style.background = "var(--bg-selected-soft)";
+              ta.value = snippet.sql;
+              selected = snippet.sql;
+            });
+            list.appendChild(item);
+          }
+          if (draft) list.appendChild(draft);
+        };
+        refreshList();
+        // 新增自定义代码段：与右侧信息面板一致（共用 snippets 存储）。
+        const addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "btn";
+        addBtn.textContent = "＋ 新增代码段";
+        addBtn.addEventListener("click", () => {
+          if (draftInput) { draftInput.focus(); return; }
+          const draft = document.createElement("div");
+          draft.className = "snippet-name-draft";
+          draft.style.cssText = "padding:6px 8px;background:var(--bg-selected-soft);";
+          const input = document.createElement("input");
+          draftInput = input;
+          input.type = "text"; input.placeholder = "代码段名称"; input.required = true;
+          input.setAttribute("aria-label", "新增代码段名称");
+          input.style.cssText = "width:100%;min-width:0;box-sizing:border-box;";
+          const error = document.createElement("div");
+          error.id = "snippet-name-error-" + Date.now().toString(36);
+          error.setAttribute("role", "status"); error.setAttribute("aria-live", "polite");
+          error.style.cssText = "color:var(--danger-500);font-size:var(--fs-11);overflow-wrap:anywhere;";
+          input.setAttribute("aria-describedby", error.id);
+          const actions = document.createElement("div");
+          actions.style.cssText = "display:flex;gap:4px;margin-top:4px;";
+          const confirm = document.createElement("button"); confirm.type = "button";
+          confirm.className = "btn"; confirm.textContent = "保存";
+          const cancel = document.createElement("button"); cancel.type = "button";
+          cancel.className = "btn"; cancel.textContent = "取消";
+          const finish = () => { draftInput = null; draft.remove(); addBtn.focus(); };
+          const save = () => {
+            try {
+              const snippet = addSnippet({ name: input.value, tag: "自定义", desc: "自定义代码段", sql: ta.value.trim() });
+              selected = snippet.sql;
+              draftInput = null; refreshList(); afterChange?.(); addBtn.focus();
+              this.toast("success", "代码段「" + snippet.name + "」已添加");
+            } catch (e) {
+              error.textContent = String(e); input.setAttribute("aria-invalid", "true"); input.focus();
+            }
+          };
+          input.addEventListener("input", () => { error.textContent = ""; input.removeAttribute("aria-invalid"); });
+          input.addEventListener("keydown", e => {
+            e.stopPropagation();
+            if (e.isComposing || e.keyCode === 229) return;
+            if (e.key === "Enter") { e.preventDefault(); save(); }
+            if (e.key === "Escape") { e.preventDefault(); finish(); }
           });
-          list.appendChild(item);
-        }
-        row.appendChild(list);
-        row.appendChild(ta);
+          confirm.addEventListener("click", save); cancel.addEventListener("click", finish);
+          actions.append(confirm, cancel); draft.append(input, error, actions); list.append(draft);
+          input.focus(); input.scrollIntoView({ block: "nearest" });
+        });
+        side.append(list, addBtn);
+        row.append(side, ta);
         body.appendChild(row);
       },
       buttons: [
@@ -4342,7 +4757,9 @@ export class App {
     if (loading(this.treeNodes) || this.manualTransactionController.hasActive()) return false;
     return !this.tabs.some(tab => {
       const view = this.views.get(tab.id);
-      return (view instanceof QueryTabView && view.isExecuting()) || (view instanceof DataTabView && view.hasPendingChanges()) || (tab.kind !== "query" && tab.dirty);
+      return ((!this.draftSyncApproved && this.draftPreparing) ||
+        (!this.draftSyncApproved && (view?.draftDirty?.() ?? ((view instanceof DataTabView && view.hasPendingChanges()) || (tab.kind !== "query" && tab.dirty)))) ||
+        (view?.draftBusy?.() ?? (view instanceof QueryTabView && view.isExecuting())));
     });
   }
 
@@ -4380,11 +4797,28 @@ export class App {
     this.renderTabs();
   }
 
+  private suspendDatasourceTabs(invalidated: Set<string>, message: string, schema?: string): void {
+    for (const tab of this.tabs) {
+      if (!invalidated.has(tab.connectionId) || (schema !== undefined && tab.schema !== schema)) continue;
+      if (tab.datasourceStale) { tab.datasourceStale = message; continue; }
+      tab.datasourceStale = message;
+      const view = this.views.get(tab.id);
+      if (view instanceof QueryTabView) view.invalidateDatasource();
+      else if (view) {
+        const old = document.createElement("div"); old.className = "datasource-stale-content"; old.inert = true;
+        while (view.el.firstChild) old.append(view.el.firstChild);
+        const warning = document.createElement("p"); warning.className = "datasource-stale-warning"; warning.setAttribute("role", "status"); warning.textContent = tab.datasourceStale;
+        view.el.append(warning, old);
+      }
+    }
+    this.renderTabs();
+  }
+
   private cmdOptions(initialTab?: "general" | "font" | "sql" | "sync"): void {
-    openSettingsDialog(this.settings, (s) => {
+    openSettingsDialog(this.settings, async (s) => {
+      await api.setSettings(s);
       this.settings = s;
       this.applySettings();
-      void api.setSettings(s);
       this.toast("success", "设置已保存");
     }, this.datasourceSync, initialTab);
   }
@@ -4396,27 +4830,25 @@ export class App {
     this.activateTab(this.tabs[n].id);
   }
 
-  private cmdCloseOthers(): void {
+  private async cmdCloseOthers(): Promise<void> {
     const keep = this.activeTabId;
-    for (const t of [...this.tabs]) {
-      if (t.id !== keep) this.closeTab(t.id);
-    }
+    await this.closeTabs(this.tabs.filter(t => t.id !== keep).map(t => t.id));
   }
 
   /** 关闭当前标签左侧 / 右侧的全部标签（基准为右键点中的标签）。 */
-  private cmdCloseSide(side: "left" | "right"): void {
+  private async cmdCloseSide(side: "left" | "right"): Promise<void> {
     const anchor = this.contextTabId ?? this.activeTabId;
     const idx = this.tabs.findIndex((t) => t.id === anchor);
     if (idx < 0) return;
     const doomed = side === "left" ? this.tabs.slice(0, idx) : this.tabs.slice(idx + 1);
-    for (const t of doomed) this.closeTab(t.id);
+    await this.closeTabs(doomed.map(t => t.id));
   }
 
   /** 在标签条右键时记录基准标签（关闭左侧/右侧以此为准）。 */
   private contextTabId: string | null = null;
 
-  private cmdCloseAll(): void {
-    for (const t of [...this.tabs]) this.closeTab(t.id);
+  private async cmdCloseAll(): Promise<void> {
+    await this.closeTabs(this.tabs.map(t => t.id));
   }
 
   private async cmdDuplicateTab(): Promise<void> {
@@ -4447,6 +4879,105 @@ export class App {
       return;
     }
     void this.openStructureTab(ref.connId, ref.schema, ref.table);
+  }
+
+  private assertObjectWrite(tab: TabState): ConnectionConfig {
+    if (tab.datasourceStale) throw new Error(tab.datasourceStale);
+    const cfg = this.connectionById(tab.connectionId);
+    if (!cfg) throw new Error("连接已失效");
+    if (cfg.read_only) throw new Error("此连接只读，不能修改数据库对象");
+    if (this.manualTransactionFor(tab.connectionId) || this.manualTransactionIsBusy(tab.connectionId)) throw new Error("请先完成此连接的手动事务");
+    return cfg;
+  }
+
+  async runObjectAction(id: string): Promise<void> {
+    const reason = this.commandUnavailableReason(id);
+    if (reason) throw new Error(reason);
+    const tab = this.activeTab!, view = this.views.get(tab.id) as ObjectsTabView;
+    const object = view.selectedObject();
+    if (id === "object-new" || id === "object-new-procedure") {
+      const type = id === "object-new-procedure" ? "procedure" : tab.objectType === "folder" ? "table" : tab.objectType;
+      if (type === "query") { await this.openQueryTab(tab.connectionId, "", tab.schema, false); return; }
+      const scope = { connectionId: tab.connectionId, schema: tab.schema, datasourceStale: tab.datasourceStale };
+      openObjectAction({ title: `新建${objectLabel(type)}`, context: `${tab.connectionName} / ${scope.schema}`, label: `${objectLabel(type)}名称`, confirm: type === "table" ? "创建" : "进入设计器", submit: async name => {
+        if (tab.connectionId !== scope.connectionId || tab.schema !== scope.schema) throw new Error("对象页上下文已变化，请重新打开操作");
+        const cfg = this.assertObjectWrite(tab), sql = newObjectSql(cfg, scope.schema, name, type);
+        if (type === "table") {
+          await api.executeDdl(scope.connectionId, sql, scope.schema);
+          await this.refreshObjectScope(scope.connectionId, scope.schema);
+        } else {
+          const design = this.makeTab(type === "view" ? "viewdesign" : "routinedesign", `新建${objectLabel(type)} · ${name}`, scope.connectionId, scope.schema, name, type as ObjectType, sql);
+          design.designCreating = true; design.dirty = true;
+          if (type === "function" || type === "procedure") {
+            const target = { connection_id: scope.connectionId, schema: scope.schema, name, kind: type, identity_arguments: "" };
+            const baseline = await api.readRoutineCreationBaseline(target, design.id);
+            if (tab.connectionId !== scope.connectionId || tab.schema !== scope.schema || tab.datasourceStale !== scope.datasourceStale) throw new Error("获取创建基线期间对象页上下文已变化，未打开创建页面");
+            if (baseline.object.connection_id !== target.connection_id || baseline.object.schema !== target.schema || baseline.object.name !== target.name || baseline.object.kind !== target.kind || baseline.object.identity_arguments !== "") throw new Error("创建基线对象身份不匹配，没有发送SQL");
+            this.assertObjectWrite(tab);
+            design.routineCreation = baseline;
+          }
+          this.tabs.push(design); this.activeTabId = design.id; this.renderTabs();
+        }
+      } });
+      return;
+    }
+    if (id === "object-export") { this.cmdExport(false); return; }
+    if (!object) return;
+    if (object.favorite) {
+      if (id === "object-open") await this.openSavedQuery(object.favorite.id);
+      if (id === "object-rename") this.renameSavedQuery(object.favorite.id);
+      if (id === "object-delete") this.deleteSavedQuery(object.favorite.id);
+      return;
+    }
+    if (object.descriptor) {
+      if (id === "object-call") await this.openCatalogObject(object.descriptor, true);
+      else if (id === "object-open" || id === "object-design") await this.openCatalogObject(object.descriptor);
+      else if (id === "object-delete") {
+        const descriptor = object.descriptor;
+        const cfg = this.assertObjectWrite(tab);
+        if (objectProtocol(cfg) !== "sqlite" || descriptor.actions.drop?.level === "unsupported" || !descriptor.actions.drop) throw new Error(descriptor.actions.drop?.reason || "没有受控删除能力");
+        const connectionId = tab.connectionId, schema = tab.schema;
+        openObjectMutationDialog(descriptor.object, tab.id, () => {
+          this.assertObjectWrite(tab);
+          if (!this.tabs.includes(tab) || tab.connectionId !== connectionId || tab.schema !== schema) throw new Error("对象页归属已改变；没有发送删除 SQL");
+        }, async () => {
+          for (const opened of this.tabs) if (opened.kind !== "objects" && opened.connectionId === connectionId && opened.schema === schema && opened.object === descriptor.object.name && opened.objectType === "trigger") opened.datasourceStale = "触发器已删除；当前定义保留供核对，禁止再次保存";
+          await this.refreshObjectScope(connectionId, schema);
+        });
+      }
+      else throw new Error("当前对象操作尚未接入受控计划，没有发送SQL");
+      return;
+    }
+    const { connectionId, schema } = tab;
+    if (id === "object-open" || id === "object-design") {
+      if (object.type === "function" || object.type === "procedure") await this.openRoutineDesignTab(connectionId, schema, object.name, object.type);
+      else if (id === "object-open") await this.openTableTab(connectionId, schema, object.name, object.type as ObjectType);
+      else if (object.type === "view") await this.openViewDesignTab(connectionId, schema, object.name);
+      else await this.openStructureTab(connectionId, schema, object.name);
+    } else if (id === "object-import") this.cmdImport(false);
+    else if (id === "object-delete") {
+      const name = object.name, type = object.type;
+      openObjectAction({ title: `删除${objectLabel(type)}`, context: `确定删除 ${tab.connectionName} / ${schema} 中的${objectLabel(type)}「${name}」？此操作不可恢复。`, confirm: "删除", submit: async () => {
+        if (tab.connectionId !== connectionId || tab.schema !== schema) throw new Error("对象页上下文已变化，请重新选择");
+        const cfg = this.assertObjectWrite(tab), sql = dropObjectSql(cfg, schema, object);
+        const affected = this.tabs.filter(t => t.kind !== "objects" && t.connectionId === connectionId && t.schema === schema && t.object === name && t.objectType === type);
+        if (!await this.guardLeave(affected.map(t => t.id), "删除数据库对象", async () => {
+          this.assertObjectWrite(tab);
+          await api.executeDdl(connectionId, sql, schema);
+          affected.forEach(t => { t.datasourceStale = "数据库对象已删除，当前文本或数据仍保留，请重新打开对象"; });
+          await this.refreshObjectScope(connectionId, schema);
+        })) throw new Error("删除已取消或未完成，原页面保留");
+      } });
+    }
+  }
+
+  private async refreshObjectScope(connectionId: string, schema: string): Promise<void> {
+    const cfg = this.connectionById(connectionId);
+    const base = cfg?.kind === "sqlite" ? `conn:${connectionId}` : `conn:${connectionId}/db/${schema}`;
+    const node = this.tree.find(base);
+    if (node) { node.loaded = false; await this.loadChildren(node); node.loaded = true; this.tree.render(); }
+    for (const view of this.views.values()) if (view instanceof ObjectsTabView && view.isScope(connectionId, schema)) await view.reload();
+    this.notifyToolbar();
   }
 
   /** 新建表：输入表名 → 建立含自增主键 id 的最小表。 */
@@ -4566,48 +5097,53 @@ export class App {
   }
 
   /** 截断表（TRUNCATE / DELETE，含确认）。 */
-  private cmdTruncateTable(): void {
-    const ref = this.currentTableRef();
-    if (!ref) {
-      this.toast("error", "请先选择一个表");
-      return;
-    }
-    new Dialog({
-      title: "截断表",
-      width: 380,
-      render: (body) => {
-        body.textContent = `确定要截断表「${ref.table}」的全部数据吗？`;
-        body.style.padding = "18px 14px";
+  private cmdTruncateTable(): void { this.openTableOperation("clear"); }
+
+  private cmdCopyTable(kind: "copy_structure" | "copy_data"): void { this.openTableOperation(kind); }
+
+  private openTableOperation(kind: "clear" | "copy_structure" | "copy_data"): void {
+    const selected = this.currentTableRef();
+    if (!selected) { this.toast("error", "请先选择一个表"); return; }
+    const ref = Object.freeze({ ...selected });
+    const connectionIdentity = JSON.stringify(this.connectionById(ref.connId));
+    const ownerId = crypto.randomUUID();
+    const writeReason = (): string | null => {
+      const connection = this.connectionById(ref.connId);
+      if (!connection) return "连接已不存在";
+      if (JSON.stringify(connection) !== connectionIdentity) return "连接配置已变化，请重新打开表操作";
+      if (connection.read_only) return "此连接只读，不能修改表";
+      const stale = this.tabs.find(tab => tab.connectionId === ref.connId && tab.schema === ref.schema && tab.object === ref.table && tab.datasourceStale)?.datasourceStale;
+      if (stale) return stale;
+      if (this.manualTransactionFor(ref.connId) || this.manualTransactionIsBusy(ref.connId)) return "请先完成此连接的手动事务";
+      return null;
+    };
+    const reason = writeReason();
+    if (reason) { this.toast("info", reason); return; }
+    openTableOperationDialog({ connectionId: ref.connId, schema: ref.schema, table: ref.table, kind, ownerId, writeReason,
+      toast: (level, text) => this.toast(level, text),
+      applied: async (receipt, schema) => {
+        const table = kind === "clear" ? receipt.source_table : receipt.target_table;
+        if (!table) throw new Error("操作回执缺少精确刷新目标");
+        await this.refreshTableOperationTarget(ref.connId, schema, table);
       },
-      buttons: [
-        {
-          label: "确定",
-          primary: true,
-          onClick: () => {
-            void (async () => {
-              try {
-                const cfg = this.connectionById(ref.connId);
-                const isTick = cfg?.kind === "mysql" || cfg?.kind === "clickhouse";
-                const q = (s: string) =>
-                  isTick
-                    ? `\`${s.replace(/`/g, "``")}\``
-                    : `"${s.replace(/"/g, '""')}"`;
-                const full = ref.schema ? `${q(ref.schema)}.${q(ref.table)}` : q(ref.table);
-                const sql = cfg?.kind === "mysql"
-                  ? `TRUNCATE TABLE ${full}`
-                  : `DELETE FROM ${full}`;
-                await api.executeDdl(ref.connId, sql);
-                this.toast("success", `表「${ref.table}」已截断`);
-                await this.refreshActive();
-              } catch (e) {
-                this.toast("error", String(e));
-              }
-            })();
-          },
-        },
-        { label: "取消" },
-      ],
     });
+  }
+
+  private async refreshTableOperationTarget(connectionId: string, schema: string, table: string): Promise<void> {
+    this.tableMetaCache.delete(`${connectionId}/${schema}/${table}`);
+    const ids = this.tabs.filter(tab => (tab.kind === "table" || tab.kind === "structure") && tab.connectionId === connectionId && tab.schema === schema && tab.object === table).map(tab => tab.id);
+    if (ids.length) {
+      const accepted = await this.guardLeave(ids, "刷新已完成表操作的目标", async () => {
+        for (const id of ids) {
+          const tab = this.tabs.find(tab => tab.id === id);
+          if (!tab || tab.connectionId !== connectionId || tab.schema !== schema || tab.object !== table) continue;
+          const view = this.views.get(id);
+          if (view instanceof DataTabView || view instanceof StructureTabView) await view.reloadAfterLeave();
+        }
+      });
+      if (!accepted) this.toast("info", "表操作已完成；目标页面草稿已保留，请稍后重新载入核对");
+    }
+    await this.refreshObjectScope(connectionId, schema);
   }
 
   /** 表设计器：添加字段（末尾）。 */
@@ -4633,6 +5169,14 @@ export class App {
     const view = this.activeView();
     if (view instanceof StructureTabView) view.togglePrimaryKey();
   }
+  private cmdAddIndex(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.addIndex(); }
+  private cmdDeleteIndex(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.deleteIndex(); }
+  private cmdAddForeignKey(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.addForeignKey(); }
+  private cmdDeleteForeignKey(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.deleteForeignKey(); }
+  private cmdAddCheck(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.addCheck(); }
+  private cmdDeleteCheck(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.deleteCheck(); }
+  private cmdAddTrigger(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.addTrigger(); }
+  private cmdDeleteTrigger(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.deleteTrigger(); }
 
   private importExportTarget(fromTree: boolean): { connId: string; schema: string; table: string } | null {
     if (fromTree) {
@@ -4671,7 +5215,16 @@ export class App {
 
   private cmdExport(fromTree = false): void {
     const tab = this.activeTab;
-    const ref = this.importExportTarget(fromTree);
+    let ref = this.importExportTarget(false);
+    if (fromTree) {
+      // 树的数据库节点绝不借用活动标签页的表；对象身份在打开向导前固定。
+      const node = this.tree.find(this.tree.selectedNodeId ?? "");
+      const parts = node?.id.split("/") ?? [];
+      const connId = parts[0]?.startsWith("conn:") ? parts[0].slice(5) : "";
+      const dbIndex = parts.indexOf("db");
+      const objectIndex = parts.findIndex(part => part === "table" || part === "view");
+      ref = connId ? { connId, schema: dbIndex >= 0 ? parts[dbIndex + 1] ?? "" : this.connectionById(connId)?.kind === "sqlite" ? "main" : "", table: objectIndex >= 0 ? parts[objectIndex + 1] ?? "" : "" } : null;
+    }
     const cfg = this.connectionById(ref?.connId ?? "");
     if (!cfg || !ref) {
       this.toast("error", "请先打开一个连接");
@@ -4685,13 +5238,27 @@ export class App {
         this.toast("info", "当前没有可导出的结果集");
         return;
       }
-      openResultExportDialog(cfg, async (opts) => {
-        const names = set.columns.map((c) => c.name);
-        return await api.exportQueryResult(opts, names, set.rows);
-      });
+      if (view.resultBusy()) { this.toast("info", "查询执行、缓存读取或导出进行中，请等待完成"); return; }
+      const snapshot = view.captureResultExport();
+      openResultExportDialog(cfg, opts => view.exportResultSnapshot(opts, snapshot), snapshot.scope
+        ? `结果 ${snapshot.index + 1}：导出本次执行全部 ${set.total} 行（来自完整缓存，不重新执行 SQL），不受当前页限制。`
+        : `结果 ${snapshot.index + 1} 没有完整缓存，只能导出已加载的 ${set.rows.length} 行（共 ${set.total} 行）；不会重新执行 SQL。`);
       return;
     }
     const schema = ref?.schema ?? this.currentDbName();
+    if (!fromTree && view instanceof ObjectsTabView && tab?.kind === "objects") {
+      const selected = view.selectedObjects().filter(object => object.type === "table" || object.type === "view")
+        .map(object => ({ name: object.name, object_type: object.type as "table" | "view" }));
+      openBatchExportWizard(cfg, schema, selected, result => {
+        const completed = result.items.filter(item => item.status === "completed").length;
+        this.toast(completed === result.items.length ? "success" : "info", `批量导出：${completed} / ${result.items.length} 个对象完成，请查看逐对象结果`);
+      });
+      return;
+    }
+    if (!ref.table && schema) {
+      openBatchExportWizard(cfg, schema, []);
+      return;
+    }
     const table = ref?.table ?? (tab?.kind === "table" ? tab.object : "");
     if (!table) {
       this.toast("error", "请先选择一个表");
@@ -4702,22 +5269,194 @@ export class App {
     });
   }
 
-  private cmdDump(): void {
-    const tab = this.activeTab;
-    const connId = tab?.connectionId ?? this.currentConnectionId();
-    const cfg = this.connectionById(connId);
-    if (!cfg) {
+  private cmdDump(fromTree = false, frozenTarget?: Readonly<{ connId: string; schema: string; table: string }>): void {
+    let target = frozenTarget ?? this.importExportTarget(false);
+    if (fromTree && !frozenTarget) {
+      const node = this.tree.find(this.tree.selectedNodeId ?? "");
+      const parts = node?.id.split("/") ?? [];
+      const connId = parts[0]?.startsWith("conn:") ? parts[0].slice(5) : "";
+      const dbIndex = parts.indexOf("db");
+      const objectIndex = parts.findIndex(part => part === "table" || part === "view");
+      target = connId ? { connId, schema: dbIndex >= 0 ? parts[dbIndex + 1] ?? "" : this.connectionById(connId)?.kind === "sqlite" ? "main" : "", table: objectIndex >= 0 ? parts[objectIndex + 1] ?? "" : "" } : null;
+    }
+    const cfg = this.connectionById(target?.connId ?? "");
+    if (!cfg || !target) {
       this.toast("error", "请先打开一个连接");
       return;
     }
-    const ref = this.currentTableRef();
-    const schema = ref?.schema ?? (tab?.kind === "objects" ? tab.schema : tab?.schema ?? "");
-    const table = ref?.table ?? (tab?.kind === "table" ? tab.object : "");
+    const { schema, table } = { ...target };
+    if (!table) {
+      // 数据库级转储：选择「数据和结构 / 仅结构」→ 直接弹保存位置对话框。
+      this.cmdDumpDatabase(cfg, schema);
+      return;
+    }
     openDumpDialog(cfg, schema, table, async (opts) => {
       const n = await api.runDump(opts);
       this.toast("success", `转储完成，共 ${n} 行`);
       return n;
     });
+  }
+
+  /** 数据库级转储 SQL 文件：内容和范围 → 保存位置（可修改文件名）→ 执行。 */
+  private cmdDumpDatabase(cfg: import("./types").ConnectionConfig, schema: string): void {
+    if (!schema) {
+      this.toast("error", "请先选择要转储的数据库");
+      return;
+    }
+    let structureOnly = false;
+    const file = textInput("", 320);
+    file.setAttribute("aria-label", "数据库转储完整保存路径");
+    const destination = bindExportPath(file, `${schema}.sql`);
+    const status = document.createElement("div");
+    status.style.cssText = "margin-top:8px;min-height:18px;color:var(--fg-muted);";
+    let running = false;
+    const dlg = new Dialog({
+      title: "转储 SQL 文件",
+      width: 460,
+      render: (body) => {
+        const connection = textInput(cfg.name, 220), namespace = textInput(schema, 220);
+        connection.readOnly = namespace.readOnly = true;
+        connection.title = cfg.name; namespace.title = schema;
+        body.appendChild(field("连接:", connection));
+        body.appendChild(field(`${namespaceLabel(cfg)}:`, namespace));
+        body.appendChild(field("保存完整路径:", file));
+        const scope = radioGroup("dump-scope", [
+          { value: "both", label: "数据和结构" },
+          { value: "structure", label: "仅结构" },
+        ], "both");
+        body.appendChild(field("转储内容:", scope));
+        scope.querySelector<HTMLInputElement>('input[value="structure"]')?.addEventListener("change", () => {
+          structureOnly = scope.querySelector<HTMLInputElement>('input[value="structure"]')?.checked ?? false;
+        });
+        scope.querySelector<HTMLInputElement>('input[value="both"]')?.addEventListener("change", () => {
+          structureOnly = !scope.querySelector<HTMLInputElement>('input[value="both"]')?.checked;
+        });
+        body.appendChild(status);
+      },
+      buttons: [
+        {
+          label: "选择保存位置",
+          primary: true,
+          onClick: async () => {
+            if (running) return false;
+            await destination.ready;
+            const pathProblem = destination.problem();
+            if (pathProblem) { dlg.showError(pathProblem); return false; }
+            let path: string | null = null;
+            try {
+              const { save } = await import("@tauri-apps/plugin-dialog");
+              path = await save({
+                title: "保存 SQL 文件",
+                defaultPath: file.value.trim(),
+                filters: [{ name: "SQL 文件", extensions: ["sql"] }],
+              });
+            } catch {
+              path = null;
+            }
+            if (!path) return false;
+            file.value = path;
+            destination.refresh();
+            const selectedProblem = destination.problem();
+            if (selectedProblem) { dlg.showError(selectedProblem); return false; }
+            running = true;
+            status.textContent = "正在生成转储...";
+            const handle = taskCenter.register("dump", `SQL 转储 · ${schema}`);
+            try {
+              const [rows, bytes] = await api.dumpDatabaseToFile(cfg.id, schema, path, !structureOnly, !structureOnly);
+              handle.finish(`${rows} 行数据（${(bytes / 1024).toFixed(1)} KB）`, path);
+              status.textContent = `转储完成：${rows} 行数据，文件 ${(bytes / 1024).toFixed(1)} KB。`;
+              this.toast("success", `已转储到 ${path}`);
+            } catch (e) {
+              handle.fail(String(e));
+              status.textContent = `转储失败：${String(e)}`;
+              dlg.showError(String(e));
+              running = false;
+              return false;
+            }
+            running = false;
+            return true;
+          },
+        },
+        { label: "取消" },
+      ],
+    });
+    dlg.el.classList.add("form-stacked");
+    status.setAttribute("role", "status");
+  }
+
+  /** 数据库右键「运行 SQL 文件」：选文件 → 执行选项（遇错终止 / 跳过继续）→ 逐条执行并报告。 */
+  private async cmdRunSqlFile(): Promise<void> {
+    const target = this.currentDbTarget();
+    const connId = target?.connId ?? this.currentConnectionId();
+    const cfg = this.connectionById(connId);
+    if (!cfg) {
+      this.toast("error", "请先选择一个连接");
+      return;
+    }
+    const schema = target?.schema ?? this.currentDbName();
+    let path: string | null = null;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      path = await open({
+        title: "选择 SQL 文件",
+        multiple: false,
+        filters: [{ name: "SQL 文件", extensions: ["sql"] }, { name: "所有文件", extensions: ["*"] }],
+      });
+    } catch {
+      path = null;
+    }
+    if (typeof path !== "string" || !path) return;
+    openSqlFileExecutionDialog(cfg, schema, path);
+  }
+
+  /** 备份列表右键「重命名」：修改备份文件名。 */
+  private cmdRenameBackup(): void {
+    const t = this.backupTarget();
+    const backup = t?.view?.selectedBackup();
+    if (!t || !backup) {
+      this.toast("error", "请先在备份列表中选择一个备份");
+      return;
+    }
+    const input = textInput(backup.name.replace(/\.sql$/i, ""), 300);
+    const dlg = new Dialog({
+      title: "重命名备份",
+      width: 420,
+      render: (body) => {
+        body.appendChild(field("新名称:", input));
+        const note = document.createElement("div");
+        note.className = "form-note";
+        note.textContent = "保留扩展名 .sql；重命名后备份列表会自动刷新。";
+        body.appendChild(note);
+      },
+      buttons: [
+        {
+          label: "重命名",
+          primary: true,
+          onClick: async () => {
+            const name = input.value.trim();
+            if (!name) {
+              dlg.showError("请填写新名称");
+              return false;
+            }
+            if (/[\\/:*?"<>|]/.test(name)) {
+              dlg.showError("名称不能包含 / \\ : * ? \" < > | 字符");
+              return false;
+            }
+            try {
+              await api.renameBackup(t.connId, t.schema, backup.name, name.endsWith(".sql") ? name : `${name}.sql`);
+              this.toast("success", "备份已重命名");
+              this.refreshBackupTabs(t.connId, t.schema);
+            } catch (e) {
+              dlg.showError(String(e));
+              return false;
+            }
+            return true;
+          },
+        },
+        { label: "取消" },
+      ],
+    });
+    dlg.el.classList.add("form-stacked");
   }
 
   // ------------------------------------------------------ 视图 / 函数设计
@@ -4736,6 +5475,7 @@ export class App {
   private cmdTreeDesignRoutine(): void {
     const node = this.tree.find(this.tree.selectedNodeId ?? "");
     if (!node) return;
+    if (node.objectDescriptor) { void this.openCatalogObject(node.objectDescriptor); return; }
     const m = node.id.match(/^conn:([^/]+)(?:\/db\/([^/]+))?\/obj\/(\w+)\/(.+)$/);
     if (!m) {
       this.toast("error", "请先在左侧树中选择一个函数或存储过程");
@@ -4751,64 +5491,47 @@ export class App {
     if (tab?.kind !== "viewdesign") return;
     const view = this.views.get(tab.id) as SqlDesignTabView | undefined;
     if (!view) return;
-    const sql = view.getSql().trim();
+    const source = view.getSql(), sql = source.trim();
     if (!sql) {
       this.toast("error", "视图定义不能为空");
       return;
     }
     try {
-      const cfg = this.connectionById(tab.connectionId);
-      if (cfg?.kind === "sqlite") {
-        const name = tab.object;
-        const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
-        await api.executeSql(
-          tab.connectionId,
-          `DROP VIEW IF EXISTS ${q(name)};\n${sql.replace(/;\s*$/, "")};`,
-        );
+      const cfg = this.assertObjectWrite(tab);
+      const reason = objectCapability(cfg, "view", tab.designCreating ? "create" : "update");
+      if (reason) throw new Error(reason);
+      if (cfg.kind === "sqlite" && !tab.designCreating) {
+        await api.replaceSqliteView(tab.connectionId, tab.schema, tab.object, sql);
       } else {
-        await api.executeDdl(tab.connectionId, sql.replace(/;\s*$/, ""));
+        const definition = !tab.designCreating ? sql.replace(/^CREATE\s+(?!OR\s+REPLACE\b)/i, "CREATE OR REPLACE ") : sql;
+        await api.executeDdl(tab.connectionId, definition.replace(/;\s*$/, ""), tab.schema);
       }
       this.toast("success", `视图「${tab.object}」已更新`);
-      this.refreshTreeSilently();
+      view.markClean(source);
+      tab.designCreating = false; tab.title = tab.object; view.showError("");
+      await this.refreshObjectScope(tab.connectionId, tab.schema);
     } catch (e) {
+      view.showError(`保存失败，当前 SQL 已保留：${String(e)}`);
       this.toast("error", String(e));
     }
   }
 
-  /** 保存函数 / 存储过程（整体重建，单语句执行）。 */
+  /** 保存例程：沿用打开时基线，经后端预览与唯一C1门禁执行。 */
   private async cmdSaveRoutineDesign(): Promise<void> {
     const tab = this.activeTab;
     if (tab?.kind !== "routinedesign") return;
-    const view = this.views.get(tab.id) as SqlDesignTabView | undefined;
+    const view = this.views.get(tab.id) as RoutineTabView | undefined;
     if (!view) return;
-    const sql = view.getSql().trim();
-    if (!sql) {
-      this.toast("error", "定义不能为空");
-      return;
-    }
     try {
-      await api.executeDdl(tab.connectionId, sql.replace(/;\s*$/, ""));
-      this.toast("success", `「${tab.object}」已重建`);
-      this.refreshTreeSilently();
-    } catch (e) {
-      this.toast("error", String(e));
-    }
+      this.assertObjectWrite(tab);
+      if (await view.saveRoutine()) {
+        this.toast("success", `「${tab.object}」已提交并读回验证`);
+        await this.refreshObjectScope(tab.connectionId, tab.schema);
+      }
+    } catch (error) { view.showError(`保存未完成，当前SQL保留：${String(error)}`); this.toast("error", String(error)); }
   }
 
-  /** 静默刷新树（重建对象后同步）。 */
-  private refreshTreeSilently(): void {
-    const node = this.tree.find(this.tree.selectedNodeId ?? "");
-    if (node && /\/db\//.test(node.id)) {
-      node.children = [];
-      node.loaded = false;
-      void this.toggleNode(node).then(() => {
-        node.expanded = true;
-        this.tree.render();
-      });
-    }
-  }
-
-  // ------------------------------------------------------ 自动运行
+  // ------------------------------------------------------ 自动任务
 
   openScheduleTab(): void {
     const existing = this.tabs.find((t) => t.kind === "schedule");
@@ -4817,7 +5540,7 @@ export class App {
       this.renderTabs();
       return;
     }
-    const tab = this.makeTab("schedule", "自动运行", this.activeTab?.connectionId ?? "", "", "");
+    const tab = this.makeTab("schedule", "自动任务", this.activeTab?.connectionId ?? "", "", "");
     this.tabs.push(tab);
     this.activeTabId = tab.id;
     this.renderTabs();
@@ -4830,8 +5553,8 @@ export class App {
   private async reloadScheduleJobs(): Promise<void> {
     this.scheduleJobs = await api.listJobs();
     for (const j of this.scheduleJobs) {
-      if (j.enabled && j.interval_secs > 0 && !this.jobNextRun.has(j.id)) {
-        this.jobNextRun.set(j.id, Date.now() + j.interval_secs * 1000);
+      if (j.enabled && (j.interval_secs > 0 || j.daily_at || j.cron) && !this.jobNextRun.has(j.id)) {
+        this.jobNextRun.set(j.id, this.nextJobRun(j));
       }
     }
     const tab = this.tabs.find((t) => t.kind === "schedule");
@@ -4847,7 +5570,7 @@ export class App {
       return;
     }
     openScheduleJobDialog(this.connections, null, () => {
-      this.toast("success", "任务已保存");
+      this.toast("success", "任务已创建");
       void this.reloadScheduleJobs();
     });
   }
@@ -4880,14 +5603,109 @@ export class App {
     }
     this.toast("info", `正在执行任务「${job.name}」...`);
     try {
-      const [elapsed, detail] = await api.runJobNow(job.id);
-      this.toast("success", `任务「${job.name}」完成（${(elapsed / 1000).toFixed(2)} s）：${detail}`);
-      this.jobNextRun.set(job.id, Date.now() + job.interval_secs * 1000);
+      await this.executeJobTask(job);
+      this.jobNextRun.set(job.id, this.nextJobRun(job));
       await this.reloadScheduleJobs();
+      this.toast("success", `任务「${job.name}」执行完成`);
     } catch (e) {
-      this.toast("error", String(e));
+      this.toast("error", `任务「${job.name}」失败：${String(e)}`);
       await this.reloadScheduleJobs();
     }
+  }
+
+  /**
+   * 任务派发：任务型任务（备份 / 导出 / 导入 / 数据同步 / 数据生成 / 数据字典）由前端调用
+   * 对应工具接口执行并写入运行历史；旧版 SQL 任务仍走后端 run_job_now。
+   */
+  private async executeJobTask(job: import("./types").ScheduleJob): Promise<void> {
+    const task = job.task;
+    if (!task || task.kind === undefined) {
+      // 旧版 SQL 任务
+      const [elapsed, detail] = await api.runJobNow(job.id);
+      this.toast("info", `任务「${job.name}」完成（${(elapsed / 1000).toFixed(2)} s）：${detail}`);
+      return;
+    }
+    const started = Date.now();
+    const options = (task.options ?? {}) as Record<string, unknown>;
+    let ok = true;
+    let detail = "";
+    try {
+      switch (task.kind) {
+        case "backup": {
+          const schema = String(options.schema ?? job.database ?? "");
+          const [rows, bytes] = await api.createBackup({
+            connection_id: job.connection_id,
+            schema,
+            comment: String(options.comment ?? ""),
+            tables: Array.isArray(options.tables) ? options.tables.map(String) : [],
+            routines: Array.isArray(options.routines) ? options.routines.map(String) : [],
+            file_name: null,
+            include_structure: options.include_structure !== false,
+            include_data: options.include_data !== false,
+          });
+          detail = `备份完成：${rows} 行数据，文件 ${(bytes / 1024).toFixed(1)} KB`;
+          this.refreshBackupTabs(job.connection_id, schema);
+          break;
+        }
+        case "export": {
+          const n = await api.runExport({ ...(options as Partial<import("./types").ExportOptions>), connection_id: job.connection_id } as import("./types").ExportOptions);
+          detail = `导出完成，共 ${n} 行`;
+          break;
+        }
+        case "import": {
+          const n = await api.runImport({ ...(options as Partial<import("./types").ImportOptions>), connection_id: job.connection_id } as import("./types").ImportOptions);
+          detail = `导入完成，共 ${n} 行`;
+          break;
+        }
+        case "data_sync": {
+          const n = await api.runTransfer({ ...(options as Partial<import("./types").TransferOptions>), source_connection: job.connection_id } as import("./types").TransferOptions);
+          detail = `数据同步完成，共 ${n} 行`;
+          break;
+        }
+        case "data_generation": {
+          const schema = String(options.schema ?? job.database ?? "");
+          const table = String(options.table ?? "");
+          const meta = await api.getTableSchema(job.connection_id, schema, table);
+          const count = Math.max(1, Math.min(Number(options.count ?? 100) || 100, MAX_GENERATED_ROWS));
+          const plan = generateDataPreview(
+            meta,
+            defaultGeneratorFields(meta),
+            count,
+            options.seed != null && String(options.seed) !== "" ? String(options.seed) : `job_${job.id.slice(0, 8)}`,
+          );
+          await api.insertGeneratedRows({ connection_id: job.connection_id, schema, table, columns: plan.columns, rows: plan.rows });
+          detail = `数据生成完成，写入 ${plan.rows.length} 行`;
+          break;
+        }
+        case "data_dictionary": {
+          const schema = String(options.schema ?? job.database ?? "");
+          const format = String(options.format ?? "markdown");
+          const file = String(options.file ?? "").trim();
+          if (!file) throw new Error("数据字典任务缺少输出文件路径，请编辑任务重新保存");
+          const meta = await api.dictionaryMetadata(job.connection_id, schema);
+          const dictOpts: import("./types").DictionaryExportOptions = {
+            format,
+            excel_sheet_mode: String(options.excel_sheet_mode ?? "single"),
+            include_tables: true,
+            include_views: format === "pdf" || format === "markdown",
+            include_routines: format === "pdf" || format === "markdown",
+            created_at: new Date().toLocaleString("zh-CN", { hour12: false }),
+          };
+          const bytes = await api.dictionaryExport(meta, dictOpts, file);
+          detail = `数据字典已导出：${file}（${(bytes / 1024).toFixed(1)} KB）`;
+          break;
+        }
+        default:
+          throw new Error(`未支持的任务类型：${task.kind}`);
+      }
+    } catch (e) {
+      ok = false;
+      detail = String(e);
+    }
+    // record_job_history 在后端统一写入运行历史并回写列表的上次运行 / 状态列。
+    await api.recordJobHistory(job.id, job.name, ok, Date.now() - started, detail).catch(() => undefined);
+    if (!ok) throw new Error(detail);
+    this.toast("info", `任务「${job.name}」：${detail}`);
   }
 
   private async cmdDeleteJob(): Promise<void> {
@@ -4932,22 +5750,41 @@ export class App {
     })();
   }
 
-  /** 自动运行调度：每 5 秒检查到期任务并执行（应用运行期间有效）。 */
+  /** 唯一后端 SchedulerHost 负责持久调度；浏览器不再领取或重放旧任务。 */
   private setupScheduleTimer(): void {
+    // 自动任务统一到期执行引擎：应用运行期间每 5 秒检查一次到期任务。
+    // 任务型任务（备份 / 导出 / 导入 / 数据同步 / 数据生成 / 数据字典）由前端
+    // executeJobTask 派发到对应工具接口；旧版 SQL 任务仍走后端 run_job_now。
     window.setInterval(() => {
       const now = Date.now();
       for (const job of this.scheduleJobs) {
-        if (!job.enabled || job.interval_secs <= 0) continue;
+        if (!job.enabled) continue;
+        if (!(job.interval_secs > 0 || job.daily_at || job.cron)) continue;
         const next = this.jobNextRun.get(job.id);
-        if (next !== undefined && now >= next) {
-          this.jobNextRun.set(job.id, now + job.interval_secs * 1000);
-          void api
-            .runJobNow(job.id)
-            .then(() => this.reloadScheduleJobs())
-            .catch(() => this.reloadScheduleJobs());
-        }
+        if (next === undefined || now < next) continue;
+        // 先推进计划时间再执行，失败也不在同一时刻重复触发。
+        this.jobNextRun.set(job.id, this.nextJobRun(job));
+        void this.executeJobTask(job)
+          .then(() => this.reloadScheduleJobs())
+          .catch(() => this.reloadScheduleJobs());
       }
     }, 5000);
+  }
+
+  /** 计算下一次运行时间：cron 优先，其次每日固定时刻，否则按间隔。 */
+  private nextJobRun(job: import("./types").ScheduleJob): number {
+    if (job.cron) {
+      const next = cronNextOccurrence(job.cron);
+      if (next !== null) return next;
+    }
+    if (job.daily_at) {
+      const [h, m] = job.daily_at.split(":").map((x) => Number(x));
+      const next = new Date();
+      next.setHours(h, m, 0, 0);
+      if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
+      return next.getTime();
+    }
+    return Date.now() + job.interval_secs * 1000;
   }
 
   // ------------------------------------------------------ 用户管理
@@ -4978,6 +5815,22 @@ export class App {
     }
     openCreateUserDialog(connId, () => {
       this.toast("success", "用户已创建");
+      const tab = this.tabs.find((t) => t.kind === "users");
+      if (tab) {
+        const view = this.views.get(tab.id);
+        if (view instanceof UsersTabView) void view.reload();
+      }
+    });
+  }
+
+  private cmdEditUser(): void {
+    const ref = this.currentUserRef();
+    if (!ref) {
+      this.toast("error", "请先在用户列表中选择一个用户");
+      return;
+    }
+    openEditUserDialog(ref.connId, ref.user, ref.host, () => {
+      this.toast("success", `用户 ${ref.user}@${ref.host} 已更新`);
       const tab = this.tabs.find((t) => t.kind === "users");
       if (tab) {
         const view = this.views.get(tab.id);
@@ -5070,6 +5923,20 @@ export class App {
         if (view instanceof BackupTabView) void view.reload();
       }
     }
+  }
+
+  /** 事务提交 / 回滚后刷新该连接的表数据页：清除事务内可视化状态并重读数据。 */
+  private async refreshDataTabs(connId: string): Promise<void> {
+    if (!connId) return;
+    for (const t of this.tabs) {
+      if (t.connectionId !== connId) continue;
+      const view = this.views.get(t.id);
+      if (view instanceof DataTabView) {
+        view.clearTransactionState();
+        try { await view.reload(); } catch { /* 失败已由 reload 提示 */ }
+      }
+    }
+    this.notifyToolbar();
   }
 
   private cmdNewBackup(): void {
@@ -5458,6 +6325,11 @@ export class App {
       this.refreshTree();
       return;
     }
+    if (node.objectDescriptor) {
+      const object = node.objectDescriptor.object;
+      void this.refreshObjectScope(object.connection_id, object.schema).catch(error => this.toast("error", `刷新目录失败：${String(error)}`));
+      return;
+    }
     node.children = [];
     node.loaded = false;
     node.expanded = false;
@@ -5472,18 +6344,19 @@ export class App {
       this.toast("error", "请先在左侧树中选择一个连接");
       return;
     }
+    const namespace = namespaceName(cfg);
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.style.width = "220px";
     new Dialog({
-      title: "新建数据库",
+      title: `新建${namespace}`,
       width: 380,
       render: (body) => {
         const row = document.createElement("div");
         row.className = "field";
         const lab = document.createElement("div");
         lab.className = "field-label";
-        lab.textContent = "数据库名:";
+        lab.textContent = `${namespace}名:`;
         row.appendChild(lab);
         row.appendChild(nameInput);
         body.appendChild(row);
@@ -5499,7 +6372,7 @@ export class App {
             void (async () => {
               try {
                 await api.executeDdl(connId, this.databaseDdl(cfg.kind, "create", name));
-                this.toast("success", `数据库「${name}」已创建`);
+                this.toast("success", `${namespace}「${name}」已创建`);
                 this.cmdTreeRefresh();
               } catch (e) {
                 this.toast("error", String(e));
@@ -5517,15 +6390,16 @@ export class App {
     const connId = this.currentConnectionId();
     const cfg = this.connectionById(connId);
     const db = this.currentDbName();
+    const namespace = namespaceName(cfg);
     if (!cfg || !db) {
-      this.toast("error", "请先在左侧树中选择一个数据库");
+      this.toast("error", `请先在左侧树中选择一个${namespace}`);
       return;
     }
     new Dialog({
-      title: "删除数据库",
+      title: `删除${namespace}`,
       width: 400,
       render: (body) => {
-        body.textContent = `确定要删除数据库「${db}」吗？该操作不可恢复，库中全部对象将被删除。`;
+        body.textContent = `确定要删除${namespace}「${db}」吗？该操作不可恢复，${namespace}中全部对象将被删除。`;
         body.style.padding = "18px 14px";
       },
       buttons: [
@@ -5538,7 +6412,7 @@ export class App {
                 await api.executeDdl(connId, this.databaseDdl(cfg.kind, "drop", db));
                 this.openDbs.delete(`${connId}/${db}`);
                 this.syncConnIcons();
-                this.toast("success", `数据库「${db}」已删除`);
+                this.toast("success", `${namespace}「${db}」已删除`);
                 this.cmdTreeRefresh();
               } catch (e) {
                 this.toast("error", String(e));
@@ -5553,10 +6427,12 @@ export class App {
 
   /** 生成数据库级 DDL（按协议族选择 CREATE DATABASE / SCHEMA）。 */
   private databaseDdl(kind: string, action: "create" | "drop", name: string): string {
-    const isTick = kind === "mysql" || kind === "clickhouse";
-    const q = (s: string) =>
-      isTick ? `\`${s.replace(/`/g, "``")}\`` : `"${s.replace(/"/g, '""')}"`;
-    const pgFamily = kindMeta(kind)?.protocol === "postgres";
+    const protocol = kindMeta(kind)?.protocol ?? (kind === "mssql" ? "mssql" : undefined);
+    const isTick = protocol === "mysql" || protocol === "clickhouse";
+    const q = (s: string) => protocol === "mssql"
+      ? `[${s.replace(/\]/g, "]]")}]`
+      : isTick ? `\`${s.replace(/`/g, "``")}\`` : `"${s.replace(/"/g, '""')}"`;
+    const pgFamily = protocol === "postgres";
     if (action === "create") {
       return pgFamily
         ? `CREATE SCHEMA ${q(name)}`
@@ -5594,13 +6470,10 @@ export class App {
     return this.textFormat;
   }
 
-  /** 文本格式变化后刷新全部单元格内容面板。 */
+  /** 预览开关或格式变化只刷新当前数据页，不改写其它页面的面板。 */
   private refreshCellPreviews(): void {
-    for (const view of this.views.values()) {
-      if (view instanceof DataTabView || view instanceof QueryTabView) {
-        view.updateCellPreview();
-      }
-    }
+    const view = this.activeView();
+    if (view instanceof DataTabView) view.updateCellPreview();
     this.renderStatus();
   }
 }
@@ -5723,67 +6596,116 @@ abstract class TabView {
   abstract activate(): void;
   abstract reload(): Promise<void>;
   abstract destroy(): void;
+  flushDraft(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && this.el.contains(active)) active.blur();
+  }
+  draftDirty(): boolean { return !!this.tab.dirty; }
+  draftBusy(): boolean { return false; }
+  discardDraft(): void { this.tab.dirty = false; }
+  captureDraft(): Pick<DraftSnapshot, "kind" | "baseline" | "payload"> {
+    if (this.draftDirty()) throw new Error("此资产页尚未接入完整草稿载荷，已拒绝关闭以保留编辑");
+    return { kind: "table_structure", baseline: null, payload: { requires_validation: true } };
+  }
 }
 
-/** 对象列表视图（「对象」标签页：库名下的表/视图清单）。 */
+/** 对象列表视图（「对象」标签页：库名下的表/视图清单；顶部信息条已去掉，直接从表头开始）。 */
 class ObjectsTabView extends TabView {
   grid: DataGrid;
-  private objects: import("./types").ObjectInfo[] = [];
+  private objects: BrowserObject[] = [];
   /** 过滤后的可见行索引。 */
   private visible: number[] = [];
+  private generation = 0;
+  private disposed = false;
+  private scope = "";
+  private metadataNotice = "";
+  private metadataKnown = false;
+  /** 保留供核对的旧清单不能作为本次操作的对象证明。 */
+  private staleResults = false;
+  /** 搜索框由工具栏搜索图标就地展开（App 托管输入框元素，视图只保存值）。 */
+  private searchValue_ = "";
+  loading = false;
 
   constructor(app: App, tab: TabState) {
     super(app, tab);
+    this.el.classList.add("object-browser");
     this.grid = new DataGrid({
       onSort: () => {
         /* 对象清单固定按名称排序 */
       },
       onSelectionChange: (rows) => {
-        this.tab.selectedRows = new Set(rows);
+        if (this.interactionBlocked()) { this.clearSelection(); this.updateFooter(); return; }
+        this.tab.selectedRows = new Set(rows.filter(row => Number.isInteger(row) && !!this.objects[this.visible[row]]));
         app.notifyToolbar();
         this.updateFooter();
-        const selected = this.objects[rows[0]];
+        const selected = this.selectedObject();
         const cfg = app.connectionById(tab.connectionId);
-        if (selected && cfg) app.showObjectDetails(cfg, tab.schema, selected.name, selected.type as ObjectType);
+        if (selected?.descriptor) app.showCatalogDetails(selected.descriptor);
+        else if (selected && cfg && selected.type !== "query") app.showObjectDetails(cfg, tab.schema, selected.name, selected.type as ObjectType);
       },
       onRowDoubleClick: (row) => {
-        const info = this.objects[row];
-        if (!info) return;
-        // 函数 / 存储过程打开例程页，表 / 视图打开数据页
-        if (info.type === "function" || info.type === "procedure") {
-          void app.openRoutineTab(
-            tab.connectionId,
-            tab.schema,
-            info.name,
-            info.type as ObjectType,
-          );
-        } else {
-          void app.openTableTab(
-            tab.connectionId,
-            tab.schema,
-            info.name,
-            info.type as ObjectType,
-          );
-        }
+        if (this.interactionBlocked() || !this.objects[this.visible[row]]) return;
+        tab.selectedRows = new Set([row]); this.grid.setState({ selectedRows: tab.selectedRows });
+        void app.runCommand("object-open");
       },
-      onContextMenu: (x, y) => {
-        app.showContextMenu(GRID_CONTEXT_MENU, x, y);
+      onContextMenu: (x, y, row) => {
+        if (this.interactionBlocked()) { this.clearSelection(); this.updateFooter(); return; }
+        if (row < 0 || !this.objects[this.visible[row]]) tab.selectedRows = new Set();
+        else if (!tab.selectedRows.has(row)) tab.selectedRows = new Set([row]);
+        this.grid.setState({ selectedRows: tab.selectedRows }); app.notifyToolbar();
+        app.showContextMenu(objectTools(tab.objectType, this.selectedObject(), app.connectionById(tab.connectionId)).map(item => ({ ...item, disabledReason: item.disabledReason })), x, y);
       },
     });
     this.el.appendChild(this.grid.el);
     // 网格页脚：左统计（设计图「19 个表 · 已选中 1 行」）
+    this.grid.el.addEventListener("keydown", event => {
+      if (this.interactionBlocked() || (event.target as HTMLElement).matches("input, textarea, select")) return;
+      if (event.key === "Enter" && this.selectedObject()) { event.preventDefault(); void app.runCommand("object-open"); }
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        const rect = this.grid.el.getBoundingClientRect();
+        app.showContextMenu(objectTools(tab.objectType, this.selectedObject(), app.connectionById(tab.connectionId)), rect.left, rect.top);
+      }
+    });
     this.footer = document.createElement("div");
     this.footer.className = "grid-footer";
+    this.footer.id = `object-feedback-${tab.id}`;
+    this.footer.setAttribute("role", "status");
+    this.footer.setAttribute("aria-live", "polite");
+    this.footer.setAttribute("aria-atomic", "true");
+    // 保留原页脚布局；长错误在窄窗中换行，不能被固定高度裁掉。
+    this.footer.style.height = "auto";
+    this.footer.style.whiteSpace = "normal";
+    this.footer.style.overflowWrap = "anywhere";
+    this.footer.style.padding = "6px var(--sp-2)";
+    this.grid.el.setAttribute("aria-describedby", this.footer.id);
     this.el.appendChild(this.footer);
+    this.updateFooter();
   }
 
   private footer: HTMLElement;
 
+  /** 工具栏搜索框值（App 托管的输入框读写）。 */
+  searchValue(): string { return this.searchValue_; }
+  setSearchValue(value: string): void {
+    if (value === this.searchValue_) return;
+    this.searchValue_ = value;
+    this.clearSelection();
+    this.applySearch();
+  }
+
   /** 工具栏「打开表 / 设计表」取选中行对象。 */
-  selectedObject(): import("./types").ObjectInfo | null {
+  selectedObject(): BrowserObject | null {
+    if (this.interactionBlocked()) return null;
     const r = [...this.tab.selectedRows][0];
     if (r === undefined) return null;
-    return this.objects[r] ?? null;
+    return this.objects[this.visible[r]] ?? null;
+  }
+
+  /** 导出使用整组选中对象，不能退化为第一行或以空集合代表全库。 */
+  selectedObjects(): BrowserObject[] {
+    if (this.interactionBlocked()) return [];
+    return [...this.tab.selectedRows].map(row => this.objects[this.visible[row]]).filter((object): object is BrowserObject => !!object);
   }
 
   selectedObjectType(): string {
@@ -5798,72 +6720,65 @@ class ObjectsTabView extends TabView {
     void this.reload();
   }
 
+  isScope(connectionId: string, schema: string): boolean { return this.tab.connectionId === connectionId && this.tab.schema === schema; }
+  private scopeKey(): string { return JSON.stringify([this.tab.connectionId, this.tab.schema, this.tab.objectType]); }
+  private interactionBlocked(): boolean { return this.disposed || this.loading || this.staleResults || this.scope !== this.scopeKey(); }
+  private clearSelection(): void {
+    this.tab.selectedRows.clear(); this.grid?.setState({ selectedRows: this.tab.selectedRows }); this.app.notifyToolbar();
+  }
+
   async reload(): Promise<void> {
+    if (this.disposed) return;
+    const generation = ++this.generation, scope = this.scopeKey();
+    const { connectionId, schema, objectType: filter } = this.tab;
+    if (scope !== this.scope) { this.searchValue_ = ""; this.objects = []; this.staleResults = false; }
+    this.scope = scope; this.metadataNotice = ""; this.metadataKnown = false; this.loading = true;
+    this.el.setAttribute("aria-busy", "true");
+    this.clearSelection(); this.applySearch();
+    const current = () => !this.disposed && generation === this.generation && scope === this.scopeKey();
     try {
-      const filter = this.tab.objectType;
-      if (filter === "function") {
-        // 「函数」分组 / Ribbon「函数」：列出函数与存储过程
-        const routines = await api.listRoutines(this.tab.connectionId, this.tab.schema);
-        this.objects = routines.map(([ty, n]) => ({
-          name: n,
-          type: ty,
-          autoIncrement: 0,
-          updateTime: "",
-          dataLength: 0,
-          engine: "",
-          rows: 0,
-          comment: "",
-        }));
+      let objects: BrowserObject[], notice = "", stale = false;
+      if (filter === "query") {
+        objects = this.app.savedQueries(connectionId, schema).map(favorite => ({ name: favorite.name, type: "query", favorite }));
+      } else if (CATALOG_KINDS.includes(filter)) {
+        const kinds = filter === "function" ? ["function", "procedure"] : [filter];
+        const catalog = await this.app.navigationCatalog(connectionId, schema, kinds);
+        if (!current()) return;
+        notice = catalogNotice(Object.fromEntries(kinds.map(kind => [kind, catalog.sections[kind] ?? { state: "unknown", reason: "后端未提供此类别的读取状态" }])));
+        objects = catalog.objects.map(descriptor => ({ name: descriptor.object.name, type: descriptor.object.kind as ObjectType, descriptor }));
+        if (!objects.length && notice && this.objects.length) { objects = this.objects; stale = true; }
       } else {
-        const list = await api.listObjects(this.tab.connectionId, this.tab.schema);
-        // 按来源过滤：树上从「表」分组进来只展示表，「视图」分组只展示视图
-        this.objects =
-          filter === "table" || filter === "view"
-            ? list.filter((o) => o.type === filter)
-            : list;
+        const list = await api.listObjects(connectionId, schema);
+        objects = filter === "table" || filter === "view" ? list.filter(object => object.type === filter) : list;
       }
-      this.visible = this.objects.map((_, i) => i);
-      this.renderData();
-      this.app.renderStatus();
+      if (!current()) return;
+      this.objects = objects; this.metadataNotice = notice; this.metadataKnown = !notice; this.staleResults = stale;
     } catch (e) {
-      this.app.toast("error", `无法列出对象：${String(e)}`);
+      if (!current()) return;
+      this.metadataNotice = `加载失败：${String(e)}。${this.objects.length ? "当前保留上次已加载清单，仅供核对；" : "尚未取得对象清单；"}请刷新后核对。`;
+      this.metadataKnown = false; this.staleResults = true;
+      this.app.toast("error", `对象列表加载失败：${String(e)}`);
+    } finally {
+      if (current()) {
+        this.loading = false; this.el.setAttribute("aria-busy", "false");
+        this.applySearch(); this.app.renderStatus(); this.app.notifyToolbar();
+      }
     }
   }
 
+  private applySearch(): void {
+    const search = this.searchValue_.trim().toLocaleLowerCase();
+    this.visible = this.objects.flatMap((object, index) => (object.descriptor?.display_name ?? object.name).toLocaleLowerCase().includes(search) ? [index] : []);
+    this.renderData();
+  }
+
   private renderData(): void {
-    const fmtSize = (n: number) =>
-      n >= 1024 * 1024
-        ? `${(n / 1024 / 1024).toFixed(2)} MB`
-        : n >= 1024
-          ? `${Math.max(1, Math.round(n / 1024))} KB`
-          : n > 0
-            ? `${n} B`
-            : "";
     this.grid.setData({
-      columns: [
-        { name: "名", type: "text", nullable: false, primary_key: false, auto_increment: false },
-        { name: "自动递增值", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
-        { name: "修改日期", type: "datetime", nullable: true, primary_key: false, auto_increment: false },
-        { name: "数据长度", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
-        { name: "引擎", type: "text", nullable: true, primary_key: false, auto_increment: false },
-        { name: "行", type: "bigint", nullable: true, primary_key: false, auto_increment: false },
-        { name: "注释", type: "text", nullable: true, primary_key: false, auto_increment: false },
-      ],
-      rows: this.visible.map((i) => {
-        const o = this.objects[i];
-        return [
-          o.name,
-          o.autoIncrement > 0 ? String(o.autoIncrement) : "0",
-          o.updateTime || "",
-          fmtSize(o.dataLength),
-          o.engine,
-          String(o.rows),
-          o.comment,
-        ];
-      }),
-      rightAlign: ["自动递增值", "数据长度", "行"],
+      ...objectGrid(this.tab.objectType, this.visible.map(i => this.objects[i]), false),
+      selectedRows: this.tab.selectedRows,
+      rightAlign: ["数据大小", "行数", "自增值"],
       rowIcons: this.visible.map((i) =>
-        this.objects[i].type === "view"
+        this.objects[i].type === "query" ? "info_pane_query" : this.objects[i].type === "view"
           ? "info_pane_view"
           : this.objects[i].type === "function" || this.objects[i].type === "procedure"
             ? "info_pane_function"
@@ -5872,27 +6787,36 @@ class ObjectsTabView extends TabView {
       showRowNumbers: false,
       readOnly: true,
     });
-    // 参考截图实测列宽（物理px ÷1.25）：名245.6 自动递增88.8 修改日期137.6
-    // 数据长度108 引擎88.8 行88.8 注释137.6
-    this.grid.setColWidths([245.6, 88.8, 137.6, 108, 88.8, 88.8, 137.6]);
+    // 不同类别各自配置列宽；表的可选自增值列由网格补齐默认宽度。
+    this.grid.setColWidths(CATALOG_KINDS.includes(this.tab.objectType) || this.visible.some(i => !!this.objects[i].descriptor) ? [280, 120, 180, 320, 140] : this.tab.objectType === "query" ? [240, 180, 520] : this.tab.objectType === "view" ? [280, 180, 320] : [240, 160, 110, 100, 90, 240]);
     this.updateFooter();
   }
 
-  /** 页脚统计（设计图：左统计 + 右留白）。 */
+  /** 页脚始终呈现加载、完整性、空结果和筛选状态。 */
   private updateFooter(): void {
-    const kind =
-      this.tab.objectType === "table"
-        ? "表"
-        : this.tab.objectType === "view"
-          ? "视图"
-          : this.tab.objectType === "function"
-            ? "函数"
-            : "对象";
-    const sel = this.tab.selectedRows.size;
-    this.footer.textContent = `${this.visible.length} 个${kind}${sel ? ` · 已选中 ${sel} 行` : ""}`;
+    const kind = objectLabel(this.tab.objectType);
+    const count = this.visible.length, total = this.objects.length;
+    const selection = !this.interactionBlocked() && this.tab.selectedRows.size ? ` · 已选中 ${this.tab.selectedRows.size} 行` : "";
+    const summary = this.searchValue_.trim() ? `显示 ${count} / ${total} 个${kind}` : `${count} 个${kind}`;
+    if (this.loading) {
+      this.footer.textContent = `正在加载${kind}清单…${total ? ` · ${summary}（上次已加载，仅供核对）` : ""}`;
+    } else if (this.metadataNotice) {
+      this.footer.textContent = `${this.metadataNotice}${total ? ` · ${summary}${this.staleResults ? "（上次已加载，仅供核对）" : "（当前可见清单，可能不完整）"}` : " · 尚不能确认当前类别为空"}${selection}`;
+    } else if (!this.metadataKnown) {
+      this.footer.textContent = "尚未加载对象清单";
+    } else if (!total) {
+      this.footer.textContent = this.tab.objectType === "query" ? "当前数据库没有已保存查询" : `当前数据库没有${kind}`;
+    } else if (!count) {
+      this.footer.textContent = `没有匹配的${kind} · 共 ${total} 个${kind}`;
+    } else {
+      this.footer.textContent = `${summary}${selection}`;
+    }
+    this.footer.setAttribute("aria-live", !this.loading && this.metadataNotice ? "assertive" : "polite");
+    this.footer.style.color = this.metadataNotice ? "var(--text-secondary)" : "";
   }
 
   destroy(): void {
+    this.disposed = true; ++this.generation;
     this.grid.dispose();
   }
 }
@@ -5909,32 +6833,50 @@ class DataTabView extends TabView {
   private pendingInserts: (string | null)[][] = [];
   /** 待插入行的修改。 */
   private pendingInsertEdits = new Map<number, Map<string, string | null>>();
-  /** 隐藏的列名（「列」菜单）。 */
+  /** 手动事务内已执行但未提交的更改（提交事务前一直显示新值，但不再标记待提交）。 */
+  private txAppliedUpdates = new Map<number, Map<string, string | null>>();
+  private txAppliedDeletes = new Set<number>();
+  private txAppliedInserts: (string | null)[][] = [];
+  private rowDraftTokens = new WeakMap<object, string>();
+  private reloadingAfterLeave = false;
+  /** 表字段以真实 name 标识，隐藏列不移除行草稿。 */
   private hiddenCols = new Set<string>();
+  /** 表单视图容器与当前记录索引（仅表单模式使用）。 */
+  private formHost!: HTMLElement;
+  private formIndex = 0;
+  private columnSidebar: ColumnSidebar;
   private editingCol = "";
   /** 内联筛选行（草稿）：一行一个括号组。行内多条条件按 cond.logic 连接
    *  （默认 OR），行与行按 line.logic 并列连接（默认 AND），
    *  直接对应 a = 1 AND (b = 2 OR c = 3) AND d = 4。 */
   private filterLines: {
     logic?: import("./types").FilterLogic;
-    conds: { col: string; op: string; val: string; logic?: import("./types").FilterLogic }[];
+    conds: { col: string; op: string; val: string; touched?: boolean; logic?: import("./types").FilterLogic }[];
   }[] = [];
-  private caseSensitive = false;
   private sortRows: import("./types").SortRule[] = [];
   /** 编辑草稿与已应用状态分离；隐藏面板不丢失草稿。 */
   private barMode: "filter" | "sort" | null = null;
   private sortRowsEl!: HTMLElement;
+  private sortCountEl: HTMLElement | null = null;
+  /** 拖拽排序时记录的源行下标（null 表示不在拖拽中）。 */
+  private dragSortFrom: number | null = null;
   private requestVersion = 0;
   private filterBarEl!: HTMLElement;
   private filterRowsEl!: HTMLElement;
   private filterPlaceholderEl!: HTMLElement;
+  private filterCountEl: HTMLElement | null = null;
+  /** 预览开关和格式跟随本数据页生命周期；切页保留，销毁视图自然释放。 */
+  previewFormat: "text" | "hex" | "image" | "web" = "text";
+  previewPinned = false;
   /** 单元格内容面板（按「文本▼」格式展示焦点单元格）。 */
   private cellPreviewEl!: HTMLElement;
+  /** 载入中 / 提交中（工具栏禁用与事务门禁读取）。 */
+  loading = false;
 
   constructor(app: App, tab: TabState) {
     super(app, tab);
 
-    this.caseSensitive = tab.filters.some((l) => l.conds.some((c) => c.case_sensitive));
+    this.el.classList.add("data-grid-controls");
     this.sortRows = this.appliedSortRules().map((r) => ({ ...r }));
     // 顶部内联筛选栏（添加条件 / AND、OR / 大小写 / 多字段排序）
     this.filterBarEl = this.buildFilterBar();
@@ -5949,6 +6891,7 @@ class DataTabView extends TabView {
           col: c.column,
           op: c.operator,
           val: c.value,
+          touched: true,
           logic: j === 0 ? undefined : c.logic ?? "OR",
         })),
       }));
@@ -5957,10 +6900,16 @@ class DataTabView extends TabView {
 
     this.grid = new DataGrid({
       onEditStart: (row, col) => {
-        const value = this.displayRows[row]?.[col] ?? null;
+        if (this.loading || this.committing) {
+          this.app.toast("info", "表格正在载入或提交，请稍候");
+          return;
+        }
+        // 使用已按可见列映射、包含草稿的网格值，不能用显示列索引读取完整行。
+        const value = this.grid.rows[row]?.[col] ?? null;
         this.editingCol = this.grid.columns[col]?.name ?? "";
         this.grid.beginEdit(row, col, value);
       },
+      onEditBegin: () => { this.updateCellPreview(); },
       onEditEnd: (row, _col, value) => {
         this.applyEdit(row, this.editingCol, value);
       },
@@ -5972,6 +6921,20 @@ class DataTabView extends TabView {
         this.app.handleColumnSelected(this.tab, name);
         this.app.renderStatus();
       },
+      onHeaderContextMenu: (name, _index, x, y) => {
+        // 表头右键：升序 / 降序 / 移除排序，与顶部排序面板同一数据源、立即联动。
+        if (!name) return;
+        this.app.headerSortColumn = name;
+        const cur = this.sortRows.find((r) => r.column === name);
+        this.app.showContextMenu([
+          { id: "header-sort-asc", label: "ASC 升序排序", checked: cur?.ascending === true },
+          { id: "header-sort-desc", label: "DESC 降序排序", checked: cur?.ascending === false },
+          { id: "header-sort-remove", label: "移除排序", disabled: !cur },
+          { separator: true },
+          { id: "grid-filter", label: "筛选..." },
+          { id: "grid-sort", label: "排序..." },
+        ], x, y);
+      },
       onCellFocus: () => {
         this.updateCellPreview();
       },
@@ -5979,12 +6942,21 @@ class DataTabView extends TabView {
         this.app.showContextMenu(GRID_CONTEXT_MENU, x, y);
       },
     });
-    this.el.appendChild(this.grid.el);
+    const body = document.createElement("div"); body.className = "data-grid-body";
+    this.columnSidebar = new ColumnSidebar(`data-columns-${crypto.randomUUID()}`, () => this.allColumns().map(name => ({ id: name, name })), () => this.hiddenColumns(), ids => this.setHiddenColumns(ids));
+    this.formHost = document.createElement("div");
+    this.formHost.className = "data-form-view-host";
+    this.formHost.hidden = true;
+    body.append(this.grid.el, this.formHost, this.columnSidebar.el); this.el.appendChild(body);
 
     // 单元格内容面板
     this.cellPreviewEl = document.createElement("div");
     this.cellPreviewEl.className = "cell-preview";
+    // 未选中任何内容时不该占高度，否则表下方会长期挂着一条空面板
+    this.cellPreviewEl.style.display = "none";
     this.el.appendChild(this.cellPreviewEl);
+    // 「文本」预览只在选中内容时出现（编辑单元格或拖选单元格文本）。
+    document.addEventListener("selectionchange", this.selectionListener);
 
     this.footer = document.createElement("div");
     this.footer.className = "grid-footer";
@@ -6000,33 +6972,74 @@ class DataTabView extends TabView {
     return this.tab.page?.rows.length ?? 0;
   }
 
-  /** 网格当前显示的行（原行 + 追加行，含未提交修改）。 */
+  private readOnlyReason(): string {
+    if (this.tab.datasourceStale) return "数据源已变化，请重新载入后再编辑";
+    if (this.tab.objectType === "view") return "视图数据只读";
+    if (this.app.connectionById?.(this.tab.connectionId)?.read_only) return "此连接只读";
+    // 查询页持有的手动事务未提交时，禁止同一连接的表数据页以自动提交方式混写。
+    const transaction = this.app.manualTransactionFor?.(this.tab.connectionId);
+    if (transaction?.active && transaction.owner !== this.tab.id) return "此连接有手动事务，请先在事务页面提交或回滚，再编辑表数据";
+    if (this.app.manualTransactionIsBusy?.(this.tab.connectionId)) return "事务操作正在进行，请稍候";
+    return "";
+  }
+
+  /** 网格当前显示的行（原行 + 追加行，含未提交修改与事务内已应用更改）。 */
   private get displayRows(): (string | null)[][] {
     const page = this.tab.page;
     if (!page) return [];
-    const inserted = this.pendingInserts.map((row, i) => {
+    const applyEdits = (row: (string | null)[], edits: Map<string, string | null> | undefined) => {
       const out = [...row];
-      const edits = this.pendingInsertEdits.get(i);
       if (edits) {
         page.columns.forEach((c, ci) => {
           if (edits.has(c.name)) out[ci] = edits.get(c.name) ?? null;
         });
       }
       return out;
-    });
-    const original = page.rows.map((row, r) => {
-      const edits = this.pendingUpdates.get(r);
-      if (!edits) return [...row];
-      const out = [...row];
-      page.columns.forEach((c, ci) => {
-        if (edits.has(c.name)) out[ci] = edits.get(c.name) ?? null;
-      });
-      return out;
-    });
+    };
+    // 事务内已应用的插入行在前（按创建顺序），其后是尚未执行的待插入行。
+    const inserted = [
+      ...this.txAppliedInserts,
+      ...this.pendingInserts.map((row, i) => applyEdits(row, this.pendingInsertEdits.get(i))),
+    ];
+    const original = page.rows.map((row, r) =>
+      applyEdits(row, this.pendingUpdates.get(r) ?? this.txAppliedUpdates.get(r)));
     return [...original, ...inserted];
   }
 
   hasPendingChanges(): boolean { return this.hasPending(); }
+  draftDirty(): boolean { return this.hasPending(); }
+  discardDraft(): void {
+    this.pendingUpdates.clear(); this.pendingDeletes.clear(); this.pendingInserts = []; this.pendingInsertEdits.clear();
+    this.tab.dirty = false; this.applyData();
+  }
+  draftBusy(): boolean { return this.committing; }
+  flushDraft(): void {
+    this.grid.flushEditing();
+  }
+  captureDraft(): Pick<DraftSnapshot, "kind" | "baseline" | "payload"> {
+    const page = this.tab.page;
+    const rows = [...new Set([...this.pendingUpdates.keys(), ...this.pendingDeletes])].map(index => {
+      const original = page?.rows[index];
+      if (!original) throw new Error("待改行缺少原始快照");
+      let token = this.rowDraftTokens.get(original);
+      if (!token) { token = crypto.randomUUID(); this.rowDraftTokens.set(original, token); }
+      const keys = page!.primary_keys.map(name => [name, original[page!.columns.findIndex(c => c.name === name)]]);
+      const stableKey = keys.length > 0 && keys.every(([, value]) => value !== null && value !== undefined) && page!.rows.filter(row => page!.primary_keys.every(name => {
+        const col = page!.columns.findIndex(c => c.name === name); return col >= 0 && row[col] === original[col];
+      })).length === 1;
+      return { token, identity: { keys, proven_unique: stableKey, requires_validation: true }, original: [...original], changes: [...(this.pendingUpdates.get(index) ?? [])], deleted: this.pendingDeletes.has(index) };
+    });
+    const inserts = this.pendingInserts.map((row, index) => {
+      let token = this.rowDraftTokens.get(row);
+      if (!token) { token = crypto.randomUUID(); this.rowDraftTokens.set(row, token); }
+      return { token, values: [...row], changes: [...(this.pendingInsertEdits.get(index) ?? [])] };
+    });
+    return { kind: "row_changes", baseline: { columns: page?.columns ?? [], primary_keys: page?.primary_keys ?? [], rows: rows.map(row => ({ token: row.token, identity: row.identity, original: row.original })) }, payload: { rows, inserts, requires_validation: true, execution_effects_unknown: this.mutationEffectsUnknown } };
+  }
+  async reloadAfterLeave(): Promise<void> {
+    this.reloadingAfterLeave = true;
+    try { await this.reload(); } finally { this.reloadingAfterLeave = false; }
+  }
 
   private hasPending(): boolean {
     return (
@@ -6038,15 +7051,18 @@ class DataTabView extends TabView {
 
   /** 供工具栏判断行数。 */
   get rowCount(): number {
-    return this.displayRows.length;
+    return this.originalRowCount() + this.pendingInserts.length;
   }
 
-  /** 行标记（新增 / 删除 / 修改）。 */
+  /** 行标记（新增 / 删除 / 修改）；事务内已应用的行不再标记（其状态由事务按钮表达）。 */
   private rowFlags(): Record<number, "insert" | "delete" | "dirty"> {
     const flags: Record<number, "insert" | "delete" | "dirty"> = {};
     const base = this.originalRowCount();
-    this.pendingInserts.forEach((_, i) => {
+    this.txAppliedInserts.forEach((_, i) => {
       flags[base + i] = "insert";
+    });
+    this.pendingInserts.forEach((_, i) => {
+      flags[base + this.txAppliedInserts.length + i] = "insert";
     });
     for (const r of this.pendingDeletes) flags[r] = "delete";
     for (const r of this.pendingUpdates.keys()) {
@@ -6071,13 +7087,40 @@ class DataTabView extends TabView {
 
   /** 切换列显示。 */
   toggleColumn(name: string): void {
-    if (this.hiddenCols.has(name)) {
-      this.hiddenCols.delete(name);
-    } else {
-      if (this.allColumns().length - this.hiddenCols.size <= 1) return;
-      this.hiddenCols.add(name);
-    }
+    if (!this.allColumns().includes(name)) return;
+    const next = this.hiddenColumns();
+    if (next.has(name)) next.delete(name); else next.add(name);
+    this.setHiddenColumns([...next]);
+  }
+
+  private setHiddenColumns(names: string[]): void {
+    const all = this.allColumns(), next = new Set(names.filter(name => all.includes(name)));
+    if (all.length && all.every(name => next.has(name))) return;
+    // 表数据列名唯一：保存列身份，不能把旧显示索引沿用到新的可见列。
+    const selectedName = this.grid.columns[this.grid.selectedColumn]?.name;
+    // 先提交当前单元格输入到本地草稿，再重建可见列映射。
+    this.grid.flushEditing();
+    this.hiddenCols = next;
     this.applyData();
+    this.grid.selectedColumn = selectedName === undefined ? -1 : this.grid.columns.findIndex(column => column.name === selectedName);
+    this.app.handleColumnSelected(this.tab, this.grid.columns[this.grid.selectedColumn]?.name ?? "");
+    this.app.renderStatus();
+    this.columnSidebar.render();
+  }
+
+  columnToolDisabled(): boolean {
+    // 工具栏会重建按钮，每次渲染后重新连接控件状态和焦点返回目标。
+    queueMicrotask(() => {
+      const trigger = document.querySelector<HTMLElement>('.tab-toolbar [data-command="columns"]');
+      if (trigger && this.el.isConnected) this.columnSidebar.bind(trigger);
+    });
+    return !this.allColumns().length;
+  }
+
+  toggleColumnSidebar(trigger?: HTMLElement): void {
+    if (!this.allColumns().length) return;
+    this.grid.flushEditing();
+    this.columnSidebar.toggle(trigger);
   }
 
   /** 原生按钮保留既有紧凑样式，同时支持键盘和清晰可访问名称。 */
@@ -6087,6 +7130,7 @@ class DataTabView extends TabView {
     b.className = "fb-btn fb-act";
     b.textContent = label;
     b.title = title;
+    b.setAttribute("aria-label", title);
     b.addEventListener("click", action);
     return b;
   }
@@ -6097,75 +7141,90 @@ class DataTabView extends TabView {
       : []);
   }
 
-  /** 顶部内联面板：整组条件逻辑、大小写敏感、多字段优先级排序。 */
+  /** 顶部内联面板：头部（标题/计数/说明/主次操作）+ 条件或排序行 + 添加按钮。 */
   private buildFilterBar(): HTMLElement {
     const bar = document.createElement("div");
     bar.className = "filter-bar";
+
     const filterPane = document.createElement("div");
-    filterPane.className = "fb-pane";
+    filterPane.className = "fb-pane fb-filter";
+    this.filterCountEl = document.createElement("span");
+    this.filterCountEl.className = "fb-count";
+    this.filterCountEl.textContent = "0";
+    const filterHead = this.buildPanelHead("data_filter", "筛选", this.filterCountEl, "组内 AND · 组间 OR（可切换）", [
+      this.panelButton("清除", () => {
+        if (this.hasPending()) {
+          this.app.toast("info", "存在未提交的修改，请先提交或回滚");
+          return;
+        }
+        this.filterLines = [];
+        this.renderFilterLines();
+        this.applyFilters();
+      }, "清除筛选"),
+      this.panelButton("应用筛选", () => this.applyFilters()),
+    ]);
     const tools = document.createElement("div");
-    tools.className = "filter-tools";
-    tools.style.height = "auto";
-    tools.style.minHeight = "24px";
-    tools.style.flexWrap = "wrap";
-    tools.appendChild(this.panelButton("＋ 添加条件行", () => this.addFilterLine(), "新增一行条件；同一行内可放多个条件（自动括为一组），行与行并列连接"));
-    const caseLabel = document.createElement("label");
-    caseLabel.style.display = "inline-flex";
-    caseLabel.style.alignItems = "center";
-    caseLabel.style.whiteSpace = "nowrap";
-    const caseInput = document.createElement("input");
-    caseInput.type = "checkbox";
-    caseInput.className = "fb-case";
-    caseInput.checked = this.caseSensitive;
-    caseInput.addEventListener("change", () => (this.caseSensitive = caseInput.checked));
-    caseLabel.append(caseInput, document.createTextNode("大小写敏感"));
-    tools.appendChild(caseLabel);
+    tools.className = "filter-tools fb-subhint";
     this.filterPlaceholderEl = document.createElement("div");
     this.filterPlaceholderEl.className = "filter-placeholder";
-    this.filterPlaceholderEl.textContent = "一行条件为一组：同一行内多个条件自动括起（行内可选 AND / OR），行与行并列连接；删除全部行后应用可清除筛选";
+    this.filterPlaceholderEl.textContent = "一行条件为一组：行内 AND / OR 连接条件，组间 AND / OR 连接各行；＋ 增加下一行组，()＋ 在本行加条件。文本匹配区分大小写；删除全部行后应用可清除筛选。";
     tools.appendChild(this.filterPlaceholderEl);
     this.filterRowsEl = document.createElement("div");
     this.filterRowsEl.className = "filter-rows";
-    const filterActions = document.createElement("div");
-    filterActions.className = "filter-actions";
-    filterActions.appendChild(this.panelButton("应用筛选", () => this.applyFilters()));
-    filterActions.appendChild(this.panelButton("清除筛选", () => {
-      if (this.hasPending()) {
-        this.app.toast("info", "存在未提交的修改，请先提交或回滚");
-        return;
-      }
-      this.filterLines = [];
-      this.renderFilterLines();
-      this.applyFilters();
-    }));
-    filterPane.append(tools, this.filterRowsEl, filterActions);
+    filterPane.append(filterHead, tools, this.filterRowsEl);
 
     const sortPane = document.createElement("div");
-    sortPane.className = "fb-pane";
+    sortPane.className = "fb-pane fb-sort";
+    this.sortCountEl = document.createElement("span");
+    this.sortCountEl.className = "fb-count";
+    this.sortCountEl.textContent = "0";
+    const sortHead = this.buildPanelHead("tab_sort", "排序", this.sortCountEl, "按从上到下的优先级依次生效", [
+      this.panelButton("清除", () => {
+        if (this.hasPending()) {
+          this.app.toast("info", "存在未提交的修改，请先提交或回滚");
+          return;
+        }
+        this.sortRows = [];
+        this.renderSortRows();
+        this.applySort();
+      }, "清除排序"),
+      this.panelButton("应用排序", () => this.applySort()),
+    ]);
     const sortTools = document.createElement("div");
-    sortTools.className = "filter-actions";
+    sortTools.className = "filter-actions sort-add-row";
     sortTools.appendChild(this.panelButton("＋ 添加排序字段", () => this.addSortRow()));
-    const hint = document.createElement("span");
-    hint.className = "filter-placeholder";
-    hint.textContent = "从上到下依次排序（优先级 1 最高）";
-    sortTools.appendChild(hint);
     this.sortRowsEl = document.createElement("div");
     this.sortRowsEl.className = "filter-rows sort-rows";
-    const sortActions = document.createElement("div");
-    sortActions.className = "filter-actions";
-    sortActions.appendChild(this.panelButton("应用排序", () => this.applySort()));
-    sortActions.appendChild(this.panelButton("清除排序", () => {
-      if (this.hasPending()) {
-        this.app.toast("info", "存在未提交的修改，请先提交或回滚");
-        return;
-      }
-      this.sortRows = [];
-      this.renderSortRows();
-      this.applySort();
-    }));
-    sortPane.append(sortTools, this.sortRowsEl, sortActions);
+    sortPane.append(sortHead, this.sortRowsEl, sortTools);
+
     bar.append(filterPane, sortPane);
     return bar;
+  }
+
+  /** 排序 / 筛选共用的面板头：图标 + 标题 + 计数 + 说明 + 右侧操作按钮。 */
+  private buildPanelHead(icon: string, title: string, countEl: HTMLElement, hint: string, actions: HTMLButtonElement[]): HTMLElement {
+    const head = document.createElement("div");
+    head.className = "fb-head";
+    const left = document.createElement("div");
+    left.className = "fb-head-left";
+    const iconEl = document.createElement("span");
+    iconEl.className = "fb-head-icon";
+    iconEl.innerHTML = iconSvgByName(icon);
+    const titleEl = document.createElement("span");
+    titleEl.className = "fb-head-title";
+    titleEl.textContent = title;
+    const hintEl = document.createElement("span");
+    hintEl.className = "fb-head-hint";
+    hintEl.textContent = hint;
+    left.append(iconEl, titleEl, countEl, hintEl);
+    const right = document.createElement("div");
+    right.className = "fb-head-right";
+    actions.forEach((button, index) => {
+      button.classList.add(index === actions.length - 1 ? "fb-primary" : "fb-ghost");
+      right.appendChild(button);
+    });
+    head.append(left, right);
+    return head;
   }
 
   /** 按当前模式显示 / 隐藏面板（null 全隐藏）。 */
@@ -6191,53 +7250,123 @@ class DataTabView extends TabView {
 
   private renderSortRows(): void {
     this.sortRowsEl.innerHTML = "";
-    if (!this.sortRows.length) this.sortRowsEl.textContent = "未设置排序；可添加多个字段";
+    if (this.sortCountEl) this.sortCountEl.textContent = String(this.sortRows.length);
+    if (!this.sortRows.length) {
+      const empty = document.createElement("div");
+      empty.className = "fb-empty";
+      const emptyIcon = document.createElement("span");
+      emptyIcon.className = "fb-empty-icon";
+      emptyIcon.innerHTML = iconSvgByName("tab_sort");
+      const emptyText = document.createElement("div");
+      emptyText.className = "fb-empty-text";
+      const title = document.createElement("div");
+      title.className = "fb-empty-title";
+      title.textContent = "尚未添加排序字段";
+      const sub = document.createElement("div");
+      sub.className = "fb-empty-sub";
+      sub.textContent = "添加字段后，结果将按从上到下的优先级依次排序。";
+      emptyText.append(title, sub);
+      empty.append(emptyIcon, emptyText);
+      this.sortRowsEl.appendChild(empty);
+      return;
+    }
     this.sortRows.forEach((row, i) => {
       const el = document.createElement("div");
       el.className = "filter-line sort-line";
+      el.setAttribute("data-sort-index", String(i));
+
+      const grip = document.createElement("span");
+      grip.className = "fb-grip";
+      grip.title = "拖拽调整优先级";
+      grip.setAttribute("aria-label", "排序优先级 " + (i + 1) + "，拖拽可调整顺序");
+      grip.setAttribute("draggable", "true");
+      grip.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="6" cy="4" r="1.3"/><circle cx="10" cy="4" r="1.3"/><circle cx="6" cy="8" r="1.3"/><circle cx="10" cy="8" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="10" cy="12" r="1.3"/></svg>';
+      grip.addEventListener("dragstart", (event: DragEvent) => {
+        this.dragSortFrom = i;
+        el.classList.add("dragging");
+        try {
+          if (event.dataTransfer) {
+            event.dataTransfer.setData("text/plain", String(i));
+            event.dataTransfer.effectAllowed = "move";
+          }
+        } catch { /* 某些环境没有 DataTransfer */ }
+      });
+      grip.addEventListener("dragend", () => {
+        this.dragSortFrom = null;
+        el.classList.remove("dragging");
+        this.sortRowsEl.querySelectorAll(".sort-line").forEach((node) => node.classList.remove("drag-over"));
+      });
+      el.addEventListener("dragover", (event) => {
+        if (this.dragSortFrom === null) return;
+        event.preventDefault();
+        el.classList.add("drag-over");
+      });
+      el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+      el.addEventListener("drop", (event) => {
+        event.preventDefault();
+        el.classList.remove("drag-over");
+        const from = this.dragSortFrom;
+        if (from === null || from === i) return;
+        const moved = this.sortRows.splice(from, 1)[0];
+        if (!moved) return;
+        this.sortRows.splice(i, 0, moved);
+        this.dragSortFrom = null;
+        this.renderSortRows();
+      });
+
       const priority = document.createElement("span");
       priority.className = "fb-priority";
-      priority.textContent = `${i + 1}.`;
-      const col = document.createElement("span");
+      priority.textContent = String(i + 1);
+
+      const col = document.createElement("select");
       col.className = "fb-txt";
-      col.textContent = row.column;
-      col.setAttribute("aria-label", `排序字段 ${i + 1}`);
+      for (const name of this.allColumns().filter(name => name === row.column || !this.sortRows.some(rule => rule.column === name))) {
+        const option = document.createElement("option"); option.value = name; option.textContent = name; col.appendChild(option);
+      }
+      col.value = row.column;
+      col.setAttribute("aria-label", "排序字段 " + (i + 1));
       col.title = "点击修改排序字段";
-      col.addEventListener("click", () => {
-        this.showPicker(col, this.allColumns().map((name) => ({ value: name, label: name })), row.column, (v) => {
-          row.column = v;
-          this.renderSortRows();
-        });
+      col.addEventListener("change", () => {
+        if (this.sortRows.some((rule, index) => index !== i && rule.column === col.value)) { col.value = row.column; return; }
+        row.column = col.value;
+        this.renderSortRows();
       });
-      const dir = document.createElement("span");
+
+      const dir = document.createElement("button"); dir.type = "button";
       dir.className = "fb-txt fb-dir";
-      dir.textContent = row.ascending ? "↑" : "↓";
-      dir.setAttribute("aria-label", `排序方向 ${i + 1}`);
+      dir.textContent = row.ascending ? "ASC" : "DESC";
+      dir.dataset.dir = row.ascending ? "asc" : "desc";
+      dir.setAttribute("aria-label", "排序方向 " + (i + 1) + "：" + (row.ascending ? "ASC 升序" : "DESC 降序") + "，点击切换");
       dir.title = row.ascending ? "升序（点击切换为降序）" : "降序（点击切换为升序）";
       dir.addEventListener("click", () => {
         row.ascending = !row.ascending;
         this.renderSortRows();
       });
+
       const move = (delta: number) => {
         const target = i + delta;
         if (target < 0 || target >= this.sortRows.length) return;
         [this.sortRows[i], this.sortRows[target]] = [this.sortRows[target], this.sortRows[i]];
         this.renderSortRows();
       };
-      const up = this.panelButton("▲", () => move(-1), "上移");
+      const up = this.panelButton("", () => move(-1), "上移"); up.innerHTML = iconSvgByName("dbn_prior");
       up.disabled = i === 0;
-      const down = this.panelButton("▼", () => move(1), "下移");
+      const down = this.panelButton("", () => move(1), "下移"); down.innerHTML = iconSvgByName("dbn_next");
       down.disabled = i === this.sortRows.length - 1;
-      el.append(priority, col, dir, up, down, this.panelButton("×", () => {
+      const remove = this.panelButton("×", () => {
         this.sortRows.splice(i, 1);
         this.renderSortRows();
-      }, "删除排序字段"));
+      }, "删除排序字段");
+      remove.classList.add("fb-del");
+      const grow = document.createElement("span");
+      grow.className = "fb-grow";
+      el.append(grip, priority, col, dir, up, down, grow, remove);
       this.sortRowsEl.appendChild(el);
     });
   }
 
   /** 新增一行（单个条件）。同一行内可继续追加条件，整行括为一组。 */
-  private addFilterLine(): void {
+  private addFilterLine(after = this.filterLines.length - 1): void {
     const cols = this.allColumns();
     if (!cols.length) {
       this.app.toast("info", "当前表还没有列");
@@ -6245,10 +7374,10 @@ class DataTabView extends TabView {
     }
     const selected = this.grid.columns[this.grid.selectedColumn]?.name;
     // 新行沿用上一行的连接方式，保持组语义自然延续
-    const last = this.filterLines[this.filterLines.length - 1];
-    this.filterLines.push({
+    const last = this.filterLines[after];
+    this.filterLines.splice(after + 1, 0, {
       logic: this.filterLines.length ? last?.logic ?? "AND" : undefined,
-      conds: [{ col: selected ?? cols[0], op: "=", val: "" }],
+      conds: [{ col: selected && cols.includes(selected) ? selected : cols[0], op: "=", val: "", touched: false }],
     });
     this.renderFilterLines();
   }
@@ -6263,6 +7392,7 @@ class DataTabView extends TabView {
       col: this.grid.columns[this.grid.selectedColumn]?.name ?? cols[0],
       op: "=",
       val: "",
+      touched: false,
       logic: last?.logic ?? "OR",
     });
     this.renderFilterLines();
@@ -6277,102 +7407,47 @@ class DataTabView extends TabView {
     this.renderFilterLines();
   }
 
-  /** 筛选运算符：内部值（小写，后端兼容）→ SQL 显示文本。 */
+  /** 筛选运算符：内部值（小写，后端兼容）→ SQL 显示文本。IN/NOT IN 值为逗号分隔列表。 */
   private static readonly FILTER_OPS: [string, string][] = [
     ["=", "="], ["<>", "<>"], [">", ">"], [">=", ">="], ["<", "<"], ["<=", "<="],
-    ["like", "LIKE"], ["not like", "NOT LIKE"], ["is null", "IS NULL"], ["is not null", "IS NOT NULL"],
+    ["like", "LIKE"], ["not like", "NOT LIKE"], ["in", "IN"], ["not in", "NOT IN"],
+    ["is null", "IS NULL"], ["is not null", "IS NOT NULL"],
   ];
-
-  /** 在锚点下方弹出轻量选项列表（无边框文本样式配套；点击别处 / 再点关闭）。 */
-  private showPicker(
-    anchor: HTMLElement,
-    options: { value: string; label: string }[],
-    current: string | null,
-    onPick: (value: string) => void,
-  ): void {
-    document.querySelectorAll(".fb-picker").forEach((m) => m.remove());
-    const menu = document.createElement("div");
-    menu.className = "menu-popup fb-picker";
-    for (const o of options) {
-      const row = document.createElement("div");
-      row.className = "menu-entry" + (o.value === current ? " current" : "");
-      const label = document.createElement("div");
-      label.className = "menu-entry-label";
-      label.textContent = o.label;
-      row.appendChild(label);
-      row.addEventListener("mouseup", () => {
-        menu.remove();
-        document.removeEventListener("mousedown", close, true);
-        onPick(o.value);
-      });
-      menu.appendChild(row);
-    }
-    const close = (e: MouseEvent) => {
-      if (!menu.contains(e.target as Node)) {
-        menu.remove();
-        document.removeEventListener("mousedown", close, true);
-      }
-    };
-    document.addEventListener("mousedown", close, true);
-    document.body.appendChild(menu);
-    const rect = anchor.getBoundingClientRect();
-    const box = menu.getBoundingClientRect();
-    let left = rect.left;
-    let top = rect.bottom + 1;
-    if (left + box.width > window.innerWidth - 4) left = Math.max(2, window.innerWidth - box.width - 4);
-    if (top + box.height > window.innerHeight - 4) top = Math.max(2, rect.top - box.height - 1);
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-  }
 
   /** AND / OR 内联文本，点击就地切换（不重绘整行）。 */
   private joinText(
     value: import("./types").FilterLogic,
     on: (v: import("./types").FilterLogic) => void,
   ): HTMLElement {
-    const s = document.createElement("span");
-    s.className = "fb-join-text";
-    s.textContent = value;
-    s.title = "点击切换 AND / OR";
-    s.addEventListener("click", () => {
-      const next = s.textContent === "AND" ? "OR" : "AND";
-      s.textContent = next;
-      on(next);
-    });
-    return s;
+    return filterJoinControl(value, on);
   }
 
   /** 单条条件 chip：列名 / 操作符 / 值均为无边框文本，点击修改。 */
   private buildCondChip(
-    c: { col: string; op: string; val: string; logic?: import("./types").FilterLogic },
+    c: { col: string; op: string; val: string; touched?: boolean; logic?: import("./types").FilterLogic },
     k: number,
     j: number,
   ): HTMLElement {
     const chip = document.createElement("div");
     chip.className = "cond-chip";
-    const col = document.createElement("span");
+    const col = document.createElement("select");
     col.className = "fb-txt";
-    col.textContent = c.col;
+    for (const name of this.allColumns()) { const option = document.createElement("option"); option.value = name; option.textContent = name; col.appendChild(option); }
+    col.value = c.col;
     col.setAttribute("aria-label", `筛选字段 ${k + 1}.${j + 1}`);
     col.title = "点击修改字段";
-    col.addEventListener("click", () => {
-      this.showPicker(col, this.allColumns().map((name) => ({ value: name, label: name })), c.col, (v) => {
-        c.col = v;
-        this.renderFilterLines();
-      });
+    col.addEventListener("change", () => {
+      c.col = col.value;
     });
-    const opDisplay = (raw: string) =>
-      DataTabView.FILTER_OPS.find(([v]) => v === raw)?.[1] ?? raw;
-    const op = document.createElement("span");
+    const op = document.createElement("select");
     op.className = "fb-txt fb-op-txt";
-    op.textContent = opDisplay(c.op);
+    for (const [value, label] of DataTabView.FILTER_OPS) { const option = document.createElement("option"); option.value = value; option.textContent = label; op.appendChild(option); }
+    op.value = c.op;
     op.setAttribute("aria-label", `筛选运算符 ${k + 1}.${j + 1}`);
     op.title = "点击修改操作符";
-    op.addEventListener("click", () => {
-      this.showPicker(op, DataTabView.FILTER_OPS.map(([v, label]) => ({ value: v, label })), c.op, (v) => {
-        c.op = v;
-        this.renderFilterLines();
-      });
+    op.addEventListener("change", () => {
+      c.op = op.value;
+      chip.querySelector(".fb-val")?.replaceWith(this.buildValText(c, k, j));
     });
     chip.append(col, op, this.buildValText(c, k, j));
     const del = this.panelButton("×", () => this.removeCond(k, j), "删除该条件");
@@ -6383,61 +7458,51 @@ class DataTabView extends TabView {
 
   /** 值文本：点击就地出现输入框，Enter 提交并应用、失焦提交、Esc 取消。 */
   private buildValText(
-    c: { op: string; val: string },
+    c: { op: string; val: string; touched?: boolean },
     k: number,
     j: number,
   ): HTMLElement {
-    const s = document.createElement("span");
-    s.className = "fb-txt fb-val";
-    s.textContent = c.val;
-    if (!c.val) s.classList.add("empty");
-    if (/null/i.test(c.op)) s.style.display = "none";
-    s.tabIndex = 0;
-    s.setAttribute("aria-label", `筛选值 ${k + 1}.${j + 1}`);
-    s.title = "点击输入值（LIKE 可用 % 与 _ 通配；空字符串也是有效值）";
-    s.addEventListener("click", () => {
-      const input = document.createElement("input");
-      input.className = "fb-edit";
-      input.type = "text";
-      input.setAttribute("aria-label", `筛选值 ${k + 1}.${j + 1}`);
-      input.value = c.val;
-      s.replaceWith(input);
-      input.focus();
-      let done = false;
-      const commit = (apply: boolean, runApply = false) => {
-        if (done) return;
-        done = true;
-        if (apply) c.val = input.value;
-        this.renderFilterLines();
-        if (apply && runApply && c.val) void this.applyFilters();
-      };
-      input.addEventListener("keydown", (e) => {
-        e.stopPropagation();
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commit(true, true);
-        }
-        if (e.key === "Escape") {
-          e.preventDefault();
-          commit(false);
-        }
-      });
-      input.addEventListener("blur", () => commit(true));
-    });
-    return s;
+    return filterValueControl(c, `筛选值 ${k + 1}.${j + 1}`, enter => { if (enter) void this.applyFilters(); });
   }
 
-  /** 重建筛选行 DOM：一行 = [行连接] （ chip OR chip ） ＋ ✕，无边框文本样式。 */
+  /** 重建筛选行 DOM：条件组（左侧组标签/轨道 + 条件行 + 组内加条件），组间虚线分隔。 */
   private renderFilterLines(): void {
     this.filterRowsEl.innerHTML = "";
-    this.filterPlaceholderEl.style.display = this.filterLines.length ? "none" : "";
+    const totalConds = this.filterLines.reduce((count, line) => count + line.conds.length, 0);
+    if (this.filterCountEl) this.filterCountEl.textContent = this.filterLines.length + " 组 · " + totalConds + " 条件";
+    this.filterPlaceholderEl.style.display = "";
+    if (!this.filterLines.length) {
+      const emptyAdd = this.panelButton("＋ 添加条件组", () => this.addFilterLine(), "添加条件组");
+      emptyAdd.classList.add("fb-add-group");
+      this.filterRowsEl.appendChild(emptyAdd);
+      return;
+    }
     this.filterLines.forEach((line, k) => {
       const el = document.createElement("div");
-      el.className = "filter-line";
-      // 首行无连接方式；其余行点击文本切换与上一行条件组的 AND / OR
-      if (k > 0) el.appendChild(this.joinText(line.logic ?? "AND", (v) => (line.logic = v)));
+      el.className = "filter-line fb-group";
+      el.setAttribute("data-group-index", String(k));
+
+      const main = document.createElement("div");
+      main.className = "fb-group-main";
+
+      const side = document.createElement("div");
+      side.className = "fb-group-side";
+      if (k > 0) {
+        // 组间连接方式：点击胶囊在 AND / OR 间切换
+        side.appendChild(this.joinText(line.logic ?? "AND", (v) => (line.logic = v)));
+      } else {
+        const tag = document.createElement("span");
+        tag.className = "fb-group-tag";
+        tag.textContent = "WHERE";
+        side.appendChild(tag);
+      }
+      const rail = document.createElement("span");
+      rail.className = "fb-group-rail";
+      side.appendChild(rail);
+
       const group = document.createElement("div");
       group.className = "cond-group";
+      // 括号语义保留在 DOM（多条件组），视觉上由左侧轨道表达，不显示括号字符。
       if (line.conds.length > 1) {
         const brOpen = document.createElement("span");
         brOpen.className = "fb-bracket";
@@ -6445,8 +7510,32 @@ class DataTabView extends TabView {
         group.appendChild(brOpen);
       }
       line.conds.forEach((c, j) => {
-        if (j > 0) group.appendChild(this.joinText(c.logic ?? "OR", (v) => (c.logic = v)));
-        group.appendChild(this.buildCondChip(c, k, j));
+        const condRow = document.createElement("div");
+        condRow.className = "fb-cond-row";
+        if (j === 0) {
+          // 该组第一条条件默认与组起点 AND，用静态 A 标记（与设计一致）
+          const firstTag = document.createElement("span");
+          firstTag.className = "fb-cond-tag";
+          firstTag.textContent = "A";
+          condRow.appendChild(firstTag);
+        } else {
+          // 行内连接：可见 A / O 方形徽标；真实连接控件保留（离屏）以维持交互与测试契约
+          const conn = document.createElement("button");
+          conn.type = "button";
+          conn.className = "fb-cond-conn";
+          conn.textContent = (c.logic ?? "OR") === "OR" ? "O" : "A";
+          conn.title = "点击切换行内 AND / OR";
+          conn.setAttribute("aria-label", "行内条件连接：" + ((c.logic ?? "OR") === "OR" ? "OR" : "AND") + "，点击切换");
+          conn.addEventListener("click", () => {
+            c.logic = (c.logic ?? "OR") === "OR" ? "AND" : "OR";
+            this.renderFilterLines();
+          });
+          const join = this.joinText(c.logic ?? "OR", (v) => (c.logic = v));
+          join.classList.add("fb-join-hidden");
+          condRow.append(conn, join);
+        }
+        condRow.appendChild(this.buildCondChip(c, k, j));
+        group.appendChild(condRow);
       });
       if (line.conds.length > 1) {
         const brClose = document.createElement("span");
@@ -6454,22 +7543,34 @@ class DataTabView extends TabView {
         brClose.textContent = "）";
         group.appendChild(brClose);
       }
-      el.appendChild(group);
-      el.appendChild(this.panelButton("＋", () => this.addLineCond(k), "在本行追加条件（整行括为一组）"));
-      el.appendChild(this.panelButton("✕", () => {
+      const addCond = this.panelButton("＋ 在本组加条件", () => this.addLineCond(k), "在本组追加条件");
+      addCond.classList.add("fb-add-cond");
+      group.appendChild(addCond);
+
+      main.append(side, group);
+      // 兼容既有交互契约：保留 +（下一组）/ ()+（本组加条件）/ ✕（删除整组），前两者离屏隐藏。
+      const addNext = this.panelButton("＋", () => this.addFilterLine(k), "在本行后增加下一行条件组");
+      const addCondLegacy = this.panelButton("()＋", () => this.addLineCond(k), "在本行追加条件（整行括为一组）");
+      [addNext, addCondLegacy].forEach((button) => button.classList.add("fb-legacy-hidden"));
+      const delLine = this.panelButton("✕", () => {
         this.filterLines.splice(k, 1);
         this.renderFilterLines();
-      }, "删除整行"));
+      }, "删除整行");
+      delLine.classList.add("fb-group-del");
+      el.append(main, addNext, addCondLegacy, delLine);
       this.filterRowsEl.appendChild(el);
     });
+    const addGroup = this.panelButton("＋ 添加条件组", () => this.addFilterLine(this.filterLines.length - 1), "添加条件组");
+    addGroup.classList.add("fb-add-group");
+    this.filterRowsEl.appendChild(addGroup);
   }
 
-  /** 工具栏「筛选」：切换筛选面板（再点隐藏），首次打开自动加一行空条件。 */
+  /** 打开筛选只显示草稿；仅用户点击加号才新增条件。 */
   focusFilter(): void {
     this.barMode = this.barMode === "filter" ? null : "filter";
     this.renderBar();
     if (this.barMode === "filter") {
-      if (!this.filterLines.length) this.addFilterLine();
+      this.renderFilterLines();
       const last = this.filterRowsEl.querySelector<HTMLInputElement>(".fb-val");
       last?.focus();
     }
@@ -6485,13 +7586,36 @@ class DataTabView extends TabView {
     }
   }
 
-  /** 应用筛选：一行一括号组（行内多条自动括起），行间按行连接方式并列，
-   *  直接对应 a=1 AND (b=2 OR c=3) AND d=4；空串是有效值，不悄悄丢弃条件。 */
-  private applyFilters(): void {
+  /** 表头右键排序：与排序面板共用 sortRows，立即应用并同步面板显示。 */
+  applyHeaderSort(column: string, mode: "asc" | "desc" | "remove"): void {
+    if (!this.allColumns().includes(column) || !this.allowQueryChange()) return;
     if (this.hasPending()) {
       this.app.toast("info", "存在未提交的修改，请先提交或回滚");
       return;
     }
+    if (this.transactionOwnedByThisTab()) {
+      this.app.toast("info", "手动事务进行中：请先提交或回滚事务，再修改排序");
+      return;
+    }
+    const rules = this.sortRows.map(rule => ({ ...rule })), index = rules.findIndex(rule => rule.column === column);
+    if (mode === "remove") { if (index >= 0) rules.splice(index, 1); }
+    else if (index >= 0) rules[index].ascending = mode === "asc";
+    else rules.push({ column, ascending: mode === "asc" });
+    this.sortRows = rules;
+    this.renderSortRows();
+    this.applySort();
+  }
+
+  /** 应用筛选：一行一括号组（行内多条自动括起），行间按行连接方式并列，
+   *  直接对应 a=1 AND (b=2 OR c=3) AND d=4；空串是有效值，不悄悄丢弃条件。 */
+  private applyFilters(): void {
+    if (!this.allowQueryChange()) return;
+    if (this.hasPending()) {
+      this.app.toast("info", "存在未提交的修改，请先提交或回滚");
+      return;
+    }
+    const incomplete = this.filterLines.some(line => line.conds.some(c => !/^(is null|is not null)$/i.test(c.op.trim()) && !c.val && c.touched !== true));
+    if (incomplete) { this.app.toast("info", "筛选条件尚未填写：点击 <?> 输入值，空字符串请在输入框中明确确认"); return; }
     // filter_logic 仅作旧字段回退；实际连接方式已逐行 / 行内保存
     this.tab.filter_logic = "AND";
     this.tab.filters = this.filterLines.map((l, k) => ({
@@ -6500,7 +7624,7 @@ class DataTabView extends TabView {
         column: c.col,
         operator: c.op,
         value: c.val,
-        case_sensitive: this.caseSensitive,
+        case_sensitive: true,
         logic: j > 0 ? c.logic ?? "OR" : undefined,
       })),
     }));
@@ -6511,6 +7635,7 @@ class DataTabView extends TabView {
 
   /** 多字段排序数组顺序即优先级；删除全部后应用清除排序。 */
   private applySort(): void {
+    if (!this.allowQueryChange()) return;
     if (this.hasPending()) {
       this.app.toast("info", "存在未提交的修改，请先提交或回滚");
       return;
@@ -6523,12 +7648,58 @@ class DataTabView extends TabView {
     this.app.renderStatus();
   }
 
-  /** 单元格内容面板：按「文本▼」格式展示焦点单元格。 */
+  /** 改变查询前先把网格输入落为本地草稿，所有门禁在改已应用状态之前执行。 */
+  private allowQueryChange(): boolean {
+    if (this.loading || this.committing) { this.app.toast("info", "表格正在载入或提交，请稍候"); return false; }
+    this.grid.flushEditing();
+    if (this.hasPending()) { this.app.toast("info", "存在未提交的修改，请先提交或回滚"); return false; }
+    if (this.transactionOwnedByThisTab()) { this.app.toast("info", "手动事务进行中：请先提交或回滚事务，再筛选或排序"); return false; }
+    return true;
+  }
+
+  /** selectionchange → 预览面板只在有选中内容时出现。 */
+  private selectionListener = (): void => {
+    this.updateCellPreview();
+  };
+
+  /** 网格内当前拖选的文本（无选中或选区不在本网格时为空串）。 */
+  private gridSelectionText(): string {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.anchorNode) return "";
+    if (!this.grid.el.contains(sel.anchorNode)) return "";
+    return sel.toString();
+  }
+
+  /**
+   * 单元格内容面板：仅当前数据页打开预览开关后，由焦点/选中内容决定显隐。
+   * 未打开开关、没有选中内容或已切到其它页时不占用高度；不回退首格。
+   * 格式和开关保留在所属数据视图内，返回该页可继续预览。
+   * 在面板内选择文本时不重渲染，避免打断选区。
+   */
   updateCellPreview(): void {
+    if (this.app.activeTab?.id !== this.tab.id || !this.app.textPreviewActive(this.tab.id)) {
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
+      return;
+    }
+    const activeSel = window.getSelection();
+    if (activeSel && activeSel.anchorNode && this.cellPreviewEl.contains(activeSel.anchorNode)) return;
+    const selected = this.gridSelectionText();
     const cell = this.grid.focusedCell;
-    const value = cell ? (this.grid.rows[cell.row]?.[cell.col] ?? null) : null;
-    renderCellPreview(this.cellPreviewEl, value, this.app.textFormatValue);
+    if (!this.grid.editingActive && !selected && !cell) {
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
+      return;
+    }
+    const value = selected || (cell ? this.grid.rows[cell.row]?.[cell.col] ?? null : null);
+    this.cellPreviewEl.style.display = "";
+    this.renderCellPreviewWithClose(value);
     this.app.renderStatus();
+  }
+
+  /** 渲染预览面板；格式预览可关闭，关闭即回到文本显示。 */
+  private renderCellPreviewWithClose(value: string | null): void {
+    this.app.renderPreviewPanel(this.cellPreviewEl, value, this.tab.id);
   }
 
   /** 状态栏信息。 */
@@ -6554,11 +7725,17 @@ class DataTabView extends TabView {
   }
 
   async reload(): Promise<void> {
-    if (this.hasPending()) {
+    if (this.hasPending() && !this.reloadingAfterLeave) {
       this.app.toast("info", "存在未提交的修改，请先提交（✓）或回滚（✗）");
       return;
     }
+    // 事务进行中不允许重读：分页 / 筛选 / 排序都会重置行序，使事务内已应用更改的行定位失效。
+    if (this.transactionOwnedByThisTab()) {
+      this.app.toast("info", "手动事务进行中：请先「提交事务 / 回滚事务」，再筛选、排序或刷新");
+      return;
+    }
     const version = ++this.requestVersion;
+    this.loading = true;
     this.el.setAttribute("aria-busy", "true");
     try {
       const res = await api.pageTable({
@@ -6569,29 +7746,43 @@ class DataTabView extends TabView {
         limit: this.tab.pageLimit,
         order_by: this.tab.orderBy,
         ascending: this.tab.ascending,
-        filters: this.tab.filters,
+        filters: this.tab.filters.map(line => ({ ...line, conds: line.conds.map(condition => ({ ...condition, case_sensitive: true })) })),
         filter_logic: this.tab.filter_logic ?? "AND",
         order_rules: this.appliedSortRules(),
       });
       // 快速连续应用时旧响应不得覆盖新条件的数据，也不得覆盖编辑中的网格。
-      if (version !== this.requestVersion || this.hasPending()) return;
+      if (version !== this.requestVersion || (this.hasPending() && !this.reloadingAfterLeave)) return;
+      if (this.reloadingAfterLeave) {
+        this.pendingUpdates.clear(); this.pendingDeletes.clear(); this.pendingInserts = []; this.pendingInsertEdits.clear();
+      }
       this.tab.page = res;
+      this.mutationEffectsUnknown = null;
       this.tab.selectedRows.clear();
+      // 请求已完成，解除载入态后再渲染网格页脚操作。
+      this.loading = false;
       this.applyData();
       this.renderFilterLines();
       this.renderSortRows();
       this.app.notifyToolbar();
       this.app.renderStatus();
     } catch (e) {
-      if (version === this.requestVersion) this.app.toast("error", String(e));
+      if (version === this.requestVersion) {
+        if (!this.reloadingAfterLeave) this.app.toast("error", String(e));
+      }
+      if (this.reloadingAfterLeave) throw e;
     } finally {
-      if (version === this.requestVersion) this.el.setAttribute("aria-busy", "false");
+      if (version === this.requestVersion) {
+        this.loading = false;
+        this.el.setAttribute("aria-busy", "false");
+      }
     }
   }
 
   private applyData(): void {
     const page = this.tab.page;
     if (!page) return;
+    this.hiddenCols = new Set([...this.hiddenCols].filter(name => page.columns.some(column => column.name === name)));
+    if (page.columns.length && page.columns.every(column => this.hiddenCols.has(column.name))) this.hiddenCols.delete(page.columns[0].name);
     const cols = page.columns.filter((c) => !this.hiddenCols.has(c.name));
     // 全列索引 -> 显示列索引（隐藏列后 dirty 高亮才不会标错列）
     const displayIdx = new Map<string, number>();
@@ -6606,7 +7797,7 @@ class DataTabView extends TabView {
     for (const [r, edits] of this.pendingInsertEdits) {
       for (const name of edits.keys()) {
         const di = displayIdx.get(name);
-        if (di !== undefined) dirtyCells.add(`${this.originalRowCount() + r}:${di}`);
+        if (di !== undefined) dirtyCells.add(`${this.originalRowCount() + this.txAppliedInserts.length + r}:${di}`);
       }
     }
     // 索引映射只算一次（此前每行每格重复 findIndex，大页 O(rows×cols²)）
@@ -6624,8 +7815,23 @@ class DataTabView extends TabView {
       skipNull: this.app.skipNullState(),
       rowFlags: this.rowFlags(),
       dirtyCells,
+      // 表数据不再显示左侧 rowid/行号列。
+      showRowNumbers: false,
     });
+    const formMode = this.tab.viewMode === "form" && !!this.formHost;
+    if (formMode) {
+      if (this.grid.el) this.grid.el.style.display = "none";
+      this.formHost.hidden = false;
+      this.renderForm();
+    } else {
+      if (this.grid.el) this.grid.el.style.display = "";
+      if (this.formHost) { this.formHost.hidden = true; this.formHost.replaceChildren(); }
+    }
     this.renderFooter(page);
+    this.columnSidebar?.render();
+    // 重载/翻页/切换列后网格没有焦点单元格：预览面板随之收起，不残留上一页的内容。
+    const preview = this.cellPreviewEl;
+    if (preview && !this.grid.editingActive && !this.grid.focusedCell) { preview.style.display = "none"; preview.innerHTML = ""; }
   }
 
   private renderFooter(page: import("../core/types").PageResult): void {
@@ -6634,41 +7840,50 @@ class DataTabView extends TabView {
     const pages = Math.max(1, Math.ceil(total / this.tab.pageLimit));
     const pageNo = Math.floor(this.tab.pageOffset / this.tab.pageLimit) + 1;
     const hasPending = this.hasPending();
+    const writeBlocked = this.committing || this.loading || !!this.mutationEffectsUnknown || !!this.readOnlyReason();
 
     const svgBtn = (icon: IconDef, title: string) => {
-      const b = document.createElement("div");
+      const b = document.createElement("button");
+      b.type = "button";
       b.className = "grid-footer-btn";
       b.title = title;
+      b.setAttribute("aria-label", title);
       b.innerHTML = svg(icon);
       return b;
     };
 
     // 左：增 / 删 / 提交 / 回滚（网格底部工具）
     const addBtn = svgBtn(ICON_PLUS_LINE, "插入记录");
+    addBtn.disabled = writeBlocked;
     addBtn.addEventListener("click", () => void this.insertRow());
     this.footer.appendChild(addBtn);
 
     const delBtn = svgBtn(ICON_MINUS_LINE, "删除记录");
+    delBtn.disabled = writeBlocked;
     delBtn.addEventListener("click", () => void this.deleteSelectedRows());
     this.footer.appendChild(delBtn);
 
     const commitBtn = svgBtn(ICON_CHECK, "提交改动");
-    commitBtn.style.opacity = hasPending ? "1" : "0.45";
+    commitBtn.disabled = !hasPending || writeBlocked;
+    commitBtn.style.opacity = commitBtn.disabled ? "0.45" : "1";
     commitBtn.addEventListener("click", () => void this.commitEdits());
     this.footer.appendChild(commitBtn);
 
-    const rollbackBtn = svgBtn(ICON_CROSS, "回滚改动");
+    const rollbackBtn = svgBtn(ICON_CROSS, "清除本机未提交草稿（不执行数据库回滚）");
+    rollbackBtn.disabled = !hasPending || this.committing || this.loading;
     rollbackBtn.style.opacity = hasPending ? "1" : "0.45";
     rollbackBtn.addEventListener("click", () => this.rollbackEdits());
     this.footer.appendChild(rollbackBtn);
 
-    const pager = document.createElement("div");
+    const pager = document.createElement("nav");
     pager.className = "grid-pager";
-    pager.style.marginLeft = "12px";
+    pager.setAttribute("aria-label", "表格分页");
 
-    const mkPage = (icon: IconDef, title: string, onClick: () => void) => {
+    const mkPage = (icon: IconDef, title: string, disabled: boolean, onClick: () => void) => {
       const b = svgBtn(icon, title);
+      b.disabled = disabled;
       b.addEventListener("click", () => {
+        if (b.disabled) return;
         if (this.hasPending()) {
           this.app.toast("info", "存在未提交的修改，请先提交或回滚");
           return;
@@ -6678,21 +7893,27 @@ class DataTabView extends TabView {
       pager.appendChild(b);
     };
 
-    mkPage(ICON_PAGE_FIRST, "第一页", () => {
+    mkPage(ICON_PAGE_FIRST, "第一页", pageNo <= 1, () => {
       this.tab.pageOffset = 0;
       void this.reload();
     });
-    mkPage(ICON_PAGE_PREV, "上一页", () => {
+    mkPage(ICON_PAGE_PREV, "上一页", pageNo <= 1, () => {
       this.tab.pageOffset = Math.max(0, this.tab.pageOffset - this.tab.pageLimit);
       void this.reload();
     });
 
+    const pagePosition = document.createElement("form");
+    pagePosition.className = "grid-pager-position";
     const pageBox = document.createElement("input");
     pageBox.type = "text";
+    pageBox.inputMode = "numeric";
+    pageBox.pattern = "[0-9]*";
     pageBox.value = String(pageNo);
-    pageBox.addEventListener("change", () => {
+    pageBox.setAttribute("aria-label", "当前页码");
+    pageBox.title = `输入页码跳转（共 ${pages} 页）`;
+    const goToPage = () => {
       const n = Number(pageBox.value);
-      if (!Number.isFinite(n) || n < 1) {
+      if (!Number.isInteger(n) || n < 1) {
         pageBox.value = String(pageNo);
         return;
       }
@@ -6701,44 +7922,34 @@ class DataTabView extends TabView {
         pageBox.value = String(pageNo);
         return;
       }
-      this.tab.pageOffset = (Math.min(n, pages) - 1) * this.tab.pageLimit;
+      const nextPage = Math.min(n, pages);
+      pageBox.value = String(nextPage);
+      if (nextPage === pageNo) return;
+      this.tab.pageOffset = (nextPage - 1) * this.tab.pageLimit;
       void this.reload();
+    };
+    pageBox.addEventListener("change", goToPage);
+    pagePosition.addEventListener("submit", (e) => {
+      e.preventDefault();
+      goToPage();
     });
-    pager.appendChild(pageBox);
+    const pageCount = document.createElement("span");
+    pageCount.className = "grid-page-count";
+    pageCount.textContent = `/ ${pages} 页`;
+    pagePosition.append(pageBox, pageCount);
+    pager.appendChild(pagePosition);
 
-    mkPage(ICON_PAGE_NEXT, "下一页", () => {
+    mkPage(ICON_PAGE_NEXT, "下一页", pageNo >= pages, () => {
       this.tab.pageOffset = Math.min(
         (pages - 1) * this.tab.pageLimit,
         this.tab.pageOffset + this.tab.pageLimit,
       );
       void this.reload();
     });
-    mkPage(ICON_PAGE_LAST, "最后一页", () => {
+    mkPage(ICON_PAGE_LAST, "最后一页", pageNo >= pages, () => {
       this.tab.pageOffset = (pages - 1) * this.tab.pageLimit;
       void this.reload();
     });
-
-    const more = svgBtn(ICON_MORE_DOTS, "更多");
-    more.addEventListener("click", (e) => {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      this.app.showContextMenu(
-        [
-          { id: "grid-copy", label: "复制", shortcut: "Ctrl+C" },
-          { id: "grid-export", label: "导出..." },
-          { separator: true },
-          { id: "grid-filter", label: "筛选..." },
-          { id: "grid-sort", label: "排序..." },
-          { id: "columns", label: "列..." },
-          { separator: true },
-          { id: "grid-refresh", label: "刷新", shortcut: "F5" },
-        ],
-        rect.left,
-        rect.bottom,
-      );
-    });
-    pager.appendChild(more);
-
-    this.footer.appendChild(pager);
 
     // 筛选 / 排序生效指示（点击可再次打开对应对话框）
     const activeFilters = this.tab.filters.length;
@@ -6791,26 +8002,189 @@ class DataTabView extends TabView {
     spacer.className = "grid-footer-spacer";
     this.footer.appendChild(spacer);
 
-    // 右侧视图切换（网格 / 表单）
-    const gridBtn = svgBtn(ICON_COLUMNS_GRID, "网格视图");
-    gridBtn.classList.add("active");
-    this.footer.appendChild(gridBtn);
-    const formBtn = svgBtn(ICON_VIEW_LIST, "表单视图（当前版本未提供）");
-    formBtn.style.opacity = "0.45";
-    this.footer.appendChild(formBtn);
+    if (this.viewMode() === "form") {
+      this.footer.appendChild(this.buildRecordNav(page));
+    } else {
+      this.footer.appendChild(pager);
+    }
+    const separator = document.createElement("span");
+    separator.className = "grid-footer-divider";
+    this.footer.appendChild(separator);
+    this.footer.appendChild(this.buildViewSwitch());
+  }
+
+  /** 当前视图模式（缺省网格）。 */
+  private viewMode(): "grid" | "form" {
+    return this.tab.viewMode === "form" ? "form" : "grid";
+  }
+
+  /** 切换网格 / 表单视图：复用当前页，不重新拉取数据。 */
+  private setViewMode(mode: "grid" | "form"): void {
+    if (this.viewMode() === mode) return;
+    this.tab.viewMode = mode;
+    if (mode === "form") {
+      const selected = [...(this.tab.selectedRows ?? [])];
+      if (selected.length === 1) this.formIndex = Math.min(selected[0], Math.max(0, this.displayRows.length - 1));
+    }
+    this.applyData();
+    this.app.renderStatus();
+  }
+
+  /** 视图切换：网格 / 表单，仅图标。 */
+  private buildViewSwitch(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "view-switch";
+    wrap.setAttribute("role", "tablist");
+    wrap.setAttribute("aria-label", "视图切换");
+    const mk = (mode: "grid" | "form", ico: IconDef, title: string): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "grid-footer-btn view-switch-btn" + (this.viewMode() === mode ? " active" : "");
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      b.setAttribute("aria-selected", String(this.viewMode() === mode));
+      b.innerHTML = svg(ico);
+      b.addEventListener("click", () => this.setViewMode(mode));
+      return b;
+    };
+    wrap.append(mk("grid", ICON_GRID_VIEW, "网格视图"), mk("form", ICON_FORM_VIEW, "表单视图"));
+    return wrap;
+  }
+
+  /** 表单视图页脚：分页图标旋转 90° = 首条 / 上一条 / 当前条 / 下一条 / 末条。 */
+  private buildRecordNav(page: import("../core/types").PageResult): HTMLElement {
+    const nav = document.createElement("nav");
+    nav.className = "grid-record-nav";
+    nav.setAttribute("aria-label", "逐条切换记录");
+    const total = page.total;
+    const globalIndex = this.tab.pageOffset + this.formIndex;
+    const clampIndex = Math.max(0, Math.min(globalIndex, Math.max(0, total - 1)));
+    const btn = (ico: IconDef, title: string, disabled: boolean, action: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "grid-footer-btn";
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      b.disabled = disabled;
+      b.innerHTML = '<span class="rot90">' + svg(ico) + '</span>';
+      b.addEventListener("click", () => { if (!b.disabled) action(); });
+      return b;
+    };
+    const atFirst = clampIndex <= 0;
+    const atLast = total <= 0 || clampIndex >= total - 1;
+    nav.append(
+      btn(ICON_PAGE_FIRST, "第一条", atFirst, () => this.gotoRecord(0)),
+      btn(ICON_PAGE_PREV, "上一条", atFirst, () => this.gotoRecord(clampIndex - 1)),
+    );
+    const input = document.createElement("input");
+    input.type = "text";
+    input.inputMode = "numeric";
+    input.className = "grid-record-input";
+    input.value = String(total > 0 ? clampIndex + 1 : 0);
+    input.setAttribute("aria-label", "当前条");
+    input.title = "输入条号跳转（共 " + total + " 条）";
+    const submit = () => {
+      const n = Number(input.value);
+      if (!Number.isInteger(n) || n < 1 || n > total) { input.value = String(total > 0 ? clampIndex + 1 : 0); return; }
+      if (this.hasPending()) { this.app.toast("info", "存在未提交的修改，请先提交或回滚"); input.value = String(total > 0 ? clampIndex + 1 : 0); return; }
+      this.gotoRecord(n - 1);
+    };
+    input.addEventListener("change", submit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    nav.append(input);
+    nav.append(
+      btn(ICON_PAGE_NEXT, "下一条", atLast, () => this.gotoRecord(clampIndex + 1)),
+      btn(ICON_PAGE_LAST, "最后一条", atLast, () => this.gotoRecord(total - 1)),
+    );
+    return nav;
+  }
+
+  /** 跳到全表第 n 条（0 基），跨页时重新拉取该条所在页。 */
+  private gotoRecord(n: number): void {
+    const page = this.tab.page;
+    if (!page) return;
+    const total = page.total;
+    if (!Number.isInteger(n) || n < 0 || n >= total) return;
+    if (this.hasPending()) { this.app.toast("info", "存在未提交的修改，请先提交或回滚"); return; }
+    if (this.transactionOwnedByThisTab()) { this.app.toast("info", "手动事务进行中：请先提交或回滚事务，再切换记录"); return; }
+    const limit = this.tab.pageLimit;
+    const offset = Math.floor(n / limit) * limit;
+    const idx = n - offset;
+    if (offset === this.tab.pageOffset) { this.formIndex = idx; this.applyData(); return; }
+    this.tab.pageOffset = offset;
+    void this.reload().then(() => { this.formIndex = idx; this.applyData(); });
+  }
+
+  /** 表单视图：单列、每行一个可编辑框，复用网格草稿机制。 */
+  private renderForm(): void {
+    const page = this.tab.page;
+    if (!page) { this.formHost.replaceChildren(); return; }
+    const rows = this.displayRows;
+    if (rows.length === 0) { this.formHost.replaceChildren(this.formEmpty()); return; }
+    if (this.formIndex >= rows.length) this.formIndex = rows.length - 1;
+    if (this.formIndex < 0) this.formIndex = 0;
+    const row = rows[this.formIndex];
+    const editable = !this.readOnlyReason() && !this.committing && !this.loading;
+    const grid = document.createElement("div");
+    grid.className = "data-form-grid";
+    page.columns.forEach((col, ci) => {
+      const field = document.createElement("div");
+      field.className = "data-form-field";
+      const label = document.createElement("label");
+      label.textContent = col.name;
+      label.title = col.name + " · " + col.type;
+      const controlWrap = document.createElement("div");
+      controlWrap.className = "data-form-control";
+      const raw = row[ci] ?? null;
+      const long = /text|json|blob|bytea/i.test(col.type || "");
+      let control: HTMLInputElement | HTMLTextAreaElement;
+      if (long) {
+        const ta = document.createElement("textarea");
+        ta.rows = 4;
+        control = ta;
+      } else {
+        control = document.createElement("input");
+        (control as HTMLInputElement).type = "text";
+      }
+      control.className = "data-form-input" + (long ? " data-form-textarea" : "") + (raw === null ? " is-null" : "");
+      control.value = raw ?? "";
+      if (raw === null) control.placeholder = "NULL";
+      control.readOnly = !editable;
+      control.addEventListener("change", () => {
+        if (!editable) return;
+        const v = control.value === "" ? null : control.value;
+        this.applyEdit(this.formIndex, col.name, v);
+      });
+      controlWrap.appendChild(control);
+      field.append(label, controlWrap);
+      grid.appendChild(field);
+    });
+    const wrap = document.createElement("div");
+    wrap.className = "data-form-view";
+    wrap.appendChild(grid);
+    this.formHost.replaceChildren(wrap);
+  }
+
+  private formEmpty(): HTMLElement {
+    const p = document.createElement("p");
+    p.className = "data-form-empty";
+    p.textContent = "当前页没有可显示的记录";
+    return p;
   }
 
   /** 应用单元格编辑（进入待提交状态，不直接写库）。 */
   private applyEdit(row: number, colName: string, value: string | null): void {
+    if (this.committing || this.mutationEffectsUnknown) return;
     const page = this.tab.page;
     if (!page || !colName) return;
-    if (this.pendingDeletes.has(row)) {
+    if (this.pendingDeletes.has(row) || this.txAppliedDeletes.has(row)) {
       this.app.toast("info", "该行已标记删除，请先提交或回滚再编辑");
       return;
     }
     if (row >= this.originalRowCount()) {
-      // 待插入行的编辑
-      const idx = row - this.originalRowCount();
+      // 待插入行的编辑（前段是事务内已应用的插入行，不属于可编辑草稿区）
+      const idx = row - this.originalRowCount() - this.txAppliedInserts.length;
+      if (idx < 0) return;
       const edits = this.pendingInsertEdits.get(idx) ?? new Map<string, string | null>();
       edits.set(colName, value);
       this.pendingInsertEdits.set(idx, edits);
@@ -6818,7 +8192,7 @@ class DataTabView extends TabView {
       const ci = page.columns.findIndex((c) => c.name === colName);
       const old = page.rows[row]?.[ci] ?? null;
       const edits = this.pendingUpdates.get(row) ?? new Map<string, string | null>();
-      if ((old ?? "") === (value ?? "")) {
+      if (old === value) {
         edits.delete(colName);
         if (!edits.size) this.pendingUpdates.delete(row);
       } else {
@@ -6832,15 +8206,18 @@ class DataTabView extends TabView {
 
   /** 追加一条待插入行。 */
   async insertRow(): Promise<void> {
+    if (this.committing || this.mutationEffectsUnknown) return;
     const page = this.tab.page;
     if (!page) return;
     this.pendingInserts.push(page.columns.map(() => null));
+    if (this.tab.viewMode === "form") this.formIndex = this.displayRows.length - 1;
     this.applyData();
     this.app.renderStatus();
   }
 
   /** 删除选中的行（进入待删除状态）。 */
   async deleteSelectedRows(): Promise<void> {
+    if (this.committing || this.mutationEffectsUnknown) return;
     const page = this.tab.page;
     if (!page || !this.tab.selectedRows.size) {
       this.app.toast("info", "请先选择要删除的行");
@@ -6854,22 +8231,28 @@ class DataTabView extends TabView {
         this.app.toast("info", "选中的行存在未提交的修改，请先提交或回滚");
         return;
       }
-      if (r < base && this.pendingDeletes.has(r)) {
+      if (r < base && (this.pendingDeletes.has(r) || this.txAppliedDeletes.has(r))) {
         this.app.toast("info", "选中的行已处于待删除状态");
         return;
       }
     }
     for (const r of rows) {
       if (r >= base) {
-        // 待插入行：同时移除其编辑缓存，并把更大下标的编辑键整体前移（防错位）
-        const idx = r - base;
-        this.pendingInserts.splice(idx, 1);
-        this.pendingInsertEdits.delete(idx);
-        const remapped = new Map<number, Map<string, string | null>>();
-        for (const [k, v] of this.pendingInsertEdits) {
-          remapped.set(k > idx ? k - 1 : k, v);
+        const offset = r - base;
+        if (offset < this.txAppliedInserts.length) {
+          // 事务内已应用的插入行：直接从显示列表移除（尚未落库，无需后端操作）。
+          this.txAppliedInserts.splice(offset, 1);
+        } else {
+          // 待插入行：同时移除其编辑缓存，并把更大下标的编辑键整体前移（防错位）。
+          const idx = offset - this.txAppliedInserts.length;
+          this.pendingInserts.splice(idx, 1);
+          this.pendingInsertEdits.delete(idx);
+          const remapped = new Map<number, Map<string, string | null>>();
+          for (const [k, v] of this.pendingInsertEdits) {
+            remapped.set(k > idx ? k - 1 : k, v);
+          }
+          this.pendingInsertEdits = remapped;
         }
-        this.pendingInsertEdits = remapped;
       } else {
         this.pendingDeletes.add(r);
       }
@@ -6880,15 +8263,38 @@ class DataTabView extends TabView {
   }
 
   /** 提交是否正在进行（防重入：双击/快捷键会重复提交同一批修改）。 */
-  private committing = false;
+  committing = false;
+  /** 不确定的提交不得重新发送；仅显式清空草稿并成功重新载入后解锁。 */
+  private mutationEffectsUnknown: string | null = null;
+
+  /** 表数据页事务前置检查：事务将绑定本页面，编辑在事务连接上执行。 */
+  prepareForTransaction(): void {
+    if (this.committing || this.loading) throw new Error("表格正在载入或提交，请稍候再开始事务");
+    if (this.mutationEffectsUnknown) throw new Error("上一笔写入结果未知，请先核对数据库并重新载入");
+  }
+
+  /** 事务是否属于本页面（工具栏与提交路径判断）。 */
+  transactionOwnedByThisTab(): boolean {
+    const status = this.app.manualTransactionFor?.(this.tab.connectionId);
+    return !!status?.active && status.owner === this.tab.id && status.schema === this.tab.schema;
+  }
 
   /** 提交全部待提交修改（删除 / 更新 / 插入）。 */
   async commitEdits(): Promise<void> {
+    if (this.mutationEffectsUnknown) {
+      this.app.toast("error", "上一笔写入结果未知，禁止重试；请先核对数据库状态并重新载入");
+      return;
+    }
     const page = this.tab.page;
     if (!page) return;
     if (this.committing) return; // 防重入
     if (!this.hasPending()) {
       this.app.toast("info", "没有需要提交的修改");
+      return;
+    }
+    // 手动事务属于本表数据页：待提交修改在事务连接上执行（提交事务前不落库）。
+    if (this.transactionOwnedByThisTab()) {
+      await this.commitEditsInTransaction(page);
       return;
     }
     const pk = page.primary_keys;
@@ -6897,6 +8303,7 @@ class DataTabView extends TabView {
       return;
     }
     this.committing = true;
+    this.renderFooter(page);
     let done = 0;
     let failed = false;
     let failMsg = "";
@@ -6907,35 +8314,40 @@ class DataTabView extends TabView {
       // 1) 删除（WHERE 用数据库里的旧值；DELETE 未命中才是真错误）
       const delList = [...this.pendingDeletes].sort((a, b) => a - b);
       for (const r of delList) {
-        const primaryKeys = pk.length
-          ? this.pkValues(page, r, new Map())
-          : oldRow(r);
-        const affected = await api.deleteRow(
-          this.tab.connectionId,
-          this.tab.schema,
-          this.tab.object,
-          primaryKeys,
+        const keyPairs = (pk.length ? this.pkValues(page, r, new Map()) : oldRow(r)).map(
+          ([c, v]) => [c, toDbValue(v, this.columnType(page, c))] as [string, DbValue],
         );
-        if (!affected) {
-          throw new Error(`第 ${r + 1} 行删除未命中（数据可能已被外部修改）`);
-        }
+        await this.runMutation({
+          connection_id: this.tab.connectionId,
+          schema: this.tab.schema,
+          table: this.tab.object,
+          kind: "delete",
+          keys: keyPairs,
+          original_values: oldRow(r).map(([c, v]) => [c, toDbValue(v, this.columnType(page, c))] as [string, DbValue]),
+        });
         this.pendingDeletes.delete(r);
         done++;
       }
       // 2) 更新（WHERE 用旧主键值；UPDATE 命中 0 行 = 值无变化，不算错误）
       for (const [r, edits] of [...this.pendingUpdates.entries()]) {
-        const primaryKeys = pk.length
-          ? this.pkValues(page, r, new Map())
+        const keyPairs = pk.length
+          ? this.pkValues(page, r, new Map()).map(
+              ([c, v]) => [c, toDbValue(v, this.columnType(page, c))] as [string, DbValue],
+            )
           : [];
-        const oldValues = pk.length ? undefined : oldRow(r);
-        const changes: [string, string | null][] = [...edits.entries()];
-        await api.updateRow({
+        const changes = [...edits.entries()].map(
+          ([c, v]) => [c, toDbValue(v, this.columnType(page, c))] as [string, DbValue],
+        );
+        // 整行原值 CAS：包括未修改列，不能悄悄覆盖外部已经更新的行。
+        const originalPairs = oldRow(r).map(([c, v]) => [c, toDbValue(v, this.columnType(page, c))] as [string, DbValue]);
+        await this.runMutation({
           connection_id: this.tab.connectionId,
           schema: this.tab.schema,
           table: this.tab.object,
-          primary_keys: primaryKeys,
+          kind: "update",
           changes,
-          old_values: oldValues,
+          keys: keyPairs,
+          original_values: originalPairs,
         });
         this.pendingUpdates.delete(r);
         done++;
@@ -6949,34 +8361,26 @@ class DataTabView extends TabView {
         const cols: string[] = [];
         const values: (string | null)[] = [];
         page.columns.forEach((c, ci) => {
+          // 未编辑的空格表示省略该列，保留服务端默认值；显式 NULL 则独立传递。
+          if (!edits?.has(c.name) && this.pendingInserts[i][ci] == null) return;
           const raw = edits?.has(c.name)
             ? edits.get(c.name) ?? null
             : this.pendingInserts[i][ci] ?? null;
-          if (raw === null && c.auto_increment) return; // 跳过未填的自增列
+          if (raw === null && c.auto_increment) return;
           cols.push(c.name);
           values.push(raw);
         });
-        if (!cols.length) {
-          // 整行空白不提交，直接出队
-          this.pendingInserts.splice(i, 1);
-          this.pendingInsertEdits.delete(i);
-          const remapped = new Map<number, Map<string, string | null>>();
-          for (const [k, v] of this.pendingInsertEdits) {
-            remapped.set(k > i ? k - 1 : k, v);
-          }
-          this.pendingInsertEdits = remapped;
-          continue;
-        }
-        const affected = await api.insertRow({
+        // 空 changes 仍提交 DEFAULT VALUES；后端仅在能读回唯一身份时允许。
+        const insertChanges: [string, DbValue][] = cols.map(
+          (c, ci) => [c, toDbValue(values[ci], this.columnType(page, c))] as [string, DbValue],
+        );
+        await this.runMutation({
           connection_id: this.tab.connectionId,
           schema: this.tab.schema,
           table: this.tab.object,
-          columns: cols,
-          values,
+          kind: "insert",
+          changes: insertChanges,
         });
-        if (!affected) {
-          throw new Error(`第 ${this.originalRowCount() + i + 1} 行插入失败`);
-        }
         this.pendingInserts.splice(i, 1);
         this.pendingInsertEdits.delete(i);
         const remapped = new Map<number, Map<string, string | null>>();
@@ -6995,14 +8399,17 @@ class DataTabView extends TabView {
     } catch (e) {
       failed = true;
       failMsg = String(e);
-      // 已应用的部分已从 pending 移除，未尝试的保留 —— 用户可直接重试或回滚。
+      // 已确认提交的项已出队；未知项保留证据但必须阻止任何重放。
       // 注意不能在此 reload：行基数据变化会让剩余 pending 的行号定位失效。
       const remaining =
         this.pendingDeletes.size +
         this.pendingUpdates.size +
         this.pendingInserts.length;
       if (remaining > 0) {
-        this.app.toast("error", `${failMsg}（已提交 ${done} 项，剩余 ${remaining} 项未提交，可重试或回滚）`);
+        const recovery = this.mutationEffectsUnknown
+          ? "结果未知，禁止重试；本机草稿保留，建议先另存证据，核对后清除本机草稿并重新载入"
+          : "草稿保留；冲突请核对原值，明确回滚的失败可重新预览";
+        this.app.toast("error", `${failMsg}（已确认 ${done} 项，待核对 ${remaining} 项；${recovery}）`);
       } else {
         this.app.toast("error", `${failMsg}（其余 ${done} 项已提交）`);
         this.pendingUpdates.clear();
@@ -7014,8 +8421,154 @@ class DataTabView extends TabView {
       this.applyData();
     } finally {
       this.committing = false;
+      this.renderFooter(this.tab.page ?? page);
       if (failed) this.app.renderStatus();
     }
+  }
+
+  /** 取某列声明的类型名；用于把网格字符串转换成类型化绑定值。 */
+  private columnType(page: import("../core/types").PageResult, name: string): string {
+    return page.columns.find((c) => c.name === name)?.type ?? "";
+  }
+
+  /**
+   * 事务内提交：把全部待提交修改打包为结构化变更，在事务连接上执行。
+   * 与普通提交不同：不落库、不重读（读池只见已提交数据），更改保留显示
+   * 直到工具栏「提交事务 / 回滚事务」结束事务。
+   */
+  private async commitEditsInTransaction(page: import("../core/types").PageResult): Promise<void> {
+    const ops: import("./types").ManualMutationOp[] = [];
+    const oldRow = (r: number): [string, string | null][] =>
+      page.columns.map((c, ci) => [c.name, page.rows[r]?.[ci] ?? null] as [string, string | null]);
+    // 1) 删除
+    for (const r of [...this.pendingDeletes].sort((a, b) => a - b)) {
+      ops.push({
+        kind: "delete",
+        table: this.tab.object,
+        keys: this.pkValues(page, r, new Map()),
+        old_values: oldRow(r),
+      });
+    }
+    // 2) 更新
+    for (const [r, edits] of [...this.pendingUpdates.entries()]) {
+      ops.push({
+        kind: "update",
+        table: this.tab.object,
+        changes: [...edits.entries()],
+        keys: this.pkValues(page, r, new Map()),
+        old_values: oldRow(r),
+      });
+    }
+    // 3) 插入（自增主键未填值时省略，与普通提交一致）
+    for (const [i, row] of this.pendingInserts.entries()) {
+      const edits = this.pendingInsertEdits.get(i);
+      const cols: string[] = [];
+      const values: (string | null)[] = [];
+      page.columns.forEach((c, ci) => {
+        if (!edits?.has(c.name) && row[ci] == null) return;
+        const raw = edits?.has(c.name) ? edits.get(c.name) ?? null : row[ci] ?? null;
+        if (raw === null && c.auto_increment) return;
+        cols.push(c.name);
+        values.push(raw);
+      });
+      ops.push({ kind: "insert", table: this.tab.object, columns: cols, values });
+    }
+    if (!ops.length) {
+      this.app.toast("info", "没有需要提交的修改");
+      return;
+    }
+    this.committing = true;
+    this.renderFooter(page);
+    try {
+      const result = await api.manualTransactionMutate(this.tab.connectionId, this.tab.id, this.tab.schema, ops);
+      const affected = result.sets.reduce((a, s) => a + s.affected, 0);
+      // 成功：转入「事务内已应用」状态，显示新值但保持未提交标记语义。
+      for (const r of [...this.pendingDeletes].sort((a, b) => a - b)) {
+        this.txAppliedDeletes.add(r);
+        this.pendingDeletes.delete(r);
+      }
+      for (const [r, edits] of [...this.pendingUpdates.entries()]) {
+        const merged = new Map<string, string | null>(this.txAppliedUpdates.get(r) ?? []);
+        for (const [c, v] of edits) merged.set(c, v);
+        this.txAppliedUpdates.set(r, merged);
+        this.pendingUpdates.delete(r);
+      }
+      for (const row of this.pendingInserts) this.txAppliedInserts.push(row);
+      this.pendingInserts = [];
+      this.pendingInsertEdits.clear();
+      this.app.toast("success", `已在事务中应用 ${ops.length} 项更改（${affected} 行受影响）；点击「提交事务」落库或「回滚事务」撤销`);
+    } catch (e) {
+      // 事务语句失败：后端将事务标记为 failed，只能回滚；本地草稿保留供核对。
+      this.app.toast("error", `${String(e)}（事务中执行失败；如事务已标记失败，请回滚后重试）`);
+    } finally {
+      this.committing = false;
+      this.renderFooter(this.tab.page ?? page);
+      this.applyData();
+      this.app.renderStatus();
+      this.app.notifyToolbar();
+    }
+  }
+
+  /** 清除事务可视化状态（提交 / 回滚事务后由 App 调用，随后 reload）。 */
+  clearTransactionState(): void {
+    this.txAppliedUpdates.clear();
+    this.txAppliedDeletes.clear();
+    this.txAppliedInserts = [];
+    this.pendingUpdates.clear();
+    this.pendingDeletes.clear();
+    this.pendingInserts = [];
+    this.pendingInsertEdits.clear();
+    this.tab.dirty = false;
+    this.applyData();
+  }
+
+  /** 预览并执行一次图形化写入；冲突、失败或读回未通过统一抛错。 */
+  private async runMutation(draft: MutationDraft): Promise<MutationReceipt> {
+    if (this.mutationEffectsUnknown) throw new Error("上一笔写入结果未知，禁止重新预览或执行；请核对数据库后重新载入");
+    const owner = this.tab.id;
+    const context = [this.tab.connectionId, this.tab.schema, this.tab.object].join("\0");
+    const plan = await api.previewRowMutation({ ...draft, owner_id: owner });
+    if (!plan || typeof plan.plan_id !== "string" || !plan.plan_id || plan.plan_id.length > 256) {
+      throw new Error("预览未返回有效的服务端计划，未发送写入");
+    }
+    if (this.tab.id !== owner || [this.tab.connectionId, this.tab.schema, this.tab.object].join("\0") !== context || this.tab.datasourceStale) {
+      throw new Error("预览期间页面目标已变化，写入计划未执行；草稿保留");
+    }
+    let receipt: MutationReceipt;
+    try { receipt = await api.executeRowMutation(plan.plan_id, owner); }
+    catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code ?? "") : "";
+      if (!["PLAN_EXPIRED", "PLAN_OWNER_MISMATCH", "READ_ONLY_VIOLATION", "MUTATION_CONTEXT_CHANGED", "CONNECTION_NOT_OPEN", "UNSUPPORTED_MUTATION"].includes(code)) {
+        this.mutationEffectsUnknown = String(error);
+        throw new Error(`写入回执未确认，结果未知；禁止自动或手动重放，须重新载入核对：${String(error)}`);
+      }
+      throw error;
+    }
+    if (!receipt || receipt.plan_id !== plan.plan_id || !["applied", "unchanged", "conflict", "failed"].includes(receipt.status)
+      || !["committed", "rolled_back", "none", "unknown"].includes(receipt.transaction) || typeof receipt.verified !== "boolean"
+      || !Number.isSafeInteger(receipt.affected) || receipt.affected < 0 || !Array.isArray(receipt.mismatches)
+      || receipt.mismatches.some(message => typeof message !== "string")
+      || (receipt.status === "applied" && (receipt.transaction !== "committed" || !receipt.verified || receipt.affected !== 1))) {
+      this.mutationEffectsUnknown = "写入回执缺失、无效或与计划不一致";
+      throw new Error("写入回执未通过协议校验，结果未知，禁止重放；请重新载入核对");
+    }
+    if (receipt.transaction === "unknown") {
+      this.mutationEffectsUnknown = "提交回执未确认";
+      throw new Error("写入结果未知，禁止重放；建议另存本机草稿证据，并重新载入核对");
+    }
+    if (receipt.status === "conflict") {
+      const detail = receipt.mismatches.length ? "：" + receipt.mismatches.join("；") : "";
+      throw new Error(`表结构或数据已变化，保存被拒绝${detail}`);
+    }
+    if (receipt.status === "failed") {
+      const detail = receipt.mismatches.length ? "：" + receipt.mismatches.join("；") : "";
+      throw new Error(`写入失败${detail}`);
+    }
+    if (!receipt.verified) {
+      const detail = receipt.mismatches.length ? "：" + receipt.mismatches.join("；") : "";
+      throw new Error(`写入结果未通过读回校验${detail}`);
+    }
+    return receipt;
   }
 
   /** 组装某行的主键值（优先取待提交的新值）。 */
@@ -7041,11 +8594,14 @@ class DataTabView extends TabView {
     this.pendingInsertEdits.clear();
     this.applyData();
     this.app.renderStatus();
-    this.app.toast("info", "已回滚全部未提交修改");
+    this.app.toast("info", this.mutationEffectsUnknown
+      ? "本机草稿已清除；这不代表数据库已回滚。请重新载入核对未知写入后再编辑"
+      : "本机未提交草稿已清除，没有向数据库发送回滚或写入");
   }
 
   destroy(): void {
     ++this.requestVersion;
+    document.removeEventListener("selectionchange", this.selectionListener);
     this.grid.dispose();
   }
 }
@@ -7053,11 +8609,15 @@ class DataTabView extends TabView {
 /** 查询视图（运行条 + 多结果页签 + 消息）。 */
 class QueryTabView extends TabView {
   editor: SqlEditor;
+  private sqlBaseline = "";
   private connSelect: HTMLSelectElement;
   private dbSelect: HTMLSelectElement;
   private runBtn: HTMLButtonElement;
   private stopBtn: HTMLButtonElement;
   private explainBtn: HTMLButtonElement;
+  /** 「运行 / 解释」按钮文字节点：有选区时改成「运行已选择的 / 解释已选择的」。 */
+  private runBtnLabel!: HTMLElement;
+  private explainBtnLabel!: HTMLElement;
   private runbar: HTMLElement;
   private contentWrap: HTMLElement;
   private resultSplitter: HTMLElement;
@@ -7065,20 +8625,64 @@ class QueryTabView extends TabView {
   private resultBody: HTMLElement;
   /** 结果区高度占内容区比例（拖动范围 1/3 ~ 2/3）。 */
   private resultRatio = 1 / 3;
-  private grid: DataGrid;
+  grid: DataGrid;
+  private gridPreviewNoteEl: HTMLElement;
+  private resultPager: HTMLElement;
+  private pageNumberInput: HTMLInputElement;
+  private pageSizeSelect: HTMLSelectElement;
+  private footerStatusEl: HTMLElement;
+  private pageErrorEl: HTMLElement;
+  private pageButtons: HTMLButtonElement[] = [];
+  private readonly resultPages = new QueryResultPages();
+  private controlledResult: QueryResultPanel | null = null;
+  private controlledResultContext: QueryResultIpcContext | null = null;
+  private resultPanelHost: HTMLElement;
+  private resultRecoveryTools: HTMLElement;
+  private resultEvidenceLoading = false;
+  private resultEvidenceRequest = 0;
+  private resultEvidenceKey = "";
+  private resultEvidenceReason = "";
+  private resultExecution: { context: Omit<QueryResultIpcContext, "result_index">; result: MultiResult } | null = null;
+  private exporting = false;
+  private executionRevision = 0;
   private messagesEl: HTMLElement;
   private cellPreviewEl: HTMLElement;
-  /** -1 = 消息页；>=0 = 结果 N。 */
-  private activeResultTab = 0;
+  /** -1 = 消息页；>=0 = 结果 N。显示、导出和状态栏共用标签页上的唯一索引。 */
+  private get activeResultTab(): number { return this.tab.activeResult; }
+  private set activeResultTab(index: number) { this.tab.activeResult = index; }
   private running = false;
+  private execution: ExecutionController;
+  private executionCapabilities: Capabilities | null = null;
+  private executionState: ExecutionState = "succeeded";
+  private executionNeedsReview = false;
+  private executionStatusEl: HTMLElement;
   private lastMessages: { text: string; error: boolean }[] = [];
   private completionLoaded = false;
   private completionRequest = 0;
   private disposed = false;
-  private transactionStatus!: HTMLElement;
 
   isExecuting(): boolean { return this.running; }
+  resultBusy(): boolean { return this.running || this.exporting || this.resultPages.busy || this.resultEvidenceLoading || this.controlledResult?.busy === true; }
+  draftBusy(): boolean { return this.resultBusy(); }
+  draftDirty(): boolean { return this.editor.getSql() !== this.sqlBaseline || this.controlledResult?.dirty === true; }
+  /** 仅 SQL 文本相对已保存内容有改动；结果行草稿不算。 */
+  hasUnsavedSql(): boolean { return this.editor.getSql() !== this.sqlBaseline; }
+  captureDraft(): Pick<DraftSnapshot, "kind" | "baseline" | "payload"> {
+    return { kind: "query", baseline: this.sqlBaseline, payload: { sql: this.editor.getSql(),
+      ...(this.controlledResult ? { result_editing: { ipc_context: this.controlledResultContext, draft: this.controlledResult.captureDraft(), replay_allowed: false } } : {}) } };
+  }
+  markClean(sql = this.editor.getSql()): void { this.sqlBaseline = sql; this.tab.dirty = this.draftDirty(); }
+  detachSavedQuery(): void {
+    delete this.tab.savedQueryId;
+    this.sqlBaseline = ""; this.tab.dirty = this.draftDirty();
+  }
+  discardDraft(): void {
+    if (this.controlledResult?.busy) throw new Error("结果写入、预览或未知回执仍需保留，不能丢弃");
+    this.disposeControlledResult();
+    this.editor.setSql(this.sqlBaseline); this.tab.dirty = false;
+  }
   async prepareForTransaction(): Promise<void> {
+    if (this.executionNeedsReview) throw new Error("上一执行结果未知，请先验证数据库状态并重新选择连接");
     if (this.running || this.disposed) throw new Error("当前查询未就绪");
     await this.refreshCompletionData();
     if (!this.completionLoaded || this.disposed) throw new Error("真实数据库/模式元数据未加载完成，不能开始事务");
@@ -7086,22 +8690,36 @@ class QueryTabView extends TabView {
   syncManualTransactionControls(): void {
     const status = this.app.manualTransactionFor?.(this.tab.connectionId);
     const pending = this.app.manualTransactionIsBusy?.(this.tab.connectionId) ?? false;
-    const ownedElsewhere = !!status && (status.owner !== this.tab.id || status.schema !== this.tab.schema);
-    const reason = this.tab.datasourceStale || (pending ? "事务操作进行中，请等待完成" : ownedElsewhere ? "此连接的事务由另一个查询页持有" : status?.failed ? "事务执行失败，必须回滚" : "");
-    this.runBtn.disabled = this.running || !!reason;
-    this.explainBtn.disabled = this.running || !!reason || !!status;
-    this.runBtn.title = reason || "运行：有选区执行选区，否则执行全文";
-    this.explainBtn.title = reason || (status ? "手动事务仅支持 SELECT/WITH 和 DML；解释计划请先提交或回滚" : "解释当前选区或全文");
-    this.explainBtn.setAttribute("aria-description", this.explainBtn.title);
-    this.connSelect.disabled = this.running || pending || !!status;
-    this.dbSelect.disabled = this.running || pending || !!status || !!this.tab.datasourceStale;
-    const scopeReason = status ? "事务绑定当前连接和模式，请先提交或回滚再切换" : pending ? "事务操作进行中" : "";
-    this.connSelect.title = scopeReason || "查询连接";
-    this.dbSelect.title = scopeReason || "查询数据库 / 模式";
-    if (this.transactionStatus) {
-      this.transactionStatus.textContent = pending ? "事务操作进行中…" : manualTransactionStatusText(status, this.tab.id);
-      this.transactionStatus.title = status ? "仅所属查询共享真实事务连接；导出/元数据/其它数据页读取只反映已提交状态。DDL和会话控制不在此事务中执行。" : "当前SQL使用自动提交";
+    // 查询页可以承载手动事务：本页持有时允许执行 SQL（在该事务连接上生效），提交后才落库。
+    const own = status?.owner === this.tab.id && status?.schema === this.tab.schema;
+    const base = this.tab.datasourceStale || (this.executionNeedsReview ? "上一执行结果未知，请重新验证连接后再执行" : pending ? "事务操作进行中，请等待完成" : "");
+    const otherOwner = status && !own ? "此连接的事务由其它页面持有，请在该页面提交或回滚" : "";
+    const runReason = base || otherOwner || (status?.failed && own ? "事务执行失败，必须回滚后才能继续执行" : "");
+    // EXPLAIN 不属于手动事务允许的查询/DML 语句，事务期间禁用解释。
+    const explainReason = base || otherOwner || (status ? "手动事务期间不能解释 SQL，请先提交或回滚事务" : "");
+    const busy = this.resultBusy();
+    this.runBtn.disabled = busy || !!runReason;
+    this.explainBtn.disabled = busy || !!explainReason;
+    this.runBtn.title = runReason || "运行全文（Ctrl+Enter）；运行选区用 Ctrl+Shift+Enter";
+    if (this.controlledResult?.dirty) {
+      this.runBtn.title = "结果草稿尚未处理；请先撤销或释放编辑结果";
     }
+    this.runBtn.setAttribute("aria-description", this.runBtn.title);
+    this.explainBtn.title = explainReason || "解释一条 SQL；多语句请先选中其中一条";
+    this.explainBtn.setAttribute("aria-description", this.explainBtn.title);
+    this.connSelect.disabled = busy || pending || !!status;
+    this.dbSelect.disabled = busy || pending || !!status || !!this.tab.datasourceStale;
+    this.syncNamespaceLabels();
+  }
+
+  private syncNamespaceLabels(): void {
+    const status = this.app.manualTransactionFor?.(this.tab.connectionId);
+    const pending = this.app.manualTransactionIsBusy?.(this.tab.connectionId) ?? false;
+    const namespace = namespaceName(this.app.connectionsValue().find(connection => connection.id === this.tab.connectionId));
+    const scopeReason = status ? `事务绑定当前连接和${namespace}，请先提交或回滚再切换` : pending ? "事务操作进行中" : "";
+    this.connSelect.title = scopeReason || "查询连接";
+    this.dbSelect.title = scopeReason || `查询${namespace}`;
+    this.dbSelect.setAttribute("aria-label", `查询${namespace}`);
   }
 
   constructor(app: App, tab: TabState) {
@@ -7123,7 +8741,7 @@ class QueryTabView extends TabView {
     this.connSelect.value = tab.connectionId;
     this.dbSelect = document.createElement("select");
     this.dbSelect.className = "run-select";
-    this.dbSelect.setAttribute("aria-label", "查询数据库 / 模式");
+    this.dbSelect.setAttribute("aria-label", "查询命名空间");
     this.dbSelect.style.width = "170px";
     const mkRunBtn = (icon: string, label: string) => {
       const b = document.createElement("button");
@@ -7143,52 +8761,92 @@ class QueryTabView extends TabView {
     };
     this.runbar.appendChild(this.connSelect);
     this.runbar.appendChild(this.dbSelect);
-    this.runBtn = mkRunBtn("run_sel", "运行已选择的");
+    // 运行 / 停止 / 解释并排一组；「执行完成」等状态显示推到运行条最右端。
+    this.runBtn = mkRunBtn("run_sel", "运行");
     this.runBtn.classList.add("primary");
     this.stopBtn = mkRunBtn("stop_sel", "停止");
     this.stopBtn.classList.add("disabled");
     this.stopBtn.disabled = true;
-    this.stopBtn.title = "当前数据库执行接口不支持取消；查询完成前无法停止。";
-    this.stopBtn.setAttribute("aria-label", "停止（当前执行接口不支持取消）");
-    this.explainBtn = mkRunBtn("explain_sel", "解释已选择的");
-    this.explainBtn.addEventListener("click", () => void this.explainSelection());
-    this.runBtn.addEventListener("click", () => void this.executeSelection(false));
+    this.stopBtn.title = "没有正在执行的查询；取消能力将在连接就绪后从后端读取";
+    this.stopBtn.setAttribute("aria-label", "停止当前查询");
+    this.stopBtn.addEventListener("click", () => {
+      void this.execution.cancel().catch(error => this.app.toast("error", `停止请求失败，查询仍等待确认：${String(error)}`));
+    });
+    this.explainBtn = mkRunBtn("explain_sel", "解释");
+    // 有选区时按钮显示「解释已选择的」并只解释选区；无选区时解释全文。
+    this.explainBtn.addEventListener("click", () => void this.explainSelection(this.editor.hasSelection()));
+    this.runBtnLabel = this.runBtn.lastElementChild as HTMLElement;
+    this.explainBtnLabel = this.explainBtn.lastElementChild as HTMLElement;
+    this.runBtn.addEventListener("click", () => void this.executeSelection(this.editor.hasSelection()));
+    this.executionStatusEl = document.createElement("span");
+    this.executionStatusEl.className = "query-transaction-status";
+    this.executionStatusEl.style.marginLeft = "auto";
+    this.executionStatusEl.style.paddingRight = "10px";
+    this.executionStatusEl.setAttribute("role", "status");
+    this.executionStatusEl.setAttribute("aria-live", "polite");
+    this.executionStatusEl.setAttribute("aria-label", "查询执行状态");
+    this.runbar.appendChild(this.executionStatusEl);
+    this.execution = new ExecutionController({ ...api,
+      cancelExecution: context => api.cancelExecution(context),
+      executionStatus: context => api.executionStatus(context),
+      executeSqlV2: async request => {
+      const revision = this.executionRevision;
+      const outcome = await api.executeSqlV2(request);
+      // 控制器销毁后会吞掉迟到响应，在传输边界先回收其快照。
+      if (this.disposed || revision !== this.executionRevision) {
+        this.releaseSpool(outcome.result?.spool_id
+          ? { spoolId: outcome.result.spool_id, connectionId: request.connection_id, ownerId: request.owner_id, namespace: request.namespace } : null);
+        this.releaseQueryEvidence({ execution_id: outcome.execution_id, connection_id: request.connection_id, owner_id: request.owner_id, namespace: request.namespace, result_index: 0 });
+      }
+      return outcome;
+    } }, state => {
+      this.executionState = state;
+      const labels: Record<ExecutionState, string> = { queued: "排队中…", running: "正在执行…", cancel_requested: "正在停止，等待数据库确认…", succeeded: "执行完成", failed: "执行失败", cancelled: "已确认停止（不保证回滚）", timed_out: "期限已到，已确认停止（不保证回滚）", unknown: "结果未知，请验证写入状态" };
+      this.executionStatusEl.textContent = labels[state];
+      const supported = this.executionCapabilities?.cancel.level !== "unsupported" && !!this.executionCapabilities;
+      this.stopBtn.disabled = !this.running || !supported || state === "cancel_requested" || !["queued", "running"].includes(state);
+      this.stopBtn.title = !supported ? this.executionCapabilities?.cancel.reason ?? "取消能力尚未读取" : state === "cancel_requested" ? "正在等待数据库停止确认，请勿重复提交" : "请求停止本次执行；不会自动提交或保证回滚";
+      this.stopBtn.setAttribute("aria-description", this.stopBtn.title);
+    });
     this.connSelect.addEventListener("change", () => {
       void this.switchConnection(this.connSelect.value);
     });
     this.dbSelect.addEventListener("change", () => {
-      if (this.running || this.app.manualTransactionFor?.(this.tab.connectionId) || this.app.manualTransactionIsBusy?.(this.tab.connectionId)) {
+      const namespace = namespaceName(this.app.connectionsValue().find(connection => connection.id === this.tab.connectionId));
+      if (this.resultBusy() || this.app.manualTransactionFor?.(this.tab.connectionId) || this.app.manualTransactionIsBusy?.(this.tab.connectionId)) {
         this.dbSelect.value = this.tab.schema;
-        this.app.toast("info", "事务或查询进行中，请先完成再切换数据库 / 模式");
+        this.app.toast("info", `事务或查询进行中，请先完成再切换${namespace}`);
         return;
       }
-      this.tab.schema = this.dbSelect.value;
-      this.completionLoaded = false;
-      void this.loadCompletionData();
+      if (!this.allowResultReplacement(`切换${namespace}`)) { this.dbSelect.value = this.tab.schema; return; }
+      const desired = this.dbSelect.value, previous = this.tab.schema;
+      const draftIds = previous || this.tab.savedQueryId ? [this.tab.id] : [];
+      void this.app.guardLeave(draftIds, `切换查询${namespace}`, async () => {
+        if (desired !== previous && this.tab.savedQueryId) this.detachSavedQuery();
+        if (desired !== previous) this.clearResultSnapshot();
+        this.tab.schema = desired; this.completionLoaded = false; await this.loadCompletionData();
+      }).then(accepted => { if (!accepted && !this.disposed) this.dbSelect.value = previous; });
     });
-    this.transactionStatus = document.createElement("span");
-    this.transactionStatus.className = "query-transaction-status";
-    this.transactionStatus.setAttribute("role", "status");
-    this.transactionStatus.setAttribute("aria-live", "polite");
-    this.transactionStatus.setAttribute("aria-label", "查询事务状态");
-    this.runbar.appendChild(this.transactionStatus);
+    // 查询页承载手动事务入口；工具栏按事务状态显示开始 / 提交 / 回滚。
     this.syncManualTransactionControls();
     this.el.appendChild(this.runbar);
 
     // ---- 编辑器
+    this.sqlBaseline = tab.sql;
     this.editor = new SqlEditor({
       value: tab.sql,
       autoComplete: app.settingsValue.auto_complete !== false,
+      completionMode: "query",
       fontFamily: app.settingsValue.sql_font_family,
       fontSize: app.settingsValue.sql_font_size,
       onChange: (v) => {
         this.tab.sql = v;
-        this.tab.dirty = true;
+        this.tab.dirty = this.draftDirty();
       },
-      onExecute: (sql, selectionOnly) => {
-        void this.execute(sql, selectionOnly);
+      onExecute: (_sql, selectionOnly) => {
+        void this.executeSelection(selectionOnly);
       },
-      onExplain: () => { void this.explainSelection(); },
+      onExplain: (selectionOnly) => { void this.explainSelection(selectionOnly); },
       identifierQuote: () => {
         const kind = app.connectionById(this.tab.connectionId)?.kind ?? "";
         return /mysql|mariadb|tidb|oceanbase/i.test(kind) ? "`" : /sqlserver|mssql/i.test(kind) ? "[" : '"';
@@ -7212,6 +8870,7 @@ class QueryTabView extends TabView {
     // ---- 结果区：页签（消息 / 结果 N）+ 内容
     this.resultTabsEl = document.createElement("div");
     this.resultTabsEl.className = "result-tabs";
+    this.resultTabsEl.setAttribute("aria-label", "查询输出页");
     this.resultTabsEl.style.display = "none";
     this.resultBody = document.createElement("div");
     this.resultBody.style.flex = "0 0 auto";
@@ -7230,14 +8889,92 @@ class QueryTabView extends TabView {
         this.app.showContextMenu(GRID_CONTEXT_MENU, x, y);
       },
     });
+    this.gridPreviewNoteEl = document.createElement("div");
+    this.gridPreviewNoteEl.className = "result-preview-note";
+    this.gridPreviewNoteEl.setAttribute("role", "status");
+    this.gridPreviewNoteEl.style.display = "none";
+    this.resultPager = document.createElement("nav");
+    this.resultPager.className = "query-result-pager";
+    this.resultPager.setAttribute("aria-label", "当前结果缓存分页");
+    this.pageNumberInput = document.createElement("input");
+    this.pageNumberInput.type = "text"; this.pageNumberInput.inputMode = "numeric";
+    this.pageNumberInput.className = "query-page-number";
+    this.pageNumberInput.setAttribute("aria-label", "当前页码");
+    this.pageNumberInput.title = "输入页码，按 Enter 或移开焦点跳转（不重新执行 SQL）";
+    this.footerStatusEl = document.createElement("span");
+    this.footerStatusEl.className = "query-footer-status";
+    this.footerStatusEl.setAttribute("role", "status");
+    this.footerStatusEl.setAttribute("aria-live", "polite");
+    this.resultPager.appendChild(this.footerStatusEl);
+    const pageSizeLabel = document.createElement("label");
+    pageSizeLabel.className = "query-page-size-label"; pageSizeLabel.textContent = "每页";
+    this.pageSizeSelect = document.createElement("select");
+    this.pageSizeSelect.className = "query-page-size";
+    this.pageSizeSelect.setAttribute("aria-label", "每页条数");
+    this.pageSizeSelect.title = "切换每页条数并回到首页（读取本次查询缓存，不重新执行 SQL）";
+    for (const size of [200, 500, 1000]) {
+      const option = document.createElement("option"); option.value = String(size); option.textContent = String(size);
+      this.pageSizeSelect.appendChild(option);
+    }
+    this.pageSizeSelect.addEventListener("change", () => {
+      const size = Number(this.pageSizeSelect.value);
+      if (![200, 500, 1000].includes(size) || this.pageSizeSelect.disabled || this.resultBusy() || this.disposed) { this.renderResultPager(); return; }
+      if (size !== this.resultPages.pageLimit(this.activeResultTab)) void this.loadResultPage("first", size);
+    });
+    pageSizeLabel.appendChild(this.pageSizeSelect);
+    this.resultPager.appendChild(pageSizeLabel);
+    this.pageErrorEl = document.createElement("span");
+    this.pageErrorEl.className = "query-page-error"; this.pageErrorEl.hidden = true;
+    this.pageErrorEl.id = `query-page-error-${tab.id}`;
+    this.pageErrorEl.setAttribute("role", "alert");
+    this.pageNumberInput.setAttribute("aria-describedby", this.pageErrorEl.id);
+    this.pageNumberInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); void this.jumpResultPage(); }
+      else if (event.key === "Escape") { event.preventDefault(); this.renderResultPager(); }
+    });
+    this.pageNumberInput.addEventListener("blur", () => { void this.jumpResultPage(); });
+    this.pageNumberInput.addEventListener("input", () => {
+      this.pageNumberInput.removeAttribute("aria-invalid"); this.pageErrorEl.hidden = true;
+    });
+    // 与表数据页同一套网格页脚图标按钮：首页 / 上一页 / 下一页 / 末页。
+    const pageIcons = { first: ICON_PAGE_FIRST, previous: ICON_PAGE_PREV, next: ICON_PAGE_NEXT, last: ICON_PAGE_LAST } as const;
+    for (const [action, label] of [["first", "首页"], ["previous", "上一页"], ["next", "下一页"], ["last", "末页"]] as const) {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "grid-footer-btn";
+      button.innerHTML = svg(pageIcons[action]);
+      button.title = `${label}（读取本次执行缓存，不重新执行 SQL）`;
+      button.setAttribute("aria-label", button.title);
+      button.addEventListener("click", () => void this.loadResultPage(action));
+      this.pageButtons.push(button); this.resultPager.appendChild(button);
+      if (action === "previous") this.resultPager.appendChild(this.pageNumberInput);
+    }
+    this.resultPager.appendChild(this.pageErrorEl);
     this.messagesEl = document.createElement("div");
+    this.messagesEl.setAttribute("role", "log");
+    this.messagesEl.setAttribute("aria-live", "polite");
     this.messagesEl.className = "result-messages";
     this.cellPreviewEl = document.createElement("div");
     this.cellPreviewEl.className = "cell-preview";
+    this.resultPanelHost = document.createElement("div");
+    this.resultPanelHost.className = "query-result-panel-host"; this.resultPanelHost.style.display = "none";
+    this.resultRecoveryTools = document.createElement("nav");
+    this.resultRecoveryTools.className = "query-result-pager"; this.resultRecoveryTools.style.display = "none";
+    this.resultRecoveryTools.setAttribute("aria-label", "查询结果恢复证据");
+    for (const [label, action] of [["查看 / 复制行草稿证据", () => this.showResultRecovery()],
+      ["释放编辑结果", () => { void this.releaseResultAfterConfirm(); }]] as const) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "btn"; button.textContent = label;
+      button.addEventListener("click", action); this.resultRecoveryTools.appendChild(button);
+    }
+    this.resultBody.appendChild(this.gridPreviewNoteEl);
+    this.resultBody.appendChild(this.resultRecoveryTools);
+    this.resultBody.appendChild(this.resultPanelHost);
     this.resultBody.appendChild(this.grid.el);
+    this.resultBody.appendChild(this.resultPager);
     this.resultBody.appendChild(this.messagesEl);
     this.resultBody.appendChild(this.cellPreviewEl);
     this.cellPreviewEl.style.display = "none";
+    // 「文本」预览只在选中文本时出现（结果网格只读，用拖选查看长文本）。
+    document.addEventListener("selectionchange", this.selectionListener);
     this.contentWrap.appendChild(this.resultTabsEl);
     this.contentWrap.appendChild(this.resultBody);
     this.el.appendChild(this.contentWrap);
@@ -7273,22 +9010,159 @@ class QueryTabView extends TabView {
     });
   }
 
-  /** 单元格内容面板：按「文本▼」格式展示焦点单元格。首次聚焦时才显示面板。 */
-  updateCellPreview(): void {
-    const cell = this.grid.focusedCell;
-    const value = cell ? (this.grid.rows[cell.row]?.[cell.col] ?? null) : null;
-    this.cellPreviewEl.style.display = "";
-    renderCellPreview(this.cellPreviewEl, value, this.app.textFormatValue);
+  /** selectionchange → 预览面板只在有选中内容时出现（结果网格只读，拖选单元格文本即可查看）。 */
+  private selectionListener = (): void => {
+    this.updateCellPreview();
+    this.syncSelectionControls();
+  };
+
+  /** 编辑器有选区时，运行 / 解释按钮显示「运行已选择的 / 解释已选择的」。 */
+  private syncSelectionControls(): void {
+    if (this.disposed || !this.editor) return;
+    const selected = this.editor.hasSelection();
+    const run = selected ? "运行已选择的" : "运行";
+    const explain = selected ? "解释已选择的" : "解释";
+    if (this.runBtnLabel && this.runBtnLabel.textContent !== run) this.runBtnLabel.textContent = run;
+    if (this.explainBtnLabel && this.explainBtnLabel.textContent !== explain) this.explainBtnLabel.textContent = explain;
+    if (this.runBtnLabel) this.runBtn.title = selected ? "运行选中的 SQL（Ctrl+Shift+Enter）" : "运行全文（Ctrl+Enter）；运行选区用 Ctrl+Shift+Enter";
+    if (this.explainBtnLabel) this.explainBtn.title = selected ? "解释选中的 SQL" : "解释一条 SQL；多语句请先选中其中一条";
   }
 
-  /** 状态栏信息。 */
+  /** 网格内当前拖选的文本（无选中或选区不在本网格时为空串）。 */
+  private gridSelectionText(): string {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.anchorNode) return "";
+    if (!this.grid.el.contains(sel.anchorNode)) return "";
+    return sel.toString();
+  }
+
+  /**
+   * 单元格内容面板：由选中决定 —— 结果网格焦点单元格、受控结果面板焦点单元格、编辑中或拖选文本时出现；
+   * 没有选中就不出现、不占用高度。切到「消息」页时结果网格隐藏，预览一并收起。
+   * 「文本▼」的格式（文本 / 十六进制 / 图像 / 网页）只决定渲染方式，不再凭格式常驻显示或回退首格。
+   * 在面板内选择文本时不重渲染，避免打断选区。
+   */
+  updateCellPreview(): void {
+    if (this.app.activeTab?.id !== this.tab.id || !this.app.textPreviewActive(this.tab.id)) {
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
+      return;
+    }
+    const activeSel = window.getSelection();
+    if (activeSel && activeSel.anchorNode && this.cellPreviewEl.contains(activeSel.anchorNode)) return;
+    const panel = this.controlledResult;
+    const gridVisible = this.grid.el.style.display !== "none";
+    const panelVisible = !!panel && this.resultPanelHost.style.display !== "none";
+    if (!gridVisible && !panelVisible) {
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
+      return;
+    }
+    const selected = this.gridSelectionText();
+    const cell = gridVisible ? this.grid.focusedCell : null;
+    const fromGrid = cell ? (this.grid.rows[cell.row]?.[cell.col] ?? null) : null;
+    const panelFocused = panelVisible && panel!.hasFocusedCell();
+    const fromPanel = panelFocused ? panel!.focusedCellValue() : null;
+    if (!this.grid.editingActive && !selected && !cell && !panelFocused) {
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
+      return;
+    }
+    const value = selected ?? fromPanel ?? fromGrid;
+    this.cellPreviewEl.style.display = "";
+    this.app.renderPreviewPanel(this.cellPreviewEl, value, this.tab.id);
+  }
+
+  controlledCopyText(mode: CopyMode, explicitGrid = false): string | null {
+    const panel = this.controlledResult;
+    if (!panel || this.activeResultTab < 0 || this.resultPanelHost.style.display === "none") return null;
+    if (explicitGrid || document.activeElement && panel.el.contains(document.activeElement)) return panel.copyText(mode);
+    return null;
+  }
+  private allowResultReplacement(cause: string): boolean {
+    if (this.controlledResult?.busy) {
+      this.app.toast("error", `${cause}已阻止：结果预览、写入或未知回执尚未处理。可查看 / 复制证据，不能重放或覆盖。`); return false;
+    }
+    if (this.controlledResult?.dirty) {
+      this.app.toast("info", `${cause}已阻止：结果含未提交输入或行草稿。请先撤销此行草稿，或选择“释放编辑结果”。`); return false;
+    }
+    return true;
+  }
+  private disposeControlledResult(): void {
+    ++this.resultEvidenceRequest; this.resultEvidenceLoading = false;
+    this.controlledResult?.dispose(); this.controlledResult = null; this.controlledResultContext = null;
+    this.resultPanelHost?.replaceChildren(); if (this.resultPanelHost) this.resultPanelHost.style.display = "none";
+    if (this.resultRecoveryTools) this.resultRecoveryTools.style.display = "none";
+  }
+  private releaseQueryEvidence(context: QueryResultIpcContext): void {
+    void queryResultApi.release(context).catch(error => {
+      if (!["EXECUTION_NOT_FOUND", "QUERY_RESULT_EXPIRED", "QUERY_RESULT_READ_ONLY"].includes((error as { code?: string }).code ?? ""))
+        this.app.toast("info", `查询来源证据释放未确认：${String(error)}。不会重新执行 SQL。`);
+    });
+  }
+  private releaseResultEditing(): void {
+    const execution = this.resultExecution; this.resultExecution = null;
+    this.disposeControlledResult(); this.resultEvidenceKey = ""; this.resultEvidenceReason = "";
+    if (execution) this.releaseQueryEvidence({ ...execution.context, result_index: 0 });
+  }
+  private showResultRecovery(): void {
+    if (!this.controlledResult) return;
+    showDraftText("查询 SQL、行草稿与写入证据", JSON.stringify(this.captureDraft(), null, 2), "可选中并复制完整类型化草稿、原执行身份和已发送计划回执。这里不会重新取得行授权或重放 SQL；结果未知时请先核对数据库状态。");
+  }
+  /** 丢弃结果内的行草稿并释放编辑；已执行 SQL 的缓存保留。 */
+  private async releaseResultAfterConfirm(): Promise<void> {
+    const panel = this.controlledResult;
+    if (!panel || this.disposed) return;
+    if (panel.busy || this.resultBusy()) { this.app.toast("error", "写入、预览或未知回执尚未处理；不能释放此结果"); return; }
+    const accepted = await confirmTransactionAction("释放编辑结果",
+      "当前结果含未提交的行草稿或输入。释放会丢弃这些本地草稿并关闭编辑状态，已执行 SQL 的结果缓存保留；不会重新执行或提交数据库操作。确定释放吗？", "丢弃草稿并释放");
+    if (!accepted || this.disposed || this.controlledResult !== panel) return;
+    this.releaseResultEditing(); this.tab.dirty = this.draftDirty(); this.renderResults(); this.app.notifyToolbar?.();
+  }
+  private resultContextCurrent(context: QueryResultIpcContext, key: string): boolean {
+    const execution = this.resultExecution;
+    return !this.disposed && !this.tab.datasourceStale && !this.running && execution?.result === this.tab.results
+      && execution.context.execution_id === context.execution_id && this.tab.id === context.owner_id
+      && this.tab.connectionId === context.connection_id && this.tab.schema === context.namespace
+      && this.activeResultTab === context.result_index && this.resultEvidenceKey === key;
+  }
+  private async requestControlledResult(): Promise<void> {
+    const execution = this.resultExecution, index = this.activeResultTab, set = this.currentSet(), page = this.resultPages.page(index);
+    if (!execution || execution.result !== this.tab.results || !set?.columns.length || !page || this.running || this.exporting || page.loading || this.disposed || this.tab.datasourceStale) return;
+    const context: QueryResultIpcContext = { ...execution.context, result_index: index };
+    const key = JSON.stringify([context, page.offset, page.rows.length, page.request, page.total]);
+    if (key === this.resultEvidenceKey) return;
+    if (!this.allowResultReplacement("替换结果证据")) return;
+    this.disposeControlledResult(); this.resultEvidenceKey = key; this.resultEvidenceReason = "正在核对本次执行的来源证据；当前结果只读。";
+    const request = ++this.resultEvidenceRequest; this.resultEvidenceLoading = true; this.syncManualTransactionControls(); this.renderResultPager();
+    try {
+      const snapshot = await queryResultApi.snapshot(context, { columns: set.columns, offset: page.offset, loaded_rows: page.rows.length, total_rows: page.total });
+      if (request !== this.resultEvidenceRequest || !this.resultContextCurrent(context, key)) return;
+      const requireCurrent = () => { if (!this.resultContextCurrent(context, key) || this.exporting || this.resultPages.busy || this.tab.datasourceStale || this.app.connectionById(this.tab.connectionId)?.read_only) throw new Error("查询结果或连接上下文已改变，没有发送写入"); };
+      const panel = new QueryResultPanel(snapshot, {
+        preview: change => { requireCurrent(); return queryResultApi.preview(context, change); },
+        execute: planId => { requireCurrent(); return api.executeRowMutation(planId, context.owner_id); },
+        onChanged: () => { if (this.disposed) return; this.tab.dirty = this.draftDirty(); this.syncManualTransactionControls(); this.renderResultPager(); this.app.notifyToolbar?.(); },
+        onPreviewChange: () => this.updateCellPreview(),
+        toast: (kind, text) => this.app.toast(kind, text),
+      });
+      this.controlledResult = panel; this.controlledResultContext = context; this.resultEvidenceReason = "";
+      this.resultPanelHost.replaceChildren(panel.el);
+    } catch (error) {
+      if (request === this.resultEvidenceRequest && this.resultContextCurrent(context, key)) this.resultEvidenceReason = `此页保持只读：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (request === this.resultEvidenceRequest) { this.resultEvidenceLoading = false; if (!this.disposed) { this.syncManualTransactionControls(); this.renderResults(); this.app.notifyToolbar?.(); } }
+    }
+  }
+
+  /** 结果页底部统计。 */
   statusInfo(): { sql: string; pageText: string; elapsed: string } {
-    const res = this.tab.results;
-    const set = res?.sets[this.tab.activeResult];
+    const set = this.currentSet(), page = this.resultPages.page(this.activeResultTab);
+    const progress = page?.loading ? " · 正在读取缓存…" : this.exporting ? " · 正在导出完整缓存…" : "";
     return {
       sql: this.editor.getSelection() || this.editor.getSql(),
-      pageText: set ? `第 1 条记录（共 ${set.total} 条）` : "",
-      elapsed: res ? `运行时间: ${(res.elapsed_ms / 1000).toFixed(3)}s` : "",
+      pageText: set ? (this.resultPages.range(this.activeResultTab) || `已加载 ${set.rows.length} / 共 ${set.total} 行（仅可导出已加载行）`) + progress : "",
+      elapsed: set && this.tab.results ? `运行时间: ${(this.tab.results.elapsed_ms / 1000).toFixed(3)}s` : "",
     };
   }
 
@@ -7297,43 +9171,143 @@ class QueryTabView extends TabView {
     return this.tab.results?.sets[this.tab.activeResult] ?? null;
   }
 
-  /** 图表只使用实际显示的结果页；不执行查询，也不回退另一个结果集。 */
-  chartSource(): ChartSource | null {
-    if (this.running || this.activeResultTab < 0) return null;
-    const set = this.tab.results?.sets[this.activeResultTab];
-    if (!set?.has_rows) return null;
-    return {
-      title: `${this.tab.object || this.tab.title} · 结果 ${this.activeResultTab + 1}`,
-      description: `${this.tab.connectionName || this.tab.connectionId} / ${this.tab.schema} · 当前查询结果快照`,
-      columns: set.columns.map(column => column.name), rows: set.rows,
-    };
+  private releaseSpool(scope: import("./types").QuerySpoolScope | null): void {
+    if (scope) void api.dropQuerySpool(scope).catch(error => this.app.toast("error", `释放查询缓存失败：${String(error)}`));
   }
 
-  /** 运行（runBtn / 菜单共用）：有选区跑选区，否则跑全文。 */
-  async executeSelection(_selectionOnly: boolean): Promise<void> {
-    await this.execute(this.editor.getSelection(), this.editor.hasSelection());
+  private clearResultSnapshot(): void {
+    if (!this.allowResultReplacement("清理查询结果")) throw new Error("查询结果草稿或写入证据需要先处理");
+    this.releaseResultEditing();
+    ++this.executionRevision;
+    this.releaseSpool(this.resultPages.replace(null));
+    this.tab.results = null; this.activeResultTab = -1; this.lastMessages = [];
+    this.renderResults();
   }
 
-  /** 供 App 菜单调用：解释已选择的。 */
+  captureResultExport() {
+    return { result: this.tab.results, scope: this.resultPages.scope, index: this.activeResultTab,
+      connectionId: this.tab.connectionId, namespace: this.tab.schema };
+  }
+
+  async exportResultSnapshot(opts: import("./types").ExportOptions, snapshot: ReturnType<QueryTabView["captureResultExport"]>): Promise<number> {
+    if (this.disposed || snapshot.result !== this.tab.results || snapshot.connectionId !== this.tab.connectionId || snapshot.namespace !== this.tab.schema)
+      throw new Error("查询结果已经替换或页面已关闭，请重新打开导出；不会重新执行 SQL。");
+    if (this.resultBusy()) throw new Error("查询执行、缓存读取或导出进行中，请等待完成");
+    const set = snapshot.result?.sets[snapshot.index];
+    if (!set?.columns.length) throw new Error("当前没有可导出的结果集");
+    this.exporting = true; this.syncManualTransactionControls(); this.renderResultPager(); this.app.notifyToolbar?.();
+    try {
+      const options = { ...opts, connection_id: snapshot.connectionId, schema: snapshot.namespace };
+      return snapshot.scope
+        ? await api.exportQuerySpooled(options, snapshot.scope, snapshot.index)
+        : await api.exportQueryResult(options, set.columns.map(column => column.name), set.rows);
+    } finally {
+      this.exporting = false;
+      if (!this.disposed) { this.syncManualTransactionControls(); this.renderResultPager(); this.app.notifyToolbar?.(); }
+    }
+  }
+
+  private async jumpResultPage(): Promise<void> {
+    if (this.pageNumberInput.disabled || this.resultBusy() || this.disposed) return;
+    const text = this.pageNumberInput.value.trim(), total = this.resultPages.pageCount(this.activeResultTab);
+    const number = Number(text);
+    if (!/^[0-9]+$/.test(text) || !Number.isSafeInteger(number) || number < 1 || number > total) {
+      this.pageErrorEl.textContent = `请输入 1–${total} 的整数页码`; this.pageErrorEl.hidden = false;
+      this.pageNumberInput.setAttribute("aria-invalid", "true"); return;
+    }
+    await this.loadResultPage(number);
+  }
+
+  private async loadResultPage(action: "first" | "previous" | "next" | "last" | number, limit = this.resultPages.pageLimit(this.activeResultTab)): Promise<void> {
+    if (!this.allowResultReplacement("翻页") || this.resultBusy() || this.disposed) return;
+    const index = this.activeResultTab;
+    const offset = typeof action === "number" ? this.resultPages.pageOffset(index, action) : this.resultPages.offset(index, action);
+    if (offset === null || typeof action === "number" && offset === this.resultPages.page(index)?.offset) { this.renderResultPager(); return; }
+    this.disposeControlledResult(); this.resultEvidenceKey = "";
+    const loading = this.resultPages.fetch(index, offset, (scope, resultIndex, offset, limit) => api.fetchQueryRows(scope, resultIndex, offset, limit), limit);
+    this.syncManualTransactionControls(); this.renderResultPager(); this.app.notifyToolbar?.();
+    try { await loading; }
+    catch (error) {
+      if (!this.disposed) this.app.toast("error", `读取结果缓存失败：${String(error)}`);
+    } finally {
+      if (!this.disposed) {
+        this.syncManualTransactionControls(); this.renderResults(); this.app.renderStatus?.(); this.app.notifyToolbar?.();
+      }
+    }
+  }
+
+  private renderResultPager(): void {
+    const page = this.resultPages.page(this.activeResultTab), scope = this.resultPages.scope;
+    const visible = this.activeResultTab >= 0 && !!this.currentSet();
+    this.resultPager.style.display = visible ? "flex" : "none";
+    this.resultPager.setAttribute("aria-busy", String(!!page?.loading));
+    const blocked = this.resultBusy() || this.controlledResult?.dirty === true || !scope || !page;
+    this.pageNumberInput.value = String(this.resultPages.pageNumber(this.activeResultTab));
+    this.pageNumberInput.disabled = blocked || !page?.total;
+    this.pageSizeSelect.value = String(this.resultPages.pageLimit(this.activeResultTab));
+    this.pageSizeSelect.disabled = blocked || !page?.total;
+    this.pageNumberInput.removeAttribute("aria-invalid"); this.pageErrorEl.hidden = true;
+    const count = this.resultPages.pageCount(this.activeResultTab);
+    this.pageNumberInput.setAttribute("aria-description", `共 ${count} 页；输入页码后按 Enter 或移开焦点跳转`);
+    const info = this.statusInfo();
+    this.footerStatusEl.textContent = [info.elapsed, info.pageText].filter(Boolean).join(" · ");
+    this.pageButtons.forEach((button, index) => {
+      // 首屏0行时允许首页读取重试（超大单行也可直接导出）。
+      button.disabled = blocked || page!.total === 0 || (index <= 1 ? page!.offset === 0 && page!.rows.length > 0 : index === 2
+        ? page!.rows.length === 0 || page!.offset + page!.rows.length >= page!.total : page!.total === 0 || page!.offset + page!.rows.length >= page!.total);
+      button.title = this.controlledResult?.dirty ? "结果含未提交输入或行草稿；请先撤销或释放编辑结果" : !scope ? "此历史结果无完整缓存；不能通过重新执行 SQL 获取后续行" : this.resultBusy() ? "当前操作进行中，请等待完成" : "读取本次执行缓存，不重新执行 SQL";
+    });
+  }
+
+  /**
+   * 运行（runBtn / F5 / 菜单「运行」）始终执行编辑器全文；
+   * 只有「运行已选择的」才读取选区，且无选区时必须提示而不是退回全文。
+   * 旧实现忽略 selectionOnly，任何残留选区都会把全文截成片段执行，
+   * 例如选中 `* FROM t_big` 后运行会发送缺少 SELECT 的语句并触发 MySQL 1064。
+   */
+  async executeSelection(selectionOnly: boolean): Promise<void> {
+    if (!selectionOnly) {
+      await this.execute(this.editor.getSql(), false);
+      return;
+    }
+    const sql = this.editor.hasSelection() ? this.editor.getSelection() : "";
+    if (!sql.trim()) {
+      this.app.toast("info", "请先选中要执行的 SQL");
+      return;
+    }
+    await this.execute(sql, true);
+  }
+
+  /** 供 App 菜单调用：解释当前 SQL 全文。 */
   async explainPublic(): Promise<void> {
-    await this.explainSelection();
+    await this.explainSelection(false);
   }
 
-  /** 解释当前选择的 SQL。 */
-  private async explainSelection(): Promise<void> {
+  /** 解释 SQL：默认解释编辑器全文；只有右键「解释已选择的」传入 true 才解释选区。 */
+  private async explainSelection(selectionOnly = false): Promise<void> {
     if (this.app.manualTransactionFor?.(this.tab.connectionId)) {
-      this.app.toast("info", "手动事务仅支持 SELECT/WITH 和 DML；解释计划请先提交或回滚");
+      this.app.toast("info", "手动事务期间不能解释 SQL，请先提交或回滚事务");
       return;
     }
-    const sql = this.editor.getSelection().trim();
+    const sql = (selectionOnly
+      ? (this.editor.hasSelection() ? this.editor.getSelection() : "")
+      : this.editor.getSql()).trim();
     if (!sql) {
-      this.app.toast("info", "请先选中要解释的 SQL");
+      this.app.toast("info", selectionOnly ? "请先选中要解释的 SQL" : "SQL 为空");
       return;
     }
-    await this.execute(`EXPLAIN ${sql}`, false);
+    try {
+      await this.execute(explainQuerySql(sql), false);
+    } catch (e) {
+      this.app.toast("info", e instanceof Error ? e.message : String(e));
+    }
   }
 
   invalidateDatasource(): void {
+    if (this.controlledResult?.dirty || this.controlledResult?.busy) {
+      ++this.resultEvidenceRequest; this.resultEvidenceLoading = false;
+      this.controlledResult.invalidate(this.tab.datasourceStale || "数据源已改变，原输入和写入证据已保留；请核对数据库状态");
+    } else this.clearResultSnapshot();
     this.completionRequest++;
     this.completionLoaded = false;
     this.editor.setCompletionData({});
@@ -7358,29 +9332,42 @@ class QueryTabView extends TabView {
   }
 
   async reload(): Promise<void> {
-    if (this.editor.getSelection().trim()) await this.executeSelection(false);
+    if (this.editor.getSql().trim()) await this.executeSelection(false);
   }
 
   /** 切换运行条中的连接：不得沿用旧连接的模式或补全。 */
   private async switchConnection(connId: string): Promise<void> {
-    if (this.running || this.app.manualTransactionFor?.(this.tab.connectionId) || this.app.manualTransactionIsBusy?.(this.tab.connectionId)) {
+    if (!this.allowResultReplacement("切换连接")) { this.connSelect.value = this.tab.connectionId; return; }
+    if (this.resultBusy() || this.app.manualTransactionFor?.(this.tab.connectionId) || this.app.manualTransactionIsBusy?.(this.tab.connectionId)) {
       this.connSelect.value = this.tab.connectionId;
       this.app.toast("info", "事务或查询进行中，请先完成再切换连接");
       return;
     }
     if (!connId || !this.app.connectionById(connId)) return;
+    const oldConnection = this.tab.connectionId;
+    const draftIds = this.tab.schema || this.tab.savedQueryId ? [this.tab.id] : [];
+    const accepted = await this.app.guardLeave(draftIds, "切换查询连接", async () => { await this.applyConnectionChoice(connId); });
+    if (!accepted && !this.disposed) this.connSelect.value = oldConnection;
+  }
+  private async applyConnectionChoice(connId: string): Promise<void> {
+    this.clearResultSnapshot();
+    this.executionNeedsReview = false;
+    this.executionCapabilities = null;
+    this.lastMessages = [];
+    if (connId !== this.tab.connectionId && this.tab.savedQueryId) this.detachSavedQuery();
     if (this.tab.datasourceStale) {
       delete this.tab.datasourceStale;
       this.el.querySelector(".datasource-stale-warning")?.remove();
       this.dbSelect.disabled = false;
     }
     this.tab.connectionId = connId;
+    this.syncNamespaceLabels();
     this.tab.schema = "";
     this.tab.results = null;
     this.renderResults();
     this.completionLoaded = false;
     const cfg = this.app.connectionById(connId);
-    if (cfg) this.tab.title = `查询 - ${cfg.name}`;
+    if (cfg) { this.tab.connectionName = cfg.name; this.tab.title = this.tab.savedQueryId ? this.tab.title : `查询 - ${cfg.name}`; }
     await this.refreshCompletionData();
     if (!this.disposed && this.tab.connectionId === connId) this.app.renderTabsPublic();
   }
@@ -7395,6 +9382,9 @@ class QueryTabView extends TabView {
     try {
       await api.ensureConnection(connId);
       if (this.disposed || request !== this.completionRequest || connId !== this.tab.connectionId) return;
+      const capabilities = await api.executionCapabilities(connId);
+      if (this.disposed || request !== this.completionRequest || connId !== this.tab.connectionId) return;
+      this.executionCapabilities = capabilities;
       await this.refreshDbSelect(request);
       if (this.disposed || request !== this.completionRequest || connId !== this.tab.connectionId) return;
       await this.loadCompletionData(request);
@@ -7418,12 +9408,17 @@ class QueryTabView extends TabView {
         this.dbSelect.appendChild(o);
       }
       const keep = dbs.some(([n]) => n === this.tab.schema);
-      this.tab.schema = keep ? this.tab.schema : dbs[0]?.[0] ?? "";
+      if (!keep) {
+        const unknown = document.createElement("option"); unknown.value = this.tab.savedQueryId ? this.tab.schema : "";
+        unknown.textContent = this.tab.savedQueryId && this.tab.schema ? `${this.tab.schema}（当前不可用）` : "请选择数据库";
+        this.dbSelect.appendChild(unknown);
+        if (!this.tab.savedQueryId) this.tab.schema = "";
+      }
       this.dbSelect.value = this.tab.schema;
     } catch (e) {
       if (this.disposed || request !== this.completionRequest || connId !== this.tab.connectionId) return;
       this.dbSelect.innerHTML = "";
-      this.tab.schema = "";
+      if (!this.tab.savedQueryId) this.tab.schema = "";
       throw e;
     }
   }
@@ -7449,7 +9444,9 @@ class QueryTabView extends TabView {
 
   /** 执行 SQL。 */
   async execute(sql: string, _selectionOnly: boolean): Promise<void> {
+    if (!this.allowResultReplacement("重新执行查询")) return;
     if (this.tab.datasourceStale) { this.app.toast("info", this.tab.datasourceStale); return; }
+    if (this.executionNeedsReview) { this.app.toast("error", "上一执行结果未知，禁止重试。请验证数据库状态并重新选择连接；活跃事务必须明确回滚。"); return; }
     const connId = this.tab.connectionId;
     if (!connId) {
       this.app.toast("error", "请先在运行条中选择一个连接");
@@ -7459,50 +9456,75 @@ class QueryTabView extends TabView {
       this.app.toast("error", "SQL 为空");
       return;
     }
-    if (this.running) return; // 防重入：双击运行按钮不并发执行两次
+    if (this.resultBusy() || this.disposed) return; // 执行、读取和导出互斥
+    const revision = ++this.executionRevision;
+    const namespace = this.tab.schema;
     const transaction = this.app.manualTransactionFor?.(connId);
     if (this.app.manualTransactionIsBusy?.(connId) || (transaction && (transaction.owner !== this.tab.id || transaction.schema !== this.tab.schema)) || transaction?.failed) {
-      this.app.toast("error", transaction?.failed ? "事务执行失败，必须回滚" : "事务由其它查询页持有或正在操作，不能执行此SQL");
+      this.app.toast("error", transaction?.failed ? "事务执行失败，必须回滚" : "事务由其它页面持有或正在操作，不能执行此 SQL");
       return;
     }
+    this.releaseResultEditing();
     this.running = true;
     this.runBtn.disabled = true;
     this.explainBtn.disabled = true;
     this.connSelect.disabled = true;
     this.dbSelect.disabled = true;
     this.runbar.setAttribute("aria-busy", "true");
-    this.lastMessages = [{ text: "正在执行...（当前执行接口不支持取消）", error: false }];
+    this.lastMessages = [{ text: this.tab.results ? "排队中…当前结果是上次执行的只读快照。" : "排队中…", error: false }];
     this.renderResults();
+    this.app.notifyToolbar?.();
     try {
-      const res: MultiResult = await api.executeSql(connId, sql, this.tab.schema || undefined, transaction?.active ? this.tab.id : undefined, "query");
-      if (this.disposed) return;
+      this.executionCapabilities = await api.executionCapabilities(connId);
+      if (this.disposed || revision !== this.executionRevision) return;
+      const outcome = await this.execution.run({ execution_id: crypto.randomUUID(), connection_id: connId, namespace,
+        owner_id: this.tab.id, sql, transaction_owner: transaction?.active ? this.tab.id : null, origin: "query" });
+      if (this.disposed || revision !== this.executionRevision || !outcome) return;
+      if (outcome.state !== "succeeded" || !outcome.result) {
+        this.executionNeedsReview = outcome.state === "unknown";
+        const snapshot = this.tab.results ? "当前结果区为上次执行的只读快照，不能据此推断本次执行结果。" : "本次执行没有可用结果。";
+        this.lastMessages = [{ text: `${this.executionStatusEl.textContent}。${outcome.error?.message ?? ""} ${snapshot}`, error: true }];
+        this.activeResultTab = -1;
+        this.renderResults(); this.app.toast(outcome.state === "unknown" ? "error" : "info", this.lastMessages[0].text); return;
+      }
+      const res: MultiResult = outcome.result;
+      const previousSpool = this.resultPages.replace(res, { connectionId: connId, ownerId: this.tab.id, namespace });
       this.tab.results = res;
-      this.tab.activeResult = 0;
+      this.resultExecution = { context: { execution_id: outcome.execution_id, connection_id: connId, owner_id: this.tab.id, namespace }, result: res };
+      this.releaseSpool(previousSpool);
       this.activeResultTab = res.sets.length ? 0 : -1;
       const affected = res.sets.reduce((a, s) => a + s.affected, 0);
+      const previewed = res.sets.find(set => set.total > set.rows.length);
+      const completionText = `执行完成，用时 ${res.elapsed_ms} 毫秒${affected ? `，${affected} 行受影响` : ""}`;
+      // 消息页与「执行记录」窗口共用同一格式：[时间][连接][库][驱动] + SQL + Time。
+      const cfg = this.app.connectionById(connId);
+      const record = [
+        `[${logStamp()}][${cfg?.name ?? connId}][${namespace || "—"}][${(cfg?.kind ?? "").toUpperCase()}]`,
+        sql.trim(),
+        `Time: ${(res.elapsed_ms / 1000).toFixed(3)}s`,
+      ].join("\n");
       this.lastMessages = [
-        {
-          text: `执行完成，用时 ${res.elapsed_ms} 毫秒${affected ? `，${affected} 行受影响` : ""}`,
-          error: false,
-        },
+        { text: record, error: false },
         ...res.messages.map((m) => ({ text: m, error: false })),
       ];
       this.renderResults();
       this.app.toast(
         "success",
-        `执行完成，用时 ${res.elapsed_ms} 毫秒${affected ? `，${affected} 行受影响` : ""}`,
+        `${completionText}${previewed ? res.spool_id ? "；结果按页读取本次执行缓存，导出使用完整缓存" : `；无完整缓存，仅已加载 ${previewed.rows.length} / ${previewed.total} 行` : ""}`,
       );
     } catch (e) {
-      if (this.disposed) return;
-      this.lastMessages = [{ text: String(e), error: true }];
-      this.tab.results = null;
+      if (this.disposed || revision !== this.executionRevision) return;
+      this.lastMessages = [{ text: `${String(e)}${this.tab.results ? "。保留上次执行的只读快照。" : ""}`, error: true }];
+      this.executionNeedsReview = this.executionState === "unknown";
       this.activeResultTab = -1;
       this.renderResults();
       this.app.toast("error", String(e));
     } finally {
       await this.app.refreshManualTransactionStatus?.(connId)?.catch(error => this.app.toast("error", `事务状态确认失败：${String(error)}`));
       this.running = false;
+      this.stopBtn.disabled = true;
       this.syncManualTransactionControls();
+      if (!this.disposed) { this.renderResults(); this.app.renderStatus?.(); }
       this.app.notifyToolbar?.();
       this.runbar.setAttribute("aria-busy", "false");
     }
@@ -7511,6 +9533,10 @@ class QueryTabView extends TabView {
   /** 渲染结果页签与内容。无输出时结果区整体隐藏，编辑器占满内容区。 */
   private renderResults(): void {
     const res = this.tab.results;
+    if (res !== this.resultPages.result && (this.controlledResult?.dirty || this.controlledResult?.busy)) {
+      this.controlledResult.invalidate("结果已在外部改变；原行输入和写入证据保留，请核对状态"); return;
+    }
+    if (res !== this.resultPages.result) this.releaseSpool(this.resultPages.replace(res, { connectionId: this.tab.connectionId, ownerId: this.tab.id, namespace: this.tab.schema }));
     this.resultTabsEl.innerHTML = "";
     const hasMessages = this.lastMessages.length > 0;
     const setCount = res?.sets.length ?? 0;
@@ -7520,8 +9546,14 @@ class QueryTabView extends TabView {
       this.resultBody.style.display = "none";
       this.resultTabsEl.style.display = "none";
       this.grid.setData({ columns: [], rows: [] });
+      this.resultPager.style.display = "none";
+      this.gridPreviewNoteEl.style.display = "none";
+      this.gridPreviewNoteEl.textContent = "";
       this.messagesEl.style.display = "none";
       this.grid.el.style.display = "";
+      // 没有输出就没有可预览的单元格：面板一并清空，不留上次的内容。
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
       return;
     }
     this.resultSplitter.style.display = "";
@@ -7529,12 +9561,21 @@ class QueryTabView extends TabView {
     this.resultBody.style.height = `${this.resultRatio * 100}%`;
     this.resultTabsEl.style.display = "";
     const mkTab = (label: string, index: number) => {
-      const t = document.createElement("div");
+      const t = document.createElement("button");
+      t.type = "button";
       t.className = "result-tab" + (index === this.activeResultTab ? " active" : "");
+      t.setAttribute("aria-pressed", String(index === this.activeResultTab));
       t.textContent = label;
       t.addEventListener("click", () => {
+        if (index !== this.activeResultTab) {
+          if (!this.allowResultReplacement("切换结果集") || this.resultBusy()) return;
+          this.disposeControlledResult(); this.resultEvidenceKey = "";
+        }
         this.activeResultTab = index;
         this.renderResults();
+        this.app.renderStatus();
+        this.app.notifyToolbar?.();
+        this.resultTabsEl.querySelector<HTMLButtonElement>(`.result-tab:nth-child(${index < 0 ? 1 : index + (hasMessages ? 2 : 1)})`)?.focus();
       });
       this.resultTabsEl.appendChild(t);
     };
@@ -7542,17 +9583,46 @@ class QueryTabView extends TabView {
     res?.sets.forEach((_s, i) => mkTab(`结果 ${i + 1}`, i));
     // 内容切换
     const showGrid = this.activeResultTab >= 0 && !!res?.sets[this.activeResultTab];
-    this.grid.el.style.display = showGrid ? "" : "none";
+    const showPanel = showGrid && !!this.controlledResult;
+    this.resultPanelHost.style.display = showPanel ? "flex" : "none";
+    this.resultRecoveryTools.style.display = showPanel ? "flex" : "none";
+    this.grid.el.style.display = showGrid && !showPanel ? "" : "none";
     this.messagesEl.style.display = showGrid ? "none" : "";
+    this.renderResultPager();
+    if (!showGrid) {
+      this.gridPreviewNoteEl.style.display = "none";
+      this.gridPreviewNoteEl.textContent = "";
+      // 「消息」页不展示单元格内容面板，否则底部会留一条空的 42px 面板
+      this.cellPreviewEl.style.display = "none";
+      this.cellPreviewEl.innerHTML = "";
+    }
     if (showGrid && res) {
       const set = res.sets[this.activeResultTab];
+      const page = this.resultPages.page(this.activeResultTab);
+      // 不再显示通用说明文字；只保留与当前页真实状态相关的提示：
+      // 无完整缓存（仅已加载行）、字节预算截断、读取缓存失败。
+      // 完整缓存的常规完成消息留在「消息」页，不再占据网格上方；异常警告仍展示。
+      const message = page?.message ?? "";
+      const completionNotice = /^查询已完成[，,]/.test(message) && /(?:内存预览|分页与导出使用本次缓存)/.test(message) && !/不完整|失败|超出|截断|过期/.test(message);
+      const note = this.resultPages.scope
+        ? (completionNotice ? "" : message)
+        : `无完整缓存，仅已加载 ${set.rows.length} / ${set.total} 行；复制、筛选与导出只含已加载行，不会重新执行 SQL。`;
+      this.gridPreviewNoteEl.textContent = note;
+      this.gridPreviewNoteEl.title = note || this.resultEvidenceReason;
+      this.gridPreviewNoteEl.style.display = note ? "block" : "none";
+      if (this.controlledResult) { this.updateCellPreview(); return; }
       this.grid.setData({
         columns: set.columns,
         rows: set.rows,
+        rowNumberOffset: page?.offset ?? 0,
         readOnly: true,
         skipNull: this.app.skipNullState(),
         lined: this.app.showGridLinesState(),
       });
+      // 结果页重绘后没有选中单元格：面板一并收起，避免残留上一次的焦点内容。
+      const preview = this.cellPreviewEl;
+      if (preview && !this.grid.editingActive && !this.grid.focusedCell) { preview.style.display = "none"; preview.innerHTML = ""; }
+      void this.requestControlledResult();
     } else {
       this.renderMessages();
     }
@@ -7570,8 +9640,14 @@ class QueryTabView extends TabView {
   }
 
   destroy(): void {
+    if (this.controlledResult?.busy) throw new Error("查询结果写入或未知证据仍未确认，禁止销毁页面");
+    this.releaseResultEditing();
     this.disposed = true;
+    ++this.executionRevision;
+    this.releaseSpool(this.resultPages.replace(null));
+    this.execution.dispose();
     ++this.completionRequest;
+    document.removeEventListener("selectionchange", this.selectionListener);
     this.editor.destroy();
     this.grid.dispose();
   }
@@ -7582,6 +9658,8 @@ class QueryTabView extends TabView {
 class BackupTabView extends TabView {
   grid: DataGrid;
   private backups: import("./types").BackupInfo[] = [];
+  private generation = 0;
+  private disposed = false;
 
   constructor(app: App, tab: TabState) {
     super(app, tab);
@@ -7622,9 +9700,20 @@ class BackupTabView extends TabView {
   }
 
   async reload(): Promise<void> {
+    if (this.disposed) return;
+    const generation = ++this.generation;
+    const { connectionId, schema } = this.tab;
+    const current = () => !this.disposed && generation === this.generation && connectionId === this.tab.connectionId && schema === this.tab.schema;
+    this.backups = [];
+    this.tab.selectedRows.clear();
+    this.grid.setData({ columns: [], rows: [], readOnly: true });
+    this.footer.textContent = "正在读取备份…";
     try {
-      this.backups = await api.listBackups(this.tab.connectionId, this.tab.schema);
+      const backups = await api.listBackups(connectionId, schema);
+      if (!current()) return;
+      this.backups = backups;
     } catch (e) {
+      if (!current()) return;
       this.backups = [];
       this.app.toast("error", `读取备份列表失败：${String(e)}`);
     }
@@ -7650,6 +9739,8 @@ class BackupTabView extends TabView {
   }
 
   destroy(): void {
+    this.disposed = true;
+    ++this.generation;
     this.grid.dispose();
   }
 }
@@ -7659,19 +9750,46 @@ class BackupTabView extends TabView {
  * mode=view 保存走 CREATE OR REPLACE（SQLite 为 DROP+CREATE），
  * mode=routine 保存整体重建（单语句执行，支持 BEGIN..END 体）。
  */
+class RoutineTabView extends TabView {
+  private readonly document: RoutineDocumentView;
+  constructor(app: App, tab: TabState) { super(app, tab); this.document = new RoutineDocumentView(app, tab); this.el.append(this.document.el); }
+  activate(): void { this.document.activate(); }
+  reload(): Promise<void> { return this.document.reload(); }
+  getSql(): string { return this.document.getSql(); }
+  copyEditor(): SqlEditor { return this.document.copyEditor(); }
+  saveRoutine(): Promise<boolean> { return this.document.saveRoutine(); }
+  showError(message: string): void { this.document.showError(message); }
+  draftDirty(): boolean { return this.document.draftDirty(); }
+  draftBusy(): boolean { return this.document.draftBusy(); }
+  captureDraft(): Pick<DraftSnapshot, "kind" | "baseline" | "payload"> { return this.document.captureDraft(); }
+  discardDraft(): void { this.document.discardDraft(); }
+  destroy(): void { this.document.dispose(); }
+}
+
 class SqlDesignTabView extends TabView {
   private editor: SqlEditor;
   private mode: "view" | "routine";
+  private sqlBaseline: string;
+  private loadGeneration = 0;
+  private disposed = false;
+  private error: HTMLElement;
 
   constructor(app: App, tab: TabState, mode: "view" | "routine") {
     super(app, tab);
     this.mode = mode;
-    this.editor = new SqlEditor({ value: tab.sql || "" });
+    this.sqlBaseline = tab.designCreating ? "" : tab.sql || "";
+    this.error = document.createElement("div"); this.error.className = "object-action-error";
+    this.error.setAttribute("aria-live", "assertive"); this.el.append(this.error);
+    const unavailable = objectCapability(app.connectionById(tab.connectionId), tab.objectType, tab.designCreating ? "create" : "update");
+    if (unavailable) this.showError(unavailable);
+    this.editor = new SqlEditor({ value: tab.sql || "", onChange: sql => {
+      this.tab.sql = sql; this.tab.dirty = sql !== this.sqlBaseline;    },
+      onFormat: () => { void app.runCommand("beautify-sql"); },
+      dialect: objectProtocol(app.connectionById(tab.connectionId)) as "mysql" | "postgres" | "sqlite" });
     this.el.appendChild(this.editor.el);
   }
 
   activate(): void {
-    this.editor.setSql(this.tab.sql || "");
     this.editor.focus();
     this.app.renderStatus();
   }
@@ -7679,97 +9797,47 @@ class SqlDesignTabView extends TabView {
   getSql(): string {
     return this.editor.getSql();
   }
+  showError(message: string): void { this.error.textContent = message; this.error.hidden = !message; }
+  copyEditor(): SqlEditor { return this.editor; }
+  draftDirty(): boolean { return this.editor.getSql() !== this.sqlBaseline; }
+  captureDraft(): Pick<DraftSnapshot, "kind" | "baseline" | "payload"> { return { kind: this.mode, baseline: this.sqlBaseline, payload: { sql: this.editor.getSql(), requires_validation: true } }; }
+  markClean(sql = this.editor.getSql()): void { this.sqlBaseline = sql; this.tab.dirty = this.draftDirty(); }
+  discardDraft(): void { this.editor.setSql(this.sqlBaseline); this.tab.dirty = false; }
 
   async reload(): Promise<void> {
+    if (this.tab.designCreating) return;
+    const generation = ++this.loadGeneration, before = this.editor.getSql();
     try {
+      let sql: string;
       if (this.mode === "view") {
-        this.tab.sql = await api.getViewDefinition(
+        sql = await api.getViewDefinition(
           this.tab.connectionId,
           this.tab.schema,
           this.tab.object,
         );
       } else {
-        this.tab.sql = await api.getRoutineDefinition(
+        sql = await api.getRoutineDefinition(
           this.tab.connectionId,
           this.tab.schema,
           this.tab.object,
           this.tab.objectType === "procedure" ? "procedure" : "function",
         );
       }
-      this.editor.setSql(this.tab.sql || "");
+      if (this.disposed || generation !== this.loadGeneration || this.editor.getSql() !== before) throw new Error("读取期间编辑已变化，保留当前 SQL");
+      this.editor.setSql(sql || "");
+      this.markClean(sql || "");
     } catch (e) {
-      this.app.toast("error", `读取定义失败：${String(e)}`);
+      throw new Error(`读取定义失败，当前草稿已保留：${String(e)}`);
     }
   }
 
   destroy(): void {
+    this.disposed = true; ++this.loadGeneration;
     this.editor.destroy();
   }
 }
 
-/** 模型视图：活库表 / 字段 / 外键的 ER 关系图。 */
-class ModelTabView extends TabView {
-  private canvas: ModelCanvas;
-
-  constructor(app: App, tab: TabState) {
-    super(app, tab);
-    this.canvas = new ModelCanvas();
-    this.el.appendChild(this.canvas.el);
-  }
-
-  activate(): void {
-    void this.reload();
-    // 容器尺寸就绪后重绘（部分环境 ResizeObserver 不可靠，双保险）
-    window.requestAnimationFrame(() => this.canvas.fit());
-    window.setTimeout(() => this.canvas.fit(), 300);
-  }
-
-  async reload(): Promise<void> {
-    try {
-      const tables = await api.listTables(this.tab.connectionId, this.tab.schema);
-      const erTables: ErTable[] = [];
-      for (const [name, type] of tables) {
-        if (type !== "table") continue;
-        const s = await api.getTableSchema(this.tab.connectionId, this.tab.schema, name);
-        erTables.push({
-          name,
-          columns: s.columns.map((c) => ({
-            name: c.name,
-            type: c.type,
-            primary_key: c.primary_key,
-          })),
-          foreign_keys: s.foreign_keys.map((f) => ({
-            name: f.name,
-            columns: f.columns,
-            ref_table: f.ref_table,
-            ref_columns: f.ref_columns,
-          })),
-        });
-      }
-      this.canvas.setTables(erTables);
-    } catch (e) {
-      this.app.toast("error", `读取模型数据失败：${String(e)}`);
-    }
-  }
-
-  fit(): void {
-    this.canvas.fit();
-  }
-
-  zoomIn(): void {
-    this.canvas.setScale(this.canvas.getScale() * 1.2);
-  }
-
-  zoomOut(): void {
-    this.canvas.setScale(this.canvas.getScale() / 1.2);
-  }
-
-  destroy(): void {
-    this.canvas.dispose();
-  }
-}
-
-/** 自动运行视图：真实任务列表 + 执行 + 历史。 */
+/** 自动任务视图：真实任务列表 + 执行 + 历史。 */
 class ScheduleTabView extends TabView {
   grid: DataGrid;
   private jobs: import("./types").ScheduleJob[] = [];
@@ -7796,28 +9864,37 @@ class ScheduleTabView extends TabView {
     try {
       this.jobs = await api.listJobs();
     } catch (e) {
-      this.jobs = [];
-      this.app.toast("error", `读取任务失败：${String(e)}`);
+      this.app.toast("error", `读取任务失败，保留上次已加载列表（当前状态未确认）：${String(e)}`);
+      return;
     }
 const connName = (id: string) => this.app.connectionName(id);
+    const TASK_LABELS: Record<string, string> = { backup: "备份", export: "导出", import: "导入", data_sync: "数据同步", data_generation: "数据生成", data_dictionary: "数据字典" };
+    const scheduleText = (j: import("./types").ScheduleJob): string => {
+      if (j.cron) return `Cron ${j.cron}`;
+      if (j.daily_at) return `每天 ${j.daily_at}`;
+      if (j.interval_secs > 0) return formatInterval(j.interval_secs);
+      return "手动";
+    };
     this.grid.setData({
       columns: [
         { name: "任务名", type: "text", nullable: false, primary_key: false, auto_increment: false },
+        { name: "任务类型", type: "text", nullable: true, primary_key: false, auto_increment: false },
+        { name: "定时", type: "text", nullable: true, primary_key: false, auto_increment: false },
         { name: "连接", type: "text", nullable: true, primary_key: false, auto_increment: false },
         { name: "数据库", type: "text", nullable: true, primary_key: false, auto_increment: false },
-        { name: "间隔", type: "text", nullable: true, primary_key: false, auto_increment: false },
         { name: "启用", type: "text", nullable: true, primary_key: false, auto_increment: false },
         { name: "上次运行", type: "text", nullable: true, primary_key: false, auto_increment: false },
         { name: "状态", type: "text", nullable: true, primary_key: false, auto_increment: false },
       ],
       rows: this.jobs.map((j) => [
         j.name,
+        j.task ? TASK_LABELS[j.task.kind] ?? j.task.kind : "SQL（旧版）",
+        scheduleText(j),
         connName(j.connection_id),
-        j.database || "-",
-        j.interval_secs > 0 ? formatInterval(j.interval_secs) : "手动",
+        j.database || "",
         j.enabled ? "是" : "否",
-        j.last_run ?? "-",
-        j.last_status ?? "-",
+        j.last_run ?? "",
+        j.last_status ?? "",
       ]),
       rowIcons: this.jobs.map(() => "info_pane_query"),
       showRowNumbers: false,
@@ -7840,6 +9917,78 @@ function formatInterval(secs: number): string {
   return `每 ${secs} 秒`;
 }
 
+/** 解析单个 cron 字段为取值集合（支持 * , - /）；非法返回 null。 */
+function parseCronField(field: string, min: number, max: number): Set<number> | null {
+  const values = new Set<number>();
+  for (const item of field.split(",")) {
+    const match = /^(\*|\d{1,3}(?:-\d{1,3})?)(?:\/(\d{1,3}))?$/.exec(item);
+    if (!match) return null;
+    const step = match[2] === undefined ? 1 : Number(match[2]);
+    if (step <= 0) return null;
+    let start = min;
+    let end = max;
+    if (match[1] !== "*") {
+      const parts = match[1].split("-").map(Number);
+      start = parts[0];
+      end = parts[1] ?? parts[0];
+      if (start < min || end > max || start > end) return null;
+    }
+    for (let v = start; v <= end; v += step) values.add(v);
+  }
+  return values;
+}
+
+/** 计算五字段 cron（分 时 日 月 星期）的下一次触发时间（本地时区，向后逐分钟扫描，上限 366 天）。 */
+function cronNextOccurrence(cron: string, from = new Date()): number | null {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const ranges: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  const sets = parts.map((field, i) => parseCronField(field, ranges[i][0], ranges[i][1]));
+  if (sets.some((s) => s === null)) return null;
+  const [minutes, hours, days, months, weekdays] = sets as Set<number>[];
+  // 星期：cron 用 0/7 表示周日，JS getDay() 0 = 周日。
+  const wd = new Set([...weekdays].map((v) => v % 7));
+  const dayRestricted = parts[2] !== "*";
+  const wdRestricted = parts[4] !== "*";
+  const t = new Date(from.getTime());
+  t.setSeconds(0, 0);
+  t.setMinutes(t.getMinutes() + 1);
+  const limit = new Date(from.getTime() + 366 * 86400000);
+  while (t <= limit) {
+    if (!months.has(t.getMonth() + 1)) {
+      t.setMonth(t.getMonth() + 1, 1);
+      t.setHours(0, 0, 0, 0);
+      continue;
+    }
+    // 日与星期同时受限时按标准 cron 的 OR 语义。
+    const dayOk = dayRestricted && wdRestricted
+      ? days.has(t.getDate()) || wd.has(t.getDay())
+      : dayRestricted ? days.has(t.getDate())
+        : wdRestricted ? wd.has(t.getDay()) : true;
+    if (!dayOk) {
+      t.setDate(t.getDate() + 1);
+      t.setHours(0, 0, 0, 0);
+      continue;
+    }
+    if (!hours.has(t.getHours())) {
+      t.setHours(t.getHours() + 1, 0, 0, 0);
+      continue;
+    }
+    if (!minutes.has(t.getMinutes())) {
+      t.setMinutes(t.getMinutes() + 1, 0, 0);
+      continue;
+    }
+    return t.getTime();
+  }
+  return null;
+}
+
+/** 执行记录时间戳：本地 "YYYY-MM-DD HH:mm:ss.SSS"。 */
+function logStamp(date = new Date()): string {
+  const pad = (value: number, size = 2) => String(value).padStart(size, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+}
+
 /** 文件大小格式化（B / KB / MB）。 */
 function formatSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -7850,6 +9999,7 @@ function formatSize(n: number): string {
 /** 备份网格右键菜单。 */
 const BACKUP_CONTEXT_MENU: MenuEntry[] = [
   { id: "restore-backup", label: "还原备份..." },
+  { id: "rename-backup", label: "重命名..." },
   { id: "open-backup-folder", label: "打开所在文件夹..." },
   { separator: true },
   { id: "delete-backup", label: "删除备份" },
@@ -7924,759 +10074,45 @@ class UsersTabView extends TabView {
 }
 
 class StructureTabView extends TabView {
-  private currentTab = "字段";
-  /** 字段编辑副本。 */
-  private fields: {
-    name: string;
-    type: string;
-    length: string;
-    scale: string;
-    nullable: boolean;
-    pk: boolean;
-    isAutoInc: boolean;
-    unsigned: boolean;
-    zerofill: boolean;
-    comment: string;
-    isNew: boolean;
-    isDeleted: boolean;
-    origName: string;
-    origType: string;
-    origNullable: boolean;
-    origDefault: string | null;
-    origBase: string;
-    origLen: string;
-    origScale: string;
-    origUnsigned: boolean;
-    origZerofill: boolean;
-    origComment: string;
-  }[] = [];
-  private origPk: string[] = [];
-  private originalOrder: string[] = [];
-  private originalFieldDrafts = new Map<string, string>();
-  private originalTableDraft = "";
-  private originalColumnMetadata = "";
-  private originalColumnDefinitions = "";
-  private savingStructure = false;
-  private fieldOrderStatus = "";
-  private selectedField = -1;
-  private tableMeta: {
-    engine: string | null;
-    comment: string | null;
-    collation: string | null;
-  } = { engine: null, comment: null, collation: null };
-  private host: HTMLElement;
+  private readonly designer: TableDesigner;
 
   constructor(app: App, tab: TabState) {
     super(app, tab);
-    this.host = document.createElement("div");
-    this.host.className = "designer-body";
-    this.el.appendChild(this.host);
+    this.designer = new TableDesigner(tab, {
+      connection: () => app.connectionById(tab.connectionId),
+      writeReason: () => tab.datasourceStale || (app.connectionById(tab.connectionId)?.read_only ? "此连接只读，不能修改表结构" : !app.connectionById(tab.connectionId) ? "连接不存在" : app.manualTransactionFor(tab.connectionId) || app.manualTransactionIsBusy(tab.connectionId) ? "请先完成此连接的手动事务" : null),
+      changed: () => { app.notifyToolbar(); },
+      status: () => app.renderStatus(),
+      toast: (kind, text) => app.toast(kind, text),
+    }, this.el);
   }
 
-  activate(): void {
-    void this.reload();
-  }
-
-  async reload(): Promise<void> {
-    try {
-      const s = await api.getTableSchema(
-        this.tab.connectionId,
-        this.tab.schema,
-        this.tab.object,
-      );
-      this.tab.schemaInfo = s;
-      if (!this.fields.length) {
-        this.fields = s.columns.map((c) => ({
-          name: c.name,
-          type: c.type.split("(")[0] || c.type,
-          length:
-            c.length != null ? String(c.length) : (c.type.match(/\((\d+)/)?.[1] ?? ""),
-          scale: c.scale != null ? String(c.scale) : (c.type.match(/,(\d+)\)/)?.[1] ?? ""),
-          nullable: c.nullable,
-          pk: c.primary_key,
-          isAutoInc: c.auto_increment,
-          unsigned: /unsigned/i.test(c.type),
-          zerofill: /zerofill/i.test(c.type),
-          comment: c.comment ?? "",
-          isNew: false,
-          isDeleted: false,
-          origName: c.name,
-          origType: c.type,
-          origNullable: c.nullable,
-          origDefault: c.default,
-          origBase: c.type.split("(")[0] || c.type,
-          origLen: c.length != null ? String(c.length) : (c.type.match(/\((\d+)/)?.[1] ?? ""),
-          origScale: c.scale != null ? String(c.scale) : (c.type.match(/,(\d+)\)/)?.[1] ?? ""),
-          origUnsigned: /unsigned/i.test(c.type),
-          origZerofill: /zerofill/i.test(c.type),
-          origComment: c.comment ?? "",
-        }));
-        this.originalOrder = s.columns.map(c => c.name);
-        this.originalFieldDrafts = new Map(this.fields.map(f => [f.origName, JSON.stringify(f)]));
-        this.originalTableDraft = JSON.stringify({ engine: s.engine, comment: s.comment, collation: s.collation });
-        this.originalColumnMetadata = JSON.stringify(s.columns);
-        this.originalColumnDefinitions = "";
-        const cfg = this.app.connectionById(this.tab.connectionId);
-        if (cfg && !columnOrderCapability(cfg.kind, cfg.params, cfg.read_only)) {
-          try {
-            const ddl = await api.getTableDdl(this.tab.connectionId, this.tab.schema || s.database, this.tab.object);
-            this.originalColumnDefinitions = JSON.stringify([...mysqlColumnDefinitions(ddl)]);
-          } catch (error) {
-            this.app.toast("error", `无法读取完整字段定义，字段排序已禁用：${String(error)}`);
-          }
-        }
-      }
-      this.origPk = s.columns.filter((c) => c.primary_key).map((c) => c.name);
-      this.tableMeta = { engine: s.engine, comment: s.comment, collation: s.collation };
-      this.render();
-      // 结构异步加载完成后刷新状态栏，避免「字段数: 0」短暂滞留
-      this.app.renderStatus();
-      this.app.notifyToolbar();
-    } catch (e) {
-      this.app.toast("error", String(e));
-    }
-  }
-
-  /** 顶部选项卡：字段 / 索引 / 外键 / 检查 / 触发器 / 选项 / 注释 / SQL 预览。 */
-  private render(): void {
-    const s = this.tab.schemaInfo;
-    this.el.innerHTML = "";
-    if (!s) return;
-
-    const tabs = document.createElement("div");
-    tabs.className = "designer-tabs";
-    const names = ["字段", "索引", "外键", "检查", "触发器", "选项", "注释", "SQL 预览"];
-    const body = document.createElement("div");
-    body.className = "designer-body";
-    const footer = document.createElement("div");
-    footer.className = "designer-footer";
-    footer.addEventListener("change", () => { this.tab.dirty = true; this.app.notifyToolbar(); });
-
-    const show = (name: string) => {
-      this.currentTab = name;
-      body.innerHTML = "";
-      if (name === "字段") this.renderFields(body);
-      else if (name === "索引") {
-        this.appendSimpleTable(body, ["名称", "列", "唯一", "主键"],
-          s.indexes.map((i) => [i.name, i.columns.join(", "), i.unique ? "是" : "", i.primary ? "是" : ""]));
-      } else if (name === "外键") {
-        this.appendSimpleTable(body, ["名称", "列", "引用表", "引用列"],
-          s.foreign_keys.map((f) => [f.name, f.columns.join(", "), f.ref_table, f.ref_columns.join(", ")]));
-      } else if (name === "SQL 预览") {
-        this.renderSqlPreview(body, s);
-      } else if (name === "选项") {
-        this.appendSimpleTable(body, ["选项", "值"], [
-          ["引擎", this.tableMeta.engine ?? ""],
-          ["行格式", this.tableMeta.collation ?? ""],
-          ["注释", this.tableMeta.comment ?? "--"],
-        ]);
-      } else if (name === "注释") {
-        const ta = document.createElement("textarea");
-        ta.value = this.tableMeta.comment ?? "";
-        ta.style.width = "100%";
-        ta.style.height = "120px";
-        ta.addEventListener("change", () => {
-          this.tableMeta.comment = ta.value || null;
-          this.tab.dirty = true;
-          this.app.notifyToolbar();
-        });
-        body.appendChild(ta);
-      } else {
-        const note = document.createElement("div");
-        note.style.color = "var(--fg-muted)";
-        note.style.padding = "10px";
-        note.textContent = `此表没有${name}。`;
-        body.appendChild(note);
-      }
-      this.renderFooter(footer);
-      this.app.notifyToolbar();
-    };
-
-    for (const name of names) {
-      const t = document.createElement("div");
-      t.className = "designer-tab" + (name === this.currentTab ? " active" : "");
-      t.textContent = name;
-      t.addEventListener("click", () => {
-        if (this.savingStructure) return;
-        tabs.querySelectorAll(".designer-tab").forEach((x) => x.classList.remove("active"));
-        t.classList.add("active");
-        show(name);
-      });
-      tabs.appendChild(t);
-    }
-
-    this.el.appendChild(tabs);
-    this.el.appendChild(body);
-    this.el.appendChild(footer);
-    show(this.currentTab);
-  }
-
-  /** 字段页（可编辑：名称 / 类型 / 长度 / 小数点 / 不是 null / 键 / 注释）。 */
-  private renderFields(body: HTMLElement): void {
-    const table = document.createElement("table");
-    table.className = "mini-table designer-grid";
-    // 参考截图 6 实测列宽（物理 ÷1.25）
-    const colg = document.createElement("colgroup");
-    for (const w of [257.6, 148.8, 60, 60, 60, 60, 60, 236.8]) {
-      const col = document.createElement("col");
-      col.style.width = `${w}px`;
-      colg.appendChild(col);
-    }
-    table.appendChild(colg);
-    const thead = document.createElement("thead");
-    const tr = document.createElement("tr");
-    for (const h of ["名", "类型", "长度", "小数点", "不是 null", "虚拟", "键", "注释"]) {
-      const th = document.createElement("th");
-      th.textContent = h;
-      tr.appendChild(th);
-    }
-    thead.appendChild(tr);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    this.fields.forEach((f, i) => {
-      const r = document.createElement("tr");
-      if (f.isDeleted) r.style.textDecoration = "line-through";
-      if (f.isNew) r.style.background = "var(--ok-50)";
-      if (i === this.selectedField) r.style.background = "var(--bg-selected-soft)";
-      const selectRow = () => {
-        if (this.savingStructure || this.selectedField === i) return;
-        this.selectedField = i;
-        tbody.querySelectorAll<HTMLTableRowElement>("tr").forEach((row, rowIndex) => {
-          row.style.background = rowIndex === i ? "var(--bg-selected-soft)" : this.fields[rowIndex]?.isNew ? "var(--ok-50)" : "";
-        });
-        const footer = this.el.querySelector<HTMLElement>(".designer-footer");
-        if (footer) this.renderFooter(footer);
-        this.app.notifyToolbar();
-      };
-      r.addEventListener("mousedown", selectRow);
-      r.addEventListener("focusin", selectRow);
-
-      const mkCellText = (value: string, onChange: (v: string) => void, label: string) => {
-        const td = document.createElement("td");
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = value;
-        input.setAttribute("aria-label", `${f.name || "新字段"}：${label}`);
-        input.style.width = "95%";
-        input.style.height = "16px";
-        input.style.border = "1px solid transparent";
-        input.style.background = "transparent";
-        input.addEventListener("focus", () => {
-          input.style.border = "1px solid var(--focus-blue)";
-        });
-        input.addEventListener("blur", () => {
-          input.style.border = "1px solid transparent";
-          onChange(input.value);
-          if (input.value !== value) this.tab.dirty = true;
-          this.app.notifyToolbar();
-        });
-        td.appendChild(input);
-        return td;
-      };
-
-      r.appendChild(mkCellText(f.name, (v) => (this.fields[i].name = v.trim()), "名称"));
-      r.appendChild(mkCellText(f.type, (v) => (this.fields[i].type = v.trim()), "类型"));
-      r.appendChild(mkCellText(f.length, (v) => (this.fields[i].length = v.trim()), "长度"));
-      r.appendChild(mkCellText(f.scale, (v) => (this.fields[i].scale = v.trim()), "小数点"));
-
-      const nullTd = document.createElement("td");
-      nullTd.style.textAlign = "center";
-      const nullBox = document.createElement("input");
-      nullBox.type = "checkbox";
-      nullBox.checked = !f.nullable;
-      nullBox.setAttribute("aria-label", `${f.name || "新字段"}：不是 null`);
-      nullBox.addEventListener("change", () => {
-        this.fields[i].nullable = !nullBox.checked;
-        this.tab.dirty = true;
-        this.app.notifyToolbar();
-      });
-      nullTd.appendChild(nullBox);
-      r.appendChild(nullTd);
-
-      const virtTd = document.createElement("td");
-      virtTd.style.textAlign = "center";
-      const virtBox = document.createElement("input");
-      virtBox.type = "checkbox";
-      virtBox.setAttribute("aria-label", `${f.name || "新字段"}：虚拟字段`);
-      virtBox.disabled = true;
-      virtTd.appendChild(virtBox);
-      r.appendChild(virtTd);
-
-      const keyTd = document.createElement("td");
-      keyTd.style.textAlign = "center";
-      keyTd.style.cursor = "default";
-      if (f.pk) {
-        keyTd.innerHTML =
-          `<span style="line-height:0;display:inline-flex">${svg(ICON_KEY_GOLD, 13)}</span> 1`;
-        keyTd.title = "点击取消主键";
-      } else {
-        keyTd.title = "点击设为主键";
-      }
-      keyTd.addEventListener("click", () => {
-        if (this.savingStructure) return;
-        this.fields[i].pk = !this.fields[i].pk;
-        this.tab.dirty = true;
-        this.render();
-      });
-      r.appendChild(keyTd);
-
-      r.appendChild(mkCellText(f.comment, (v) => (this.fields[i].comment = v), "注释"));
-      tbody.appendChild(r);
-    });
-    table.appendChild(tbody);
-    body.appendChild(table);
-  }
-
-  private renderSqlPreview(body: HTMLElement, s: import("../core/types").TableSchema): void {
-    const full = s.database ? `${s.database}.${s.table}` : s.table;
-    const lines: string[] = [`CREATE TABLE ${full} (`];
-    const cols = s.columns.map((c) => {
-      let seg = `  ${c.name} ${c.type}`;
-      if (!c.nullable) seg += " NOT NULL";
-      if (c.default) seg += ` DEFAULT ${c.default}`;
-      return seg;
-    });
-    const pks = s.columns.filter((c) => c.primary_key).map((c) => c.name);
-    if (pks.length) cols.push(`  PRIMARY KEY (${pks.join(", ")})`);
-    lines.push(cols.join(",\n"));
-    lines.push(");");
-    const ta = document.createElement("textarea");
-    ta.value = lines.join("\n");
-    ta.style.width = "100%";
-    ta.style.height = "220px";
-    body.appendChild(ta);
-  }
-
-  /** 底部：默认值 + 自动递增 / 无符号 / 填充零（作用于选中字段）。 */
-  private renderFooter(footer: HTMLElement): void {
-    footer.innerHTML = "";
-    if (this.currentTab !== "字段") return;
-    // 保存/删除后字段列表可能变短，钳制选中索引避免越界读取
-    if (this.selectedField >= this.fields.length) {
-      this.selectedField = this.fields.length - 1;
-    }
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.alignItems = "flex-start";
-    row.style.gap = "18px";
-
-    const left = document.createElement("div");
-    const label = document.createElement("div");
-    label.className = "designer-footer-label";
-    label.textContent = "默认:";
-    left.appendChild(label);
-    const combo = document.createElement("select");
-    combo.style.width = "200px";
-    combo.setAttribute("aria-label", "选中字段的默认值");
-    const sel = this.selectedField;
-    const cur = sel >= 0 ? this.fields[sel]?.origDefault ?? "" : "";
-    const opts = ["", "NULL", "CURRENT_TIMESTAMP", "0", "''"];
-    if (cur && !opts.includes(cur)) opts.unshift(cur);
-    for (const o of opts) {
-      const op = document.createElement("option");
-      op.value = o;
-      op.textContent = o === "" ? "（无默认值）" : o;
-      combo.appendChild(op);
-    }
-    combo.value = cur;
-    combo.addEventListener("change", () => {
-      if (sel >= 0) this.fields[sel].origDefault = combo.value || null;
-    });
-    left.appendChild(combo);
-    row.appendChild(left);
-
-    const boxes = document.createElement("div");
-    boxes.className = "designer-checkboxes";
-    const mkBox = (text: string, get: () => boolean, set: (v: boolean) => void) => {
-      const lab = document.createElement("label");
-      lab.className = "checkbox";
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = get();
-      input.addEventListener("change", () => set(input.checked));
-      const span = document.createElement("span");
-      span.textContent = text;
-      lab.appendChild(input);
-      lab.appendChild(span);
-      boxes.appendChild(lab);
-    };
-    mkBox("自动递增", () => sel >= 0 && this.fields[sel].isAutoInc, (v) => {
-      if (sel >= 0) this.fields[sel].isAutoInc = v;
-    });
-    mkBox("无符号", () => sel >= 0 && this.fields[sel].unsigned, (v) => {
-      if (sel >= 0) this.fields[sel].unsigned = v;
-    });
-    mkBox("填充零", () => sel >= 0 && this.fields[sel].zerofill, (v) => {
-      if (sel >= 0) this.fields[sel].zerofill = v;
-    });
-    row.appendChild(boxes);
-
-    footer.appendChild(row);
-    const statusText = this.fieldOrderStatus || this.fieldOrderReason();
-    if (statusText) {
-      const status = document.createElement("div");
-      status.className = "field-order-status";
-      status.setAttribute("role", "status");
-      status.setAttribute("aria-live", "polite");
-      status.style.padding = "6px 0";
-      status.style.color = "var(--fg-muted)";
-      status.textContent = statusText;
-      footer.appendChild(status);
-    }
-  }
-
-  /** 添加字段（末尾追加空行）。 */
-  addField(): void {
-    if (this.savingStructure) return;
-    this.fields.push(this.blankField());
-    this.selectedField = this.fields.length - 1;
-    this.render();
-  }
-
-  /** 在选中行上方插入字段。 */
-  insertField(): void {
-    if (this.savingStructure) return;
-    const at = this.selectedField >= 0 ? this.selectedField : this.fields.length;
-    this.fields.splice(at, 0, this.blankField());
-    this.selectedField = at;
-    this.render();
-  }
-
-  /** 删除选中字段。 */
-  deleteField(): void {
-    if (this.savingStructure) return;
-    if (this.selectedField < 0 || this.selectedField >= this.fields.length) {
-      this.app.toast("info", "请先选中一个字段");
-      return;
-    }
-    const f = this.fields[this.selectedField];
-    if (f.isNew) {
-      this.fields.splice(this.selectedField, 1);
-    } else {
-      f.isDeleted = !f.isDeleted;
-    }
-    this.render();
-  }
-
-  /** 切换选中字段的主键标记。 */
-  togglePrimaryKey(): void {
-    if (this.savingStructure) return;
-    if (this.selectedField < 0 || this.selectedField >= this.fields.length) {
-      this.app.toast("info", "请先选中一个字段");
-      return;
-    }
-    const f = this.fields[this.selectedField];
-    f.pk = !f.pk;
-    this.render();
-  }
-
-  private blankField() {
-    return {
-      name: "",
-      type: "varchar",
-      length: "100",
-      scale: "",
-      nullable: true,
-      pk: false,
-      isAutoInc: false,
-      unsigned: false,
-      zerofill: false,
-      comment: "",
-      isNew: true,
-      isDeleted: false,
-      origName: "",
-      origType: "",
-      origNullable: true,
-      origDefault: null,
-      origBase: "",
-      origLen: "",
-      origScale: "",
-      origUnsigned: false,
-      origZerofill: false,
-      origComment: "",
-    };
-  }
-
-  /** 排序只允许原地安全 DDL，不能夹带字段定义或约束修改。 */
-  private fieldOrderReason(): string | null {
-    const cfg = this.app.connectionById(this.tab.connectionId);
-    if (!cfg) return "连接不存在";
-    const capability = columnOrderCapability(cfg.kind, cfg.params, cfg.read_only);
-    if (capability) return capability;
-    if (this.savingStructure) return "正在保存表结构，请稍候";
-    if (!this.tab.schemaInfo || !this.originalOrder.length) return "请先等待字段结构加载完成";
-    if (!this.originalColumnDefinitions) return "完整字段定义尚未加载，不能安全调整字段顺序";
-    if (!(this.tab.schema || this.tab.schemaInfo.database)) return "请先明确当前数据库，不能在未知命名空间调整字段顺序";
-    if (this.fields.length !== this.originalOrder.length || this.fields.some(f =>
-      f.isNew || f.isDeleted || this.originalFieldDrafts.get(f.origName) !== JSON.stringify(f)) ||
-      this.originalTableDraft !== JSON.stringify(this.tableMeta)) {
-      return "字段排序不能与新增、删除、重命名或其它结构修改混合；请先保存其它修改再重新打开结构";
-    }
-    return null;
-  }
-
-  private fieldOrderChanged(): boolean {
-    const existing = this.fields.filter(f => !f.isNew).map(f => f.origName);
-    return existing.length === this.originalOrder.length && existing.some((name, i) => name !== this.originalOrder[i]);
-  }
-
-  isSavingStructure(): boolean { return this.savingStructure; }
-
-  fieldMoveReason(direction: -1 | 1): string | null {
-    const reason = this.fieldOrderReason();
-    if (reason) return reason;
-    if (this.currentTab !== "字段") return "请切换到字段页后选择字段";
-    if (this.selectedField < 0 || this.selectedField >= this.fields.length) return "请先选择要移动的字段";
-    const target = this.selectedField + direction;
-    return target < 0 ? "已是第一个字段" : target >= this.fields.length ? "已是最后一个字段" : null;
-  }
-
-  /** 工具栏点击前提交当前输入，避免重建 DOM 丢失未失焦文字。 */
-  private flushFieldInput(): void {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && this.el.contains(active)) active.blur();
-  }
-
-  moveField(direction: -1 | 1): void {
-    this.flushFieldInput();
-    const reason = this.fieldMoveReason(direction);
-    if (reason) { this.app.toast("info", reason); this.app.notifyToolbar(); return; }
-    const from = this.selectedField, to = from + direction;
-    [this.fields[from], this.fields[to]] = [this.fields[to], this.fields[from]];
-    this.selectedField = to;
-    this.tab.dirty = this.fieldOrderChanged();
-    this.fieldOrderStatus = this.tab.dirty ? "字段顺序为待保存草稿；点击保存后才会调整数据库的物理字段顺序。" : "";
-    this.render();
-    this.app.notifyToolbar();
-    this.el.querySelectorAll<HTMLTableRowElement>(".designer-grid tbody tr")[to]?.querySelector<HTMLInputElement>("input[type=text]")?.focus();
-  }
-
-  /** 复用 SHOW CREATE 的完整列定义，一次 ALTER 保存，再读取真实顺序确认。 */
-  private async saveFieldOrder(): Promise<void> {
-    const reason = this.fieldOrderReason();
-    if (reason) { this.fieldOrderStatus = reason; this.app.toast("error", reason); this.render(); return; }
-    const connectionId = this.tab.connectionId, schema = this.tab.schema || this.tab.schemaInfo?.database || "", table = this.tab.object;
-    const initialTabSchema = this.tab.schema;
-    const desired = this.fields.map(f => f.origName);
-    this.savingStructure = true;
-    this.fieldOrderStatus = "正在保存字段顺序并核对数据库实际结果…";
-    this.el.setAttribute("aria-busy", "true");
-    const status = this.el.querySelector<HTMLElement>(".field-order-status");
-    if (status) status.textContent = this.fieldOrderStatus;
-    this.app.notifyToolbar();
-    this.el.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")
-      .forEach(input => { input.disabled = true; });
-    let submitted = false;
-    try {
-      const freshSchema = await api.getTableSchema(connectionId, schema, table);
-      if (JSON.stringify(freshSchema.columns) !== this.originalColumnMetadata) {
-        throw new Error("数据库字段定义已发生变化，请重新打开表结构后再调整");
-      }
-      const ddl = await api.getTableDdl(connectionId, schema, table);
-      if (JSON.stringify([...mysqlColumnDefinitions(ddl)]) !== this.originalColumnDefinitions) {
-        throw new Error("数据库完整字段定义已发生变化，请重新打开表结构后再调整");
-      }
-      const sql = mysqlColumnOrderSql(ddl, schema, table, this.originalOrder, desired);
-      const cfg = this.app.connectionById(connectionId);
-      if (!cfg || columnOrderCapability(cfg.kind, cfg.params, cfg.read_only) ||
-        this.tab.connectionId !== connectionId || this.tab.schema !== initialTabSchema || this.tab.object !== table) {
-        throw new Error("连接、数据库或只读状态已变化，字段排序没有执行");
-      }
-      if (!sql) return;
-      await api.executeDdl(connectionId, sql);
-      submitted = true;
-      const confirmed = await api.getTableSchema(connectionId, schema, table);
-      const actual = confirmed.columns.map(c => c.name);
-      if (actual.length !== desired.length || actual.some((name, i) => name !== desired[i])) {
-        throw new Error(`数据库返回的实际字段顺序与草稿不同：${actual.join(" → ")}`);
-      }
-      this.fields = [];
-      this.tab.dirty = false;
-      await this.reload();
-      this.fieldOrderStatus = "字段顺序已保存，并已核对数据库实际顺序";
-      this.app.toast("success", this.fieldOrderStatus);
-    } catch (error) {
-      this.tab.dirty = true;
-      this.fieldOrderStatus = `${submitted ? "排序 DDL 已执行，但结果尚未确认；请重新读取结构核对，不能当作保存成功。" : "字段排序未确认保存，草稿已保留。"}${String(error)}`;
-      this.app.toast("error", this.fieldOrderStatus);
-    } finally {
-      this.savingStructure = false;
-      this.el.setAttribute("aria-busy", "false");
-      this.render();
-      this.app.notifyToolbar();
-    }
-  }
-
-  /** 保存：生成并执行 ALTER TABLE。 */
-  async saveChanges(): Promise<void> {
-    this.flushFieldInput();
-    const cfg = this.app.connectionById(this.tab.connectionId);
-    if (!cfg) return;
-    if (cfg.read_only) { this.app.toast("error", "此连接只读，不能保存结构修改"); return; }
-    if (this.savingStructure) return;
-    if (this.fields.length && this.originalOrder.length && this.fieldOrderChanged()) {
-      await this.saveFieldOrder();
-      return;
-    }
-    const kind = cfg.kind;
-    const q = (s: string) =>
-      kind === "mysql"
-        ? `\`${s.replace(/`/g, "``")}\``
-        : `"${s.replace(/"/g, '""')}"`;
-    const full = this.tab.schema
-      ? `${q(this.tab.schema)}.${q(this.tab.object)}`
-      : q(this.tab.object);
-    const colType = (f: (typeof this.fields)[number]): string => {
-      let t = f.type;
-      if (f.length) t += `(${f.length}${f.scale ? `,${f.scale}` : ""})`;
-      if (kind === "mysql") {
-        if (f.unsigned) t += " UNSIGNED";
-        if (f.zerofill) t += " ZEROFILL";
-      }
-      if (!f.nullable) t += " NOT NULL";
-      if (f.origDefault) t += ` DEFAULT ${f.origDefault}`;
-      if (f.comment && kind === "mysql") {
-        t += ` COMMENT '${f.comment.replace(/'/g, "''")}'`;
-      }
-      return t;
-    };
-
-    const ddls: string[] = [];
-    // 与加载时完全同构地重建原始类型串，避免「未修改也永远不相等」导致的空 DDL。
-    const origTypeOf = (f: (typeof this.fields)[number]): string => {
-      let t = f.origBase || f.origType;
-      if (f.origLen) t += `(${f.origLen}${f.origScale ? `,${f.origScale}` : ""})`;
-      if (kind === "mysql") {
-        if (f.origUnsigned) t += " UNSIGNED";
-        if (f.origZerofill) t += " ZEROFILL";
-      }
-      if (!f.origNullable) t += " NOT NULL";
-      if (f.origDefault) t += ` DEFAULT ${f.origDefault}`;
-      if (f.origComment && kind === "mysql") {
-        t += ` COMMENT '${f.origComment.replace(/'/g, "''")}'`;
-      }
-      return t;
-    };
-    for (const f of this.fields) {
-      if (f.isNew && !f.isDeleted && f.name) {
-        let t = colType(f);
-        if (f.isAutoInc && kind === "mysql") t += " AUTO_INCREMENT";
-        ddls.push(`ALTER TABLE ${full} ADD COLUMN ${q(f.name)} ${t}`);
-      } else if (!f.isNew && f.isDeleted) {
-        ddls.push(`ALTER TABLE ${full} DROP COLUMN ${q(f.name)}`);
-      } else if (!f.isNew && !f.isDeleted && f.name) {
-        if (f.name !== f.origName) {
-          if (kind === "mysql") {
-            ddls.push(
-              `ALTER TABLE ${full} CHANGE COLUMN ${q(f.origName)} ${q(f.name)} ${colType(f)}`,
-            );
-          } else {
-            ddls.push(`ALTER TABLE ${full} RENAME COLUMN ${q(f.origName)} TO ${q(f.name)}`);
-          }
-        } else if (colType(f) !== origTypeOf(f) && kind === "postgresql") {
-          ddls.push(`ALTER TABLE ${full} ALTER COLUMN ${q(f.name)} TYPE ${colType(f)}`);
-        } else if (colType(f) !== origTypeOf(f) && kind !== "sqlite") {
-          ddls.push(`ALTER TABLE ${full} MODIFY COLUMN ${q(f.name)} ${colType(f)}`);
-        } else if (colType(f) !== origTypeOf(f) && kind === "sqlite") {
-          this.app.toast("info", `SQLite 不支持修改列「${f.name}」的类型，已跳过`);
-        }
-        // MySQL 的 MODIFY COLUMN 已携带 NOT NULL 子句；SET/DROP NOT NULL 语法仅 PG 等支持。
-        if (f.nullable !== f.origNullable && kind !== "sqlite" && kind !== "mysql") {
-          ddls.push(
-            f.nullable
-              ? `ALTER TABLE ${full} ALTER COLUMN ${q(f.name)} DROP NOT NULL`
-              : `ALTER TABLE ${full} ALTER COLUMN ${q(f.name)} SET NOT NULL`,
-          );
-        }
-      }
-    }
-    // 主键变更（仅在主键集合真变化时发出，避免每次保存都重建主键）
-    const pkCols = this.fields
-      .filter((f) => f.pk && !f.isDeleted && !f.isNew && f.name)
-      .map((f) => f.name);
-    const pkChanged =
-      pkCols.length !== this.origPk.length ||
-      pkCols.some((c, i) => c !== this.origPk[i]) ||
-      pkCols.some((c) => !this.origPk.includes(c));
-    if (pkChanged && pkCols.length && kind === "postgresql") {
-      ddls.push(
-        `ALTER TABLE ${full} DROP CONSTRAINT IF EXISTS ${q(`${this.tab.object}_pkey`)}, ADD PRIMARY KEY (${pkCols.map(q).join(", ")})`,
-      );
-    } else if (pkChanged && pkCols.length && kind !== "sqlite") {
-      ddls.push(
-        `ALTER TABLE ${full} DROP PRIMARY KEY, ADD PRIMARY KEY (${pkCols.map(q).join(", ")})`,
-      );
-    } else if (pkCols.length && kind === "sqlite") {
-      this.app.toast("info", "SQLite 不支持在现有表上调整主键，已跳过");
-    }
-
-    if (!ddls.length) {
-      this.app.toast("info", "没有需要保存的修改");
-      return;
-    }
-    try {
-      for (const ddl of ddls) {
-        await api.executeDdl(this.tab.connectionId, ddl);
-      }
-      this.app.toast("success", `已保存 ${ddls.length} 项结构修改`);
-      this.fields = [];
-      await this.reload();
-    } catch (e) {
-      this.app.toast("error", String(e));
-    }
-  }
-
-  private appendSimpleTable(body: HTMLElement, headers: string[], rows: string[][]): void {
-    const table = document.createElement("table");
-    table.className = "mini-table";
-    const thead = document.createElement("thead");
-    const tr = document.createElement("tr");
-    for (const h of headers) {
-      const th = document.createElement("th");
-      th.textContent = h;
-      tr.appendChild(th);
-    }
-    thead.appendChild(tr);
-    table.appendChild(thead);
-    const tbody = document.createElement("tbody");
-    for (const r of rows) {
-      const row = document.createElement("tr");
-      for (const c of r) {
-        const td = document.createElement("td");
-        td.textContent = c;
-        row.appendChild(td);
-      }
-      tbody.appendChild(row);
-    }
-    table.appendChild(tbody);
-    body.appendChild(table);
-  }
-
-  destroy(): void {
-    /* nothing */
-  }
-}
-
-/** 图表标签页仅渲染内存快照，刷新也不会重跑来源 SQL。 */
-class ChartTabView extends TabView {
-  private panel: ChartPanel | null = null;
-  constructor(app: App, tab: TabState) {
-    super(app, tab);
-    if (tab.chart) {
-      this.panel = new ChartPanel(tab.chart);
-      this.el.appendChild(this.panel.el);
-    } else {
-      const empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.textContent = "请从表数据页或查询结果页点击“创建图表”；图表使用创建时的数据快照。";
-      empty.setAttribute("role", "status");
-      this.el.appendChild(empty);
-    }
-  }
-  activate(): void { this.panel?.focus(); }
-  async reload(): Promise<void> { this.panel?.redraw(); }
-  destroy(): void { this.panel?.destroy(); }
+  activate(): void { this.designer.activate(); }
+  flushDraft(): void { this.designer.flushDraft(); }
+  draftDirty(): boolean { return this.designer.draftDirty(); }
+  discardDraft(): void { this.designer.discardDraft(); }
+  draftBusy(): boolean { return this.designer.draftBusy(); }
+  captureDraft(): Pick<DraftSnapshot, "kind" | "baseline" | "payload"> { return this.designer.captureDraft(); }
+  async reloadAfterLeave(): Promise<void> { await this.designer.reloadAfterLeave(); }
+  async reload(): Promise<void> { await this.designer.reload(); }
+  addField(): void { this.designer.addField(); }
+  insertField(): void { this.designer.insertField(); }
+  deleteField(): void { this.designer.deleteField(); }
+  togglePrimaryKey(): void { this.designer.togglePrimaryKey(); }
+  designerTabName(): string { return this.designer.activeTabName; }
+  addIndex(): void { this.designer.addIndex(); }
+  deleteIndex(): void { this.designer.deleteIndex(); }
+  addForeignKey(): void { this.designer.addForeignKey(); }
+  deleteForeignKey(): void { this.designer.deleteForeignKey(); }
+  addCheck(): void { this.designer.addCheck(); }
+  deleteCheck(): void { this.designer.deleteCheck(); }
+  addTrigger(): void { this.designer.addTrigger(); }
+  deleteTrigger(): void { this.designer.deleteTrigger(); }
+  isSavingStructure(): boolean { return this.designer.isSavingStructure(); }
+  fieldMoveReason(direction: -1 | 1): string | null { return this.designer.fieldMoveReason(direction); }
+  moveField(direction: -1 | 1): void { this.designer.moveField(direction); }
+  async saveChanges(): Promise<void> { await this.designer.saveChanges(); }
+  destroy(): void { this.designer.destroy(); }
 }
 
 

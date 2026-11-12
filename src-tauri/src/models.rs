@@ -269,6 +269,9 @@ pub struct ForeignKeyInfo {
     pub name: String,
     pub columns: Vec<String>,
     pub ref_table: String,
+    /// 引用表的实际命名空间；缺省仅兼容旧同命名空间目录。
+    #[serde(default)]
+    pub ref_schema: Option<String>,
     pub ref_columns: Vec<String>,
     #[serde(default)]
     pub on_update: Option<String>,
@@ -361,6 +364,10 @@ pub struct MultiResult {
     /// 总耗时（毫秒）。
     #[serde(default)]
     pub elapsed_ms: u64,
+    /// 本次执行完整结果的本地缓存标识；`sets[i]` 对应缓存里第 i 个结果集。
+    /// 为空表示这次执行没有可用的完整快照（适配器不走原生流）。
+    #[serde(default)]
+    pub spool_id: Option<String>,
 }
 
 /// 数据分页请求。
@@ -467,11 +474,15 @@ pub struct RowInsert {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    pub settings_version: u32,
     pub font_family: String,
     pub font_size: u32,
     pub grid_font_size: u32,
     pub rows_per_page: u32,
     pub query_timeout_secs: u64,
+    pub connect_timeout_secs: u64,
+    pub pool_acquire_timeout_secs: u64,
+    pub sqlite_busy_timeout_secs: u64,
     pub theme: String,
     pub show_system_tray: bool,
     pub confirm_on_close: bool,
@@ -479,16 +490,21 @@ pub struct AppSettings {
     pub max_recent: u32,
     pub sql_font_family: String,
     pub sql_font_size: u32,
+    #[serde(flatten)] pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            settings_version: 2,
             font_family: "Microsoft YaHei UI".into(),
             font_size: 12,
             grid_font_size: 12,
             rows_per_page: 1000,
             query_timeout_secs: 30,
+            connect_timeout_secs: 30,
+            pool_acquire_timeout_secs: 30,
+            sqlite_busy_timeout_secs: 10,
             theme: "light".into(),
             show_system_tray: true,
             confirm_on_close: true,
@@ -496,7 +512,19 @@ impl Default for AppSettings {
             max_recent: 10,
             sql_font_family: "Consolas".into(),
             sql_font_size: 13,
+            extra: Default::default(),
         }
+    }
+}
+
+impl AppSettings {
+    pub fn validate_execution_settings(&self) -> crate::error::CmdResult<()> {
+        if self.settings_version > 2 { return Err(crate::error::AppError::coded("SETTINGS_VERSION_UNSUPPORTED", "设置来自更新版本，拒绝覆盖")); }
+        if self.query_timeout_secs > 86400 || !(1..=86400).contains(&self.connect_timeout_secs)
+            || !(1..=86400).contains(&self.pool_acquire_timeout_secs) || self.sqlite_busy_timeout_secs > 86400 {
+            return Err(crate::error::AppError::coded("EXECUTION_BUDGET_INVALID", "查询/SQLite 锁预算必须为 0..86400 秒；连接与池等待必须为 1..86400 秒"));
+        }
+        Ok(())
     }
 }
 
@@ -518,6 +546,8 @@ pub struct Favorite {
     pub sql: String,
     #[serde(default)]
     pub connection_id: Option<String>,
+    #[serde(default)]
+    pub schema: Option<String>,
     pub timestamp: i64,
 }
 
@@ -543,6 +573,12 @@ pub struct ImportOptions {
     pub truncate: bool,
     #[serde(default)]
     pub sheet: Option<String>,
+    /// 记录冲突策略：error（默认，遇重复整批失败）| skip（跳过重复）| update（按键更新）。
+    #[serde(default)]
+    pub on_conflict: String,
+    /// 冲突判定键（目标表列名）；为空时使用目标表主键。
+    #[serde(default)]
+    pub conflict_columns: Vec<String>,
 }
 
 /// 导出向导选项。
@@ -638,6 +674,12 @@ pub struct BackupOptions {
     /// 要备份的表 / 视图名单；空表示全部。
     #[serde(default)]
     pub tables: Vec<String>,
+    /// 要备份的函数 / 存储过程名单；空表示不包含例程。
+    #[serde(default)]
+    pub routines: Vec<String>,
+    /// 备份文件名（不含扩展名 / 路径）；空由后端按时间戳生成。
+    #[serde(default)]
+    pub file_name: Option<String>,
     #[serde(default = "default_true")]
     pub include_structure: bool,
     #[serde(default = "default_true")]
@@ -658,6 +700,16 @@ pub struct ScheduleJob {
     pub sql: String,
     /// 执行间隔（秒）；0 表示仅手动执行。
     pub interval_secs: u64,
+    /// 每天的固定执行时刻（本地时间，HH:MM）；与 interval_secs 二选一。
+    #[serde(default)]
+    pub daily_at: Option<String>,
+    /// 可视化 cron 定时（五字段：分 时 日 月 星期）；填写后优先于 interval_secs / daily_at。
+    #[serde(default)]
+    pub cron: Option<String>,
+    /// 任务动作配置（备份 / 导出 / 导入 / 数据同步 / 数据生成）；
+    /// 结构由前端定义，后端只透传持久化，执行由前端派发到对应工具接口。
+    #[serde(default)]
+    pub task: Option<serde_json::Value>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -679,6 +731,14 @@ pub struct JobHistoryEntry {
 
 /// 一条本工具执行的 SQL 记录（「历史日志」的 SQL 执行日志来源）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqlLogParameter {
+    pub ordinal: usize,
+    pub type_name: String,
+    pub value: String,
+    #[serde(default)] pub redacted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SqlLogEntry {
     /// 本地时间 "YYYY-MM-DD HH:MM:SS"（按字符串字典序即可比较先后）。
     pub ts: String,
@@ -688,8 +748,12 @@ pub struct SqlLogEntry {
     pub kind: String,
     /// 库 / 模式；未指定时为空串。
     pub database: String,
-    /// SQL 文本（超长截断，不虚构执行结果）。
+    /// 执行时的完整 SQL 原文；保留换行、注释和字面量，供历史日志查看、搜索和复制。
     pub sql: String,
+    /// Physical namespace, separate from the actual connected database/file.
+    #[serde(default)] pub namespace: String,
+    /// Bound parameters, not interpolated into SQL. Values use typed Debug representation.
+    #[serde(default)] pub parameters: Vec<SqlLogParameter>,
     pub ok: bool,
     pub elapsed_ms: u64,
     /// 受影响行数或返回行数；-1 表示该语句没有行数信息。
@@ -698,6 +762,8 @@ pub struct SqlLogEntry {
     pub message: String,
     /// 调用来源：query（查询页）/ monitor（监控）/ tool（其它工具）。
     pub origin: String,
+    #[serde(default)] pub operation_id: Option<String>,
+    #[serde(default)] pub execution_state: Option<crate::execution_contracts::ExecutionState>,
 }
 
 /// 一条数据库会话 / 正在执行的查询（数据库监控会话页）。

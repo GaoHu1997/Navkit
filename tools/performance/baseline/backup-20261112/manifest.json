@@ -1,0 +1,12 @@
+{
+  "source": "2026-11-12 编辑前工作树（含用户未提交修改），非 git HEAD",
+  "captured": "2026-11-12T12:47:12+08:00",
+  "files": {
+    "transfer.rs": "f1c1ffce3216172ff1ceb1a37ff0513784326be7b8640c20bc314acae59d7a49",
+    "transfer_export_cursor.rs": "67fc3b73d67f31074b6a1fc8c582d15097b710ae571ed5e9e40be4a19977f513",
+    "transfer_output.rs": "a51e0cb376abe83b62dd91ff4822013fa742fc27876e78597518d71c3f0b80bb",
+    "batch_export.rs": "2728aeb6593e07db9ce228c0d4bd6b78f883e3cb1b0efe4e81eb2e656be67eef"
+  },
+  "unchanged_mysql_session_dependency": {"file":"transfer_mysql_export.rs","sha256":"7224a80647d3166420889d811cc34f09746a15dc91f3e6bf027caed7dda6494e","note":"此依赖本任务从未修改，后续一并持久化以保证备份MySQL门禁可复现"},
+  "scope": "原生产品备份 dump/dump_database/cursor/sink；其他共享模块两版本共用同一当前实现"
+}

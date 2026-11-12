@@ -11,6 +11,7 @@ use futures::TryStreamExt;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::models::{ConnectionRequest, DbKind};
+#[path = "transfer_mssql_export.rs"] mod export_adapter;
 
 pub struct MssqlDb {
     /// tiberius 查询接口需要 &mut，而连接以 Arc 共享，用 tokio Mutex 包裹。
@@ -90,6 +91,8 @@ impl MssqlDb {
 
     /// 执行查询，返回列名 + 文本化数据行。
     pub async fn query_rows(&self, sql: &str) -> Result<MssqlResult> {
+        let mut sql_history=crate::sql_history::Guard::new(sql,Vec::new());
+        let result: Result<MssqlResult> = async {
         let mut client = self.client.lock().await;
         let mut stream = client
             .simple_query(sql)
@@ -121,16 +124,26 @@ impl MssqlDb {
             }
         }
         Ok(MssqlResult { columns, rows })
+    
+        }.await;
+        sql_history.result(&result,|r|r.rows.len() as i64);
+        result
     }
 
     /// 执行语句，返回影响行数。
     pub async fn execute(&self, sql: &str) -> Result<u64> {
+        let mut sql_history=crate::sql_history::Guard::new(sql,Vec::new());
+        let result: Result<u64> = async {
         let mut client = self.client.lock().await;
         let result = client
             .execute(sql, &[])
             .await
             .map_err(|e| anyhow!("SQL Server 执行失败: {e}"))?;
         Ok(result.total())
+    
+        }.await;
+        sql_history.result(&result,|n|*n as i64);
+        result
     }
 
     /// 查询单值。

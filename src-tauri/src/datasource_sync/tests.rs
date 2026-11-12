@@ -31,7 +31,7 @@ impl Temp {
             store: self.store(),
             registry: Arc::new(DbRegistry::default()),
             manual_transactions: Default::default(),
-            activity: Default::default(),
+            executions: Default::default(), mutations: Default::default(), connection_runtime: Default::default(), activity: Default::default(), query_results: Default::default(),
         }
     }
 }
@@ -834,7 +834,7 @@ fn local_decryption_failure_never_becomes_empty_password_or_creates_replacement_
 }
 
 #[test]
-fn local_config_and_baseline_are_encrypted_and_secret_flags_are_only_booleans() {
+fn local_config_is_encrypted_and_view_returns_headers_but_not_password_or_passphrase() {
     let temp = Temp::new();
     let store = temp.store();
     let service = configured(&store, "https://synthetic.example/dav/");
@@ -858,7 +858,11 @@ fn local_config_and_baseline_are_encrypted_and_secret_flags_are_only_booleans() 
     assert_eq!(view["headers_set"], true);
     assert!(view.get("password").is_none());
     assert!(view.get("passphrase").is_none());
-    assert!(view.get("headers").is_none());
+    assert_eq!(view["headers"].as_str(), Some(loaded.config.headers.as_str()));
+    assert_eq!(
+        Service::new(&store).get_config().unwrap().headers,
+        loaded.config.headers
+    );
 }
 
 #[test]
@@ -876,6 +880,7 @@ fn remember_false_keeps_every_secret_only_in_session_and_discards_baseline_after
     let restarted = Service::new(&store);
     let view = restarted.get_config().unwrap();
     assert!(!view.password_set && !view.passphrase_set && !view.headers_set);
+    assert!(view.headers.is_empty());
     assert!(restarted.lock().unwrap().stored.baseline.is_none());
     assert!(restarted.lock().unwrap().stored.pending.is_none());
     assert!(view.last_sync.is_none());
@@ -1573,7 +1578,7 @@ async fn remote_written_local_atomic_failure_preserves_baseline_and_recovers_on_
         store: Store::load_at(&temp.0),
         registry: Arc::new(DbRegistry::default()),
         manual_transactions: Default::default(),
-        activity: Default::default(),
+        executions: Default::default(), mutations: Default::default(), connection_runtime: Default::default(), activity: Default::default(), query_results: Default::default(),
     };
     let service = Service::new(&state.store);
     let view = service.preview(&state.store).await.unwrap();

@@ -9,7 +9,61 @@ async fn mock<F>(n:usize,handler:F)->(String,tokio::task::JoinHandle<()>)where F
 }
 #[test]fn all_ten_route_native_not_odbc(){for k in ["druid","h2","dynamodb","cassandra","nebulagraph","kafka","rocketmq","mqtt","zookeeper","etcd"]{let k=DbKind::of(k);assert_eq!(k.protocol(),crate::models::Protocol::Native);assert!(!k.is_planned());}assert_eq!(DbKind::of("kwdb").protocol(),crate::models::Protocol::Postgres);assert_eq!(DbKind::of("rqlite").default_port(),4001);}
 #[tokio::test]async fn closed_ports_are_errors_not_fake_success(){let l=TcpListener::bind("127.0.0.1:0").await.unwrap();let port=l.local_addr().unwrap().port();drop(l);for k in ["druid","dynamodb","cassandra","nebulagraph","kafka","rocketmq","mqtt","zookeeper","etcd"]{let mut r=req(k);r.port=port;r.user="bad".into();r.password="bad".into();r.params="ssl=false".into();assert!(connect(&r).await.is_err(),"{k} must not silently succeed");}}
-#[tokio::test]async fn native_tls_refuses_plaintext_downgrade(){for k in ["cassandra","nebulagraph","kafka","rocketmq","mqtt","zookeeper"]{let mut r=req(k);r.params="ssl=true".into();let e=connect(&r).await.err().unwrap().to_string();assert!(e.contains("拒绝降级"),"{k}: {e}");}}
+// Public self-signed CA for protocol fixtures only; no fixture private key is shipped.
+const NATIVE_TLS_FIXTURE_CA: &str = "-----BEGIN CERTIFICATE-----\nMIIBaDCCAQygAwIBAgIEfVCD2TAMBggqhkjOPQQDAgUAMB8xHTAbBgNVBAMTFE5h\ndktpdCBMb2NhbCBUZXN0IENBMCAXDTI2MTExMDAwMjEyOVoYDzIxMjYxMDE3MDAy\nMTI5WjAfMR0wGwYDVQQDExROYXZLaXQgTG9jYWwgVGVzdCBDQTBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABJ4XdtK3kc3aQEaDWeHirIBFMSv21EXuk5NTaT5RXWlp\nAAsGS/eL2TqIBdzkWXrJUlsjOfdVekoeQOwMtsnEDEyjMjAwMB0GA1UdDgQWBBSM\nfRclzrRCeU4wE5naLB+xcBsayjAPBgNVHRMBAf8EBTADAQH/MAwGCCqGSM49BAMC\nBQADSAAwRQIgbbyBoh485dP5/dwdeQPlgxwyvcuAMe5/D+UHGixRDx4CIQDKeDAZ\nycM6i8DFqvSxRwKnHqBcwKD7Xvvv2cD7InjyxQ==\n-----END CERTIFICATE-----\n";
+struct NativeTlsFixtureCa(std::path::PathBuf);
+impl NativeTlsFixtureCa {
+ fn new() -> Self {
+  let path=std::env::temp_dir().join(format!("navkit-native-tls-ca-{}.pem",uuid::Uuid::new_v4()));
+  std::fs::write(&path,NATIVE_TLS_FIXTURE_CA).unwrap();Self(path)
+ }
+}
+impl Drop for NativeTlsFixtureCa { fn drop(&mut self) { let _=std::fs::remove_file(&self.0); } }
+#[tokio::test]
+async fn native_tls_refuses_plaintext_downgrade() {
+ let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+ for kind in ["cassandra","nebulagraph","rocketmq","zookeeper"] {
+  let mut request=req(kind);request.port=listener.local_addr().unwrap().port();request.params="ssl=true".into();
+  let error=tokio::time::timeout(Duration::from_secs(2),connect(&request)).await.unwrap().err().expect("unsupported TLS must reject before dial").to_string();
+  assert!(error.contains("拒绝降级"),"{kind}: {error}");
+ }
+ assert!(tokio::time::timeout(Duration::from_millis(50),listener.accept()).await.is_err(),"unsupported TLS must send zero sockets");
+}
+#[test]
+fn unsupported_native_tls_aliases_and_material_never_become_plaintext() {
+ for parameters in ["tls_mode=verify_full","security.protocol=SSL","ssl_ca=missing.pem","ssl=false;ssl_ca=missing.pem","tls=invalid","ssl=false;tls=true"] {
+  let mut request=req("cassandra");request.params=parameters.into();
+  assert!(Params::new(&request).no_tls("Cassandra").is_err(),"must reject {parameters}");
+ }
+}
+#[tokio::test]
+async fn kafka_and_mqtt_send_tls_clienthello_without_plaintext_fallback() {
+ let ca=NativeTlsFixtureCa::new();
+ for kind in ["kafka","mqtt"] {
+  let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let port=listener.local_addr().unwrap().port();
+  let (stop,mut stopped)=tokio::sync::oneshot::channel::<()>();
+  let server=tokio::spawn(async move {
+   let mut records=Vec::new();
+   loop { tokio::select! {
+    _=&mut stopped=>return records,
+    accepted=listener.accept()=>{
+     let (mut socket,_)=accepted.unwrap();let mut first=[0u8;6];
+     tokio::time::timeout(Duration::from_secs(2),socket.read_exact(&mut first)).await.unwrap().unwrap();
+     records.push(first);assert!(records.len()<=32,"bounded TLS retry fixture");
+     // Fatal handshake_failure: the client must never retry this peer in plaintext.
+     let _=socket.write_all(&[21,3,3,0,2,2,40]).await;
+    }
+   }}
+  });
+  let mut request=req(kind);request.port=port;request.timeout_secs=1;request.user="native-tls-no-plaintext".into();request.password="fixture-only".into();
+  request.params=json!({"ssl":true,"ssl_ca":ca.0.to_string_lossy()}).to_string();
+  let result=tokio::time::timeout(Duration::from_secs(5),connect(&request)).await;
+  let _=stop.send(());let records=tokio::time::timeout(Duration::from_secs(3),server).await.unwrap().unwrap();
+  assert!(result.unwrap().is_err(),"{kind}: a rejected TLS handshake cannot create a healthy session");
+  assert!(!records.is_empty(),"{kind}: TLS must be attempted on the actual socket");
+  for first in records {assert_eq!((first[0],first[1],first[5]),(22,3,1),"{kind}: every connection must start with a TLS ClientHello, got {first:?}");assert!(u16::from_be_bytes([first[3],first[4]])>=4);}
+ }
+}
 #[tokio::test]async fn druid_sql_auth_directory_utf8_null_and_paging(){let(url,t)=mock(4,|i,h,b|{assert!(h.starts_with("POST /druid/v2/sql "));assert!(h.to_lowercase().contains("authorization: basic dXNlcjpwYXNz".to_lowercase().as_str()));assert_eq!(b["header"],true);match i{0=>{assert_eq!(b["query"],"SELECT 1");(200,json!([["one"],[1]]))},1=>(200,json!([["TABLE_SCHEMA"],["druid"]])),2=>(200,json!([["TABLE_NAME"],["sentinel"]])),_=>{assert!(b["query"].as_str().unwrap().contains("LIMIT 2 OFFSET 1"));(200,json!([["键","空"],["值;尾",null]]))}}}).await;let mut r=req("druid");r.params=json!({"url":url}).to_string();r.user="user".into();r.password="pass".into();let db=connect(&r).await.unwrap();assert_eq!(db.containers().await.unwrap()[0].0,"druid");assert_eq!(db.objects("druid").await.unwrap(),vec!["sentinel"]);let rs=db.rows("druid","sentinel",1,2).await.unwrap();assert_eq!(rs.rows[0],vec![Some("值;尾".into()),None]);t.await.unwrap();}
 #[tokio::test]async fn http_bad_credentials_and_server_errors_rejected(){for k in ["druid","dynamodb","etcd"]{let(url,t)=mock(1,|_,_,_|(401,json!({"error":"denied"}))).await;let mut r=req(k);r.params=json!({"url":url}).to_string();r.user="bad".into();r.password="bad".into();let e=connect(&r).await.err().unwrap().to_string();assert!(e.contains("401"),"{k}: {e}");t.await.unwrap();}}
 #[tokio::test]async fn etcd_gateway_auth_full_keyspace_and_semicolon_payload(){use base64::Engine;let enc=|s:&str|base64::engine::general_purpose::STANDARD.encode(s);let(url,t)=mock(5,move|i,h,b|{if i==0{assert!(h.starts_with("POST /v3/auth/authenticate"));assert_eq!(b["name"],"user");return(200,json!({"token":"fixture-token"}));}assert!(h.to_lowercase().contains("authorization: fixture-token"));match i{1=>(200,json!({"version":"3.5","header":{"revision":"1"}})),2=>{assert_eq!(b["key"],"AA==");assert_eq!(b["range_end"],"AA==");(200,json!({"header":{"revision":"2"},"kvs":[{"key":enc("/中文"),"value":enc("值;尾") }]}))},3=>{assert_eq!(b["value"],enc("值;尾"));(200,json!({"header":{"revision":"3"}}))},_=>{assert!(h.starts_with("POST /v3/kv/range"));(200,json!({"header":{"revision":"3"},"kvs":[{"key":enc("/中文"),"value":enc("值;尾") }]}))}}}).await;let mut r=req("etcd");r.params=json!({"url":url}).to_string();r.user="user".into();r.password="pass".into();let db=std::sync::Arc::new(crate::db::open(&r).await.unwrap());let registry=crate::db::DbRegistry::default();registry.write().insert("test".into(),db.clone());let h=match db.as_ref(){crate::db::Db::Http(h)=>h,_=>panic!("wrong route")};assert_eq!(h.objects("/").await.unwrap(),vec!["/中文"]);crate::db::execute(&registry,"test",r#"{"operation":"put","key":"/中文","value":"值;尾"}"#,r.kind.clone()).await.unwrap();let rs=h.run("/","",r#"{"operation":"get","key":"/中文"}"#).await.unwrap();assert_eq!(rs.rows[0][1].as_deref(),Some("值;尾"));t.await.unwrap();}

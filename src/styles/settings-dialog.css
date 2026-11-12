@@ -1,0 +1,300 @@
+/* 设置对话框局部样式：沿用 base.css 的实际令牌，覆盖旧设置布局。 */
+.dialog.settings-dialog {
+  min-width: 0;
+  height: 636px;
+  color: var(--text);
+}
+
+.dialog.settings-dialog > .dialog-title {
+  height: var(--h-titlebar);
+  min-height: var(--h-titlebar);
+  background: var(--bg-chrome);
+}
+
+.dialog.settings-dialog > .dialog-footer {
+  height: calc(3 * var(--sp-4));
+  min-height: calc(3 * var(--sp-4));
+}
+
+.dialog.settings-dialog > .dialog-footer .btn {
+  height: var(--h-control);
+}
+
+.dialog.settings-dialog > .dialog-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.dialog.settings-dialog .settings-layout {
+  display: grid;
+  grid-template-columns: 144px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dialog.settings-dialog .settings-sidebar {
+  width: auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-2);
+  border-bottom: 0;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-chrome);
+  overflow: auto;
+}
+
+.dialog.settings-dialog .settings-tab {
+  flex: 0 0 auto;
+  height: calc(var(--h-tabstrip) + 2px);
+  line-height: var(--lh-normal);
+  margin: 0;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--r-2);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-13);
+  color: var(--text-secondary);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.dialog.settings-dialog .settings-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.dialog.settings-dialog .settings-tab.active,
+.dialog.settings-dialog .settings-tab[aria-selected="true"] {
+  border-bottom: 0;
+  border-left-color: var(--accent-500);
+  background: var(--bg-selected);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dialog.settings-dialog .settings-content {
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--bg-surface);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.dialog.settings-dialog .settings-panel[hidden] {
+  display: none;
+}
+
+.dialog.settings-dialog .settings-panel-heading {
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dialog.settings-dialog .settings-panel-title {
+  margin: 0;
+  font-size: var(--fs-15);
+  line-height: var(--lh-tight);
+  font-weight: 600;
+}
+
+.dialog.settings-dialog .settings-panel-description {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  color: var(--text-secondary);
+}
+
+.dialog.settings-dialog .settings-section {
+  padding: var(--sp-3) 0;
+}
+
+.dialog.settings-dialog .settings-section + .settings-section {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dialog.settings-dialog .settings-section-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+  font-weight: 600;
+}
+
+.dialog.settings-dialog .settings-field {
+  grid-template-columns: minmax(0, 1fr) 240px;
+  min-height: calc(2 * var(--h-control));
+  gap: var(--sp-6);
+  margin-bottom: 0;
+  align-items: center;
+}
+
+.dialog.settings-dialog .settings-field-copy {
+  min-width: 0;
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+  text-align: left;
+}
+
+.dialog.settings-dialog .settings-field-label {
+  color: var(--text);
+}
+
+.dialog.settings-dialog .settings-field-help {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-11);
+  line-height: var(--lh-normal);
+  overflow-wrap: anywhere;
+}
+
+.dialog.settings-dialog .settings-field-value {
+  min-width: 0;
+  gap: var(--sp-2);
+}
+
+.dialog.settings-dialog .settings-field-value > :is(input, select, textarea) {
+  width: 100%;
+  min-width: 0;
+  height: var(--h-control);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+}
+
+.dialog.settings-dialog .settings-field-value > input[type="number"] {
+  width: 90px;
+  max-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog.settings-dialog .settings-unit,
+.dialog.settings-dialog .settings-field-value .checkbox span {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: var(--fs-12);
+}
+
+.dialog.settings-dialog .settings-preview {
+  margin-top: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+}
+
+.dialog.settings-dialog .settings-preview-title {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-11);
+  line-height: var(--lh-normal);
+  font-weight: 400;
+}
+
+.dialog.settings-dialog .settings-font-sample {
+  margin: 0;
+  line-height: var(--lh-normal);
+  overflow-wrap: anywhere;
+}
+
+.dialog.settings-dialog .settings-grid-preview {
+  margin-top: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+
+.dialog.settings-dialog .settings-font-grid {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  line-height: var(--lh-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog.settings-dialog .settings-font-grid :is(th, td) {
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.dialog.settings-dialog .settings-font-grid th {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--fs-11);
+  font-weight: 600;
+}
+
+.dialog.settings-dialog .settings-font-grid :is(th, td) + :is(th, td) {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.dialog.settings-dialog .settings-sql-sample {
+  margin: 0;
+  font-family: var(--font-mono);
+  line-height: 21px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dialog.settings-dialog .settings-sql-keyword {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.dialog.settings-dialog .settings-sync-panel .settings-section {
+  padding: var(--sp-2) 0;
+}
+
+.dialog.settings-dialog .settings-sync-panel .settings-section-title {
+  margin-bottom: var(--sp-1);
+}
+
+.dialog.settings-dialog .settings-sync-panel .settings-field {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-height: var(--h-command);
+  align-items: center;
+}
+
+.dialog.settings-dialog .settings-sync-panel .settings-field .settings-field-copy {
+  line-height: var(--lh-normal);
+}
+
+.dialog.settings-dialog .settings-field-value > textarea {
+  height: 56px;
+  min-height: 56px;
+  padding: var(--sp-2);
+  resize: vertical;
+  font-family: var(--font-mono);
+  line-height: var(--lh-normal);
+}
+
+.dialog.settings-dialog > .dialog-body > .dialog-error.toast {
+  /* 与其它对话框一致：悬浮提示，不挤占内容区布局。 */
+  max-width: min(420px, calc(100% - var(--sp-6)));
+  max-height: 96px;
+  padding: var(--sp-2) var(--sp-4);
+  overflow: auto;
+}
+
+.dialog.settings-dialog :is(button, input, select, textarea, [role="button"], [role="tabpanel"]):focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .dialog.settings-dialog .settings-content {
+    padding: var(--sp-4);
+  }
+
+  .dialog.settings-dialog .settings-field,
+  .dialog.settings-dialog .settings-sync-panel .settings-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-2);
+    padding: var(--sp-2) 0;
+  }
+}

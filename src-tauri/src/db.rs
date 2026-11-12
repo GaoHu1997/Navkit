@@ -13,6 +13,11 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Column, Executor, Row, TypeInfo};
 
 use crate::models::{DbKind, Protocol, ConnectionConfig, ConnectionRequest};
+#[path = "connection_runtime.rs"] pub mod runtime;
+#[path = "sqlx_runtime.rs"] mod sqlx_runtime;
+#[path = "db_resource.rs"] mod db_resource;
+pub use db_resource::{open_prepared, shutdown_db, shutdown_owned, take_with_derived, derive_mysql, derive_pg};
+pub struct OpenedConnection { pub db: Db, pub tunnel: Option<crate::ssh_tunnel::SshTunnel> }
 
 /// 一个活跃的数据库连接。
 pub enum Db {
@@ -59,101 +64,13 @@ pub fn extra_params(params: &str) -> Vec<(String, String)> {
 
 /// 打开 MySQL 连接：显式传递用户名与密码（此前版本密码从未发送，导致所有
 /// 需要认证的服务器一律 Access denied）。
-async fn open_mysql(req: &ConnectionRequest, timeout: Duration) -> Result<Db> {
-    let port = if req.port == 0 { 3306 } else { req.port };
-    let user = if req.user.is_empty() { "root" } else { req.user.as_str() };
-    let mut opts = MySqlConnectOptions::new()
-        .host(req.host.as_str())
-        .port(port)
-        .username(user)
-        .password(req.password.as_str())
-        .charset("utf8mb4")
-        .collation("utf8mb4_general_ci");
-    // 不选库连接时保持会话默认库为空，避免强行落到 mysql 系统库。
-    if !req.database.is_empty() {
-        opts = opts.database(req.database.as_str());
-    }
-    for (k, v) in extra_params(&req.params) {
-        let kl = k.to_ascii_lowercase();
-        match kl.as_str() {
-            "ssl-mode" | "sslmode" => {
-                opts = opts.ssl_mode(match v.as_str() {
-                    "disabled" | "disable" | "none" => sqlx::mysql::MySqlSslMode::Disabled,
-                    "preferred" => sqlx::mysql::MySqlSslMode::Preferred,
-                    "required" | "require" => sqlx::mysql::MySqlSslMode::Required,
-                    "verify_ca" | "verify-ca" => sqlx::mysql::MySqlSslMode::VerifyCa,
-                    "verify_identity" | "verify-identity" | "verify-full" => {
-                        sqlx::mysql::MySqlSslMode::VerifyIdentity
-                    }
-                    other => return Err(anyhow!("未知的 ssl-mode: {}", other)),
-                });
-            }
-            _ => {
-                // 其它连接参数忽略（不支持 unix socket 等高级选项）。
-            }
-        }
-    }
-    let pool = MySqlPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(timeout)
-        .after_connect(|conn, _| {
-            Box::pin(async move {
-                // 关闭反斜杠转义：统一以 '' 转义字符串字面量（与 PG/SQLite 一致）。
-                sqlx::query(
-                    "SET sql_mode=CONCAT(@@session.sql_mode, ',NO_BACKSLASH_ESCAPES')",
-                )
-                .execute(conn)
-                .await?;
-                Ok(())
-            })
-        })
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("无法连接到 {} 服务器 {}:{}", req.kind.label(), req.host, port))?;
-    Ok(Db::Mysql(pool))
+async fn open_mysql(req: &ConnectionRequest, timeout: Duration, read_only: bool) -> Result<Db> {
+    sqlx_runtime::open_legacy(req, timeout, read_only).await
 }
 
 /// 打开 PostgreSQL 连接：显式传递用户名与密码。
-async fn open_pg(req: &ConnectionRequest, timeout: Duration) -> Result<Db> {
-    let port = if req.port == 0 { 5432 } else { req.port };
-    let user = if req.user.is_empty() { "postgres" } else { req.user.as_str() };
-    let database = if req.database.is_empty() { "postgres" } else { req.database.as_str() };
-    let mut opts = PgConnectOptions::new()
-        .host(req.host.as_str())
-        .port(port)
-        .username(user)
-        .password(req.password.as_str())
-        .application_name("navkit");
-    if !database.is_empty() {
-        opts = opts.database(database);
-    }
-    let mut extra_options: Vec<(String, String)> = Vec::new();
-    for (k, v) in extra_params(&req.params) {
-        let kl = k.to_ascii_lowercase();
-        match kl.as_str() {
-            "sslmode" | "ssl-mode" => {
-                opts = opts.ssl_mode(match v.as_str() {
-                    "disable" | "disabled" | "none" => sqlx::postgres::PgSslMode::Disable,
-                    "prefer" | "preferred" => sqlx::postgres::PgSslMode::Prefer,
-                    "require" | "required" => sqlx::postgres::PgSslMode::Require,
-                    "verify-ca" | "verify_ca" => sqlx::postgres::PgSslMode::VerifyCa,
-                    "verify-full" | "verify_identity" => sqlx::postgres::PgSslMode::VerifyFull,
-                    other => return Err(anyhow!("未知的 sslmode: {}", other)),
-                });
-            }
-            _ => extra_options.push((k, v)),
-        }
-    }
-    for (k, v) in &extra_options {
-        opts = opts.options([(k.as_str(), v.as_str())]);
-    }
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(timeout)
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("无法连接到 {} 服务器 {}:{}", req.kind.label(), req.host, port))?;
-    Ok(Db::Postgres(pool))
+async fn open_pg(req: &ConnectionRequest, timeout: Duration, read_only: bool) -> Result<Db> {
+    sqlx_runtime::open_legacy(req, timeout, read_only).await
 }
 
 /// 由配置生成 SQLite 文件路径。
@@ -170,7 +87,29 @@ fn sqlite_file(req: &ConnectionRequest) -> Result<String> {
 /// SQL Server / Redis / MongoDB 为原生客户端；ClickHouse 走 HTTP；
 /// HTTP REST 类由 http_db 按适配器分发；其余走系统 ODBC。
 pub async fn open(req: &ConnectionRequest) -> Result<Db> {
+    // Explicit structured JDBC/ODBC bindings are authoritative and are not SSH key-value parameters.
+    // Native SQLx transports retain the tunnel in every physical pool, never in a global keepalive vector.
     let timeout = Duration::from_secs(req.timeout_secs.max(1));
+    // A documented custom binding is authoritative, including the generic "odbc"
+    // identity which has no product catalog row. Resolve/validate the saved driver
+    // before planned-kind rejection; a missing driver or Java failure cannot
+    // silently become a native connection. Never feed a validated driver binding to SSH parsing.
+    if req.params.trim().starts_with(crate::driver_manager::PARAMS_PREFIX) {
+        if let Some(res) = crate::driver_manager::resolve_driver(req)? {
+            // DriverResolution has a nonempty URL only for an explicitly saved,
+            // fully validated JDBC definition; ODBC resolutions have no URL.
+            if !res.url.is_empty() {
+                let jdbc = crate::jdbc_db::JdbcDb::connect(req, &res.target, &res.url, &res.driver_class)
+                    .await.with_context(|| format!("无法通过 JDBC 连接到 {} 服务器", req.kind.label()))?;
+                return Ok(Db::Http(crate::http_db::HttpDb::from_adapter(req, Box::new(jdbc)).await?));
+            }
+        }
+        // A deliberately selected non-JDBC binding must not fall through to SQLx
+        // either. Existing product-specific ODBC routes below remain unchanged.
+        if req.kind.protocol() != Protocol::Odbc {
+            return Err(anyhow!("显式自定义驱动不是 JDBC，拒绝切换到原生适配器"));
+        }
+    }
     if req.kind.is_planned() {
         return Err(anyhow!(
             "{} 的适配器尚未提供（{}）",
@@ -204,8 +143,8 @@ pub async fn open(req: &ConnectionRequest) -> Result<Db> {
                 .with_context(|| format!("无法打开 SQLite 文件: {}", file))?;
             Ok(Db::Sqlite(pool))
         }
-        Protocol::Mysql => open_mysql(req, timeout).await,
-        Protocol::Postgres => open_pg(req, timeout).await,
+        Protocol::Mysql => open_mysql(req, timeout, false).await,
+        Protocol::Postgres => open_pg(req, timeout, false).await,
         Protocol::Mssql => {
             let client = crate::mssql::MssqlDb::connect(req.kind.clone(), req).await?;
             Ok(Db::Mssql(client))
@@ -236,6 +175,11 @@ pub async fn open(req: &ConnectionRequest) -> Result<Db> {
     }
 }
 
+/// 保存连接的权威策略；连接握手/池等待/SQLite 锁等待与 SQL 执行预算独立。
+pub async fn open_saved(req: &ConnectionRequest, read_only: bool, settings: &crate::models::AppSettings) -> Result<Db> {
+    db_resource::open_saved_legacy(req, read_only, settings).await
+}
+
 pub(crate) fn explicit_legacy_binding(params: &str) -> bool {
     let raw = params.trim();
     raw.starts_with("@navkit-driver:") || raw.starts_with("@navkit-driver-version:")
@@ -263,6 +207,8 @@ impl Db {
         &self,
         sql: &str,
     ) -> Result<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    let __sql_history_context = crate::sql_history::db_context(self);
+    crate::sql_history::scope(__sql_history_context, async {
         match self {
             Db::ClickHouse(c) => {
                 let r = c.query_rows(sql).await?;
@@ -278,27 +224,37 @@ impl Db {
             }
             _ => Err(anyhow!("该连接类型不支持通用查询")),
         }
-    }
+    
+    }).await
+}
 
     /// 通用语句执行（ClickHouse / ODBC / SQL Server 用）。
     pub async fn generic_exec(&self, sql: &str) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(self);
+    crate::sql_history::scope(__sql_history_context, async {
         match self {
             Db::ClickHouse(c) => c.execute(sql).await,
             Db::Odbc(o) => o.execute(sql).await,
             Db::Mssql(c) => c.execute(sql).await,
             _ => Err(anyhow!("该连接类型不支持通用执行")),
         }
-    }
+    
+    }).await
+}
 
     /// 单值查询（ClickHouse / ODBC / SQL Server 用）。
     pub async fn generic_scalar(&self, sql: &str) -> Result<Option<String>> {
+    let __sql_history_context = crate::sql_history::db_context(self);
+    crate::sql_history::scope(__sql_history_context, async {
         match self {
             Db::ClickHouse(c) => c.scalar(sql).await,
             Db::Odbc(o) => o.scalar(sql).await,
             Db::Mssql(c) => c.scalar(sql).await,
             _ => Err(anyhow!("该连接类型不支持单值查询")),
         }
-    }
+    
+    }).await
+}
 }
 
 /// 由已保存的连接配置构造请求。
@@ -402,6 +358,12 @@ pub fn quote_literal(value: &str) -> String {
 /// SQLite 的文件连接只有一个库（main），且本应用不使用 ATTACH，
 /// 因此这里对 SQLite 一律忽略 schema —— 否则 `"demo"."t"` 会报 no such table。
 pub fn qualified(kind: &DbKind, schema: &str, table: &str) -> String {
+    if kind.protocol() == Protocol::Mssql {
+        // Tree labels carry schema/name; schema remains the selected catalog.
+        if let Ok(identity) = crate::object_identity::SqlServerObject::parse(schema, table) {
+            return identity.qualified(kind);
+        }
+    }
     if kind.is_sqlite() || schema.is_empty() {
         quote_ident(&kind, table)
     } else {
@@ -446,7 +408,7 @@ fn empty_set(names: Vec<String>, types: Vec<String>) -> crate::models::ResultSet
 
 /// SQLite 空结果集兜底：PRAGMA 无 describe，直接空列。
 async fn sqlite_describe(pool: &sqlx::SqlitePool, sql: &str) -> (Vec<String>, Vec<String>) {
-    match pool.describe(sql).await {
+    match crate::sql_history::describe(pool,sql).await {
         Ok(d) => (
             d.columns().iter().map(|c| c.name().to_string()).collect(),
             d.columns()
@@ -462,7 +424,7 @@ async fn mysql_describe(
     conn: &mut sqlx::mysql::MySqlConnection,
     sql: &str,
 ) -> (Vec<String>, Vec<String>) {
-    match conn.describe(sql).await {
+    match crate::sql_history::describe(&mut *conn,sql).await {
         Ok(d) => (
             d.columns().iter().map(|c| c.name().to_string()).collect(),
             d.columns()
@@ -478,7 +440,7 @@ async fn pg_describe(
     conn: &mut sqlx::postgres::PgConnection,
     sql: &str,
 ) -> (Vec<String>, Vec<String>) {
-    match conn.describe(sql).await {
+    match crate::sql_history::describe(&mut *conn,sql).await {
         Ok(d) => (
             d.columns().iter().map(|c| c.name().to_string()).collect(),
             d.columns()
@@ -514,7 +476,7 @@ pub async fn execute(
                     continue; // 纯注释块不执行（否则 MySQL 报 ER_EMPTY_QUERY）
                 }
                 if is_query(trimmed) {
-                    let rows = sqlx::query(trimmed).fetch_all(pool).await?;
+                    let rows = crate::sql_history::query(trimmed).fetch_all(pool).await?;
                     let (names, types, out_rows) = if let Some(first) = rows.first() {
                         let cols = first.columns();
                         let names: Vec<String> =
@@ -546,7 +508,7 @@ pub async fn execute(
                         total: n,
                     });
                 } else {
-                    let res = sqlx::query(trimmed).execute(pool).await?;
+                    let res = crate::sql_history::query(trimmed).execute(pool).await?;
                     messages.push(format!("{} 行受影响", res.rows_affected()));
                     sets.push(crate::models::ResultSet {
                         columns: Vec::new(),
@@ -570,7 +532,7 @@ pub async fn execute(
                     continue; // 纯注释块不执行（否则 MySQL 报 ER_EMPTY_QUERY）
                 }
                 if is_query(trimmed) {
-                    let rows = sqlx::query(trimmed).fetch_all(&mut *conn).await?;
+                    let rows = crate::sql_history::query(trimmed).fetch_all(&mut *conn).await?;
                     if let Some(first) = rows.first() {
                         let cols = first.columns();
                         let names: Vec<String> = cols
@@ -603,7 +565,7 @@ pub async fn execute(
                         sets.push(empty_set(n, t));
                     }
                 } else {
-                    let res = sqlx::query(trimmed).execute(&mut *conn).await?;
+                    let res = crate::sql_history::query(trimmed).execute(&mut *conn).await?;
                     messages.push(format!("{} 行受影响", res.rows_affected()));
                     sets.push(crate::models::ResultSet {
                         columns: Vec::new(),
@@ -627,7 +589,7 @@ pub async fn execute(
                     continue; // 纯注释块不执行（否则 MySQL 报 ER_EMPTY_QUERY）
                 }
                 if is_query(trimmed) {
-                    let rows = sqlx::query(trimmed).fetch_all(&mut *conn).await?;
+                    let rows = crate::sql_history::query(trimmed).fetch_all(&mut *conn).await?;
                     if let Some(first) = rows.first() {
                         let cols = first.columns();
                         let names: Vec<String> = cols
@@ -662,7 +624,7 @@ pub async fn execute(
                         sets.push(empty_set(n, t));
                     }
                 } else {
-                    let res = sqlx::query(trimmed).execute(&mut *conn).await?;
+                    let res = crate::sql_history::query(trimmed).execute(&mut *conn).await?;
                     messages.push(format!("{} 行受影响", res.rows_affected()));
                     sets.push(crate::models::ResultSet {
                         columns: Vec::new(),
@@ -856,6 +818,7 @@ pub async fn execute(
         sets,
         messages,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        spool_id: None,
     })
 }
 

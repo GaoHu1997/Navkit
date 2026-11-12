@@ -1,6 +1,6 @@
 //! 数据源类型目录：全部支持的数据源类型与其连接协议映射。
 //!
-//! 参考 dbx 的分层支持策略（https://github.com/t8y2/dbx）：
+//! NavKit 的分层支持策略：
 //! - 协议兼容：MySQL / PostgreSQL 协议族数据库直接复用对应原生驱动；
 //! - 原生客户端：SQL Server、Redis、MongoDB、HTTP API 类（检索 / 向量 / 时序 / MQ）；
 //! - ODBC 通用：提供 Windows ODBC 驱动的数据源（Oracle、DB2、达梦、Hive 等）。
@@ -155,14 +155,6 @@ pub static CATALOG: &[KindMeta] = &[
         "可直接下载官方 Informix JDBC（需 Java 11+，参数需 informixserver）；也可安装 IBM Informix Client（含 ODBC 驱动）。",
     ),
     odbc(
-        "jdbcx",
-        "JDBCX",
-        0,
-        "relational",
-        "",
-        "通用 JDBC 桥接数据源：通过 ODBC DSN / 连接串接入，请在参数中填写完整 ODBC 连接串。",
-    ),
-    odbc(
         "spanner",
         "Cloud Spanner",
         443,
@@ -184,19 +176,11 @@ pub static CATALOG: &[KindMeta] = &[
         1972,
         "relational",
         "InterSystems ODBC",
-        "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。",
+        "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自第三方固定版本，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。",
     ),
     k("custom_mysql", "Custom (MySQL)", 3306, Protocol::Mysql, "relational"),
     k("dolt", "Dolt", 3307, Protocol::Mysql, "relational"),
     k("custom_pg", "Custom (PostgreSQL)", 5432, Protocol::Postgres, "relational"),
-    odbc(
-        "odbc",
-        "自定义 ODBC",
-        0,
-        "relational",
-        "",
-        "通过系统 ODBC 数据源接入：数据库名填 DSN，或在参数中填写完整 ODBC 连接串。",
-    ),
     // ------------------------------------------------ 数仓分析
     k("cloudberry", "Apache Cloudberry", 5432, Protocol::Postgres, "analytics"),
     k("clickhouse", "ClickHouse", 8123, Protocol::Clickhouse, "analytics"),
@@ -363,6 +347,14 @@ pub static CATALOG: &[KindMeta] = &[
         "GBase 8a ODBC Driver",
         "可直接下载南大通用官网 GBase 8a JDBC 9.5.0.10-build1 原 ZIP/JAR/readme（Java 11+）；默认普通 TCP 用户名/密码连接，非 GBase 8s/8c。TLS/集群扩展请配置自定义 JDBC；也保留 GBase 8a ODBC。",
     ),
+    odbc(
+        "gbase8c",
+        "南大通用 GBase 8c",
+        0,
+        "domestic",
+        "",
+        "GBase 8c 与 8a 是不同产品，不能复用 8a 驱动。请填写实际部署端口，并显式选择厂商同架构 ODBC 驱动或自定义 JDBC；当前没有经核验的公开驱动直链，需手动获取。TLS 参数须由所选驱动显式配置，应用不会回退到 8a 或 PostgreSQL 驱动。",
+    ),
     k("opengauss", "openGauss", 5432, Protocol::Postgres, "domestic"),
     k("gaussdb", "GaussDB", 8000, Protocol::Postgres, "domestic"),
     k("kwdb", "KWDB", 26257, Protocol::Postgres, "domestic"),
@@ -408,7 +400,7 @@ pub static CATALOG: &[KindMeta] = &[
         40000,
         "domestic",
         "SUNDB ODBC Driver",
-        "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。",
+        "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自第三方固定版本，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。",
     ),
     odbc(
         "oscar",
@@ -416,7 +408,7 @@ pub static CATALOG: &[KindMeta] = &[
         2003,
         "domestic",
         "Shentong ODBC Driver",
-        "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。",
+        "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自第三方固定版本，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。",
     ),
     odbc(
         "xugu",
@@ -701,6 +693,19 @@ mod tests {
         for m in CATALOG {
             assert!(seen.insert(m.id), "重复的目录 id: {}", m.id);
         }
+    }
+
+    #[test]
+    fn gbase8c_requires_explicit_vendor_configuration() {
+        let gbase8a = meta("gbase").unwrap();
+        let gbase8c = meta("gbase8c").unwrap();
+        assert_ne!(gbase8a.id, gbase8c.id);
+        assert_eq!(gbase8c.protocol, Protocol::Odbc);
+        assert!(!gbase8c.planned);
+        assert_eq!(gbase8c.port, 0, "未经核验的厂商端口不得冒充默认值");
+        assert!(gbase8c.driver.is_empty(), "必须显式选择真实厂商驱动，不能猜注册名");
+        assert!(gbase8c.note.contains("8a") && gbase8c.note.contains("手动获取"));
+        assert!(!gbase8a.driver.is_empty());
     }
 
     #[test]

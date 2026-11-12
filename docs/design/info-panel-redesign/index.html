@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>信息面板 · 对象头顶部重设计（表 / 列页）</title>
+    <link rel="stylesheet" href="../assets/tokens.css" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        background: var(--n-150);
+        font-family: var(--font-ui);
+        color: var(--text);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ---------------------------------------------------------- 画板 */
+      .page-head { max-width: 1120px; padding: 26px 32px 0; }
+      .page-head h1 { margin: 0 0 8px; font-size: var(--fs-18); font-weight: 600; }
+      .page-head p { margin: 0; max-width: 900px; font-size: var(--fs-12); line-height: 1.7; color: var(--text-tertiary); }
+      .page-head code {
+        padding: 1px 5px; border-radius: 4px; background: var(--n-200);
+        font-family: var(--font-mono); font-size: 11px; color: var(--n-700);
+      }
+
+      .board {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, 292px);
+        gap: 28px 26px;
+        padding: 22px 32px 10px;
+      }
+      .cell { display: flex; flex-direction: column; gap: 10px; }
+      .cap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+      .cap b { font-size: var(--fs-13); font-weight: 600; }
+      .cap .rec {
+        font-style: normal; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+        padding: 1px 5px; border-radius: 3px;
+        color: var(--accent-600); background: var(--accent-50);
+      }
+      .cap span { flex-basis: 100%; font-size: var(--fs-11); line-height: 1.6; color: var(--text-tertiary); }
+      .frame {
+        border: 1px solid var(--border);
+        border-radius: var(--r-4);
+        background: var(--bg-chrome);
+        box-shadow: var(--shadow-2);
+        overflow: hidden;
+      }
+
+      /* ---------------------------------------------------------- 公用小件 */
+      .spacer { flex: 1; }
+      .dbico {
+        display: inline-grid; place-items: center;
+        padding: 1px; border-radius: 3px;
+        background: #fff; border: 1px solid var(--border-subtle);
+      }
+      .ibtn {
+        display: grid; place-items: center;
+        width: 22px; height: 22px; border-radius: var(--r-2);
+        color: var(--text-tertiary);
+      }
+      .ibtn:hover { background: var(--bg-hover); color: var(--text); }
+      .tools { margin-left: auto; display: flex; gap: 2px; }
+
+      /* 分段（图标）——现状 & 方案 B 用 */
+      .seg { display: flex; gap: 1px; padding: 2px; border-radius: var(--r-2); background: var(--bg-sunken); }
+      .seg i {
+        display: grid; place-items: center; width: 24px; height: 20px;
+        border-radius: var(--r-1); color: var(--text-tertiary);
+      }
+      .seg i.on { background: var(--bg-surface); color: var(--accent-600); box-shadow: var(--shadow-1); }
+
+      /* 键值分组 */
+      .groups { padding: 12px 16px 18px; }
+      .gtitle {
+        margin: 16px 0 6px; font-size: var(--fs-11); font-weight: 600;
+        letter-spacing: 0.05em; color: var(--text-tertiary);
+      }
+      .gtitle:first-child { margin-top: 0; }
+      .kv { display: grid; grid-template-columns: 96px 1fr; gap: 8px; padding: 3px 0; font-size: var(--fs-12); align-items: baseline; }
+      .kv > span:first-child { color: var(--text-tertiary); }
+      .kv > span:last-child { color: var(--n-700); word-break: break-all; }
+      .mono { font-family: var(--font-mono); font-size: var(--fs-11); }
+
+      /* ---------------------------------------------------------- 现状 */
+      .bf-top {
+        display: flex; align-items: center; gap: 2px;
+        height: 32px; padding: 0 8px;
+        border-bottom: 1px solid var(--border-subtle);
+        color: var(--text-tertiary);
+      }
+      .bf-head {
+        display: flex; flex-direction: column; align-items: center; gap: 8px;
+        padding: 24px 16px 18px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .bf-glyph {
+        display: grid; place-items: center;
+        width: 48px; height: 48px; border-radius: var(--r-4);
+        background: var(--accent-50); color: var(--accent-500);
+      }
+      .bf-title { font-size: 14px; font-weight: 600; word-break: break-all; text-align: center; }
+      .bf-sub { font-size: var(--fs-11); color: var(--text-tertiary); }
+      .bf-refs {
+        display: flex; align-items: center; gap: 6px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border-subtle);
+        font-size: var(--fs-12); color: var(--text-secondary);
+      }
+
+      /* ---------------------------------------------------------- 方案 A */
+      .ipa-top {
+        display: flex; align-items: center; gap: 6px;
+        height: 30px; padding: 0 8px 0 10px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .conn-chip {
+        display: inline-flex; align-items: center; gap: 5px;
+        height: 20px; padding: 0 7px 0 3px;
+        border-radius: var(--r-full);
+        background: var(--bg-sunken);
+        font-size: var(--fs-11); color: var(--text-secondary);
+        max-width: 190px; overflow: hidden; white-space: nowrap;
+      }
+      .ip-id { display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 10px; }
+      .ip-glyph {
+        position: relative; flex: 0 0 auto;
+        display: grid; place-items: center;
+        width: 40px; height: 40px; border-radius: var(--r-4);
+        background: var(--accent-50); color: var(--accent-500);
+      }
+      .ip-idtext { min-width: 0; padding-top: 1px; }
+      .ip-title { font-size: var(--fs-15); font-weight: 600; line-height: 1.25; word-break: break-all; }
+      .ip-meta {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+        margin-top: 4px; font-size: var(--fs-11); color: var(--text-tertiary);
+      }
+      .kind {
+        display: inline-flex; align-items: center; height: 16px; padding: 0 5px;
+        border-radius: 3px; font-size: 10px; font-weight: 600;
+        color: var(--accent-600); background: var(--accent-50);
+      }
+      .dot { width: 2px; height: 2px; border-radius: 50%; background: var(--n-300); }
+
+      .kpis {
+        display: grid; grid-template-columns: repeat(4, 1fr);
+        margin: 8px 12px 0;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--r-3);
+        background: var(--bg-subtle);
+        overflow: hidden;
+      }
+      .kpi { padding: 7px 0 6px; text-align: center; border-left: 1px solid var(--border-subtle); }
+      .kpi:first-child { border-left: 0; }
+      .kpi b { display: block; font-size: var(--fs-13); font-weight: 600; font-variant-numeric: tabular-nums; }
+      .kpi span { display: block; margin-top: 1px; font-size: var(--fs-11); color: var(--text-tertiary); }
+
+      .modes {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;
+        margin: 10px 12px 0; padding: 2px;
+        border-radius: var(--r-3); background: var(--bg-sunken);
+      }
+      .modes i {
+        display: flex; align-items: center; justify-content: center; gap: 4px;
+        height: 24px; border-radius: var(--r-2);
+        font-style: normal; font-size: var(--fs-11); color: var(--text-secondary);
+      }
+      .modes i.on { background: var(--bg-surface); color: var(--accent-600); font-weight: 600; box-shadow: var(--shadow-1); }
+
+      /* ---------------------------------------------------------- 方案 B */
+      .ipb-id { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0; min-width: 0; }
+      .ipb-id .ip-glyph { width: 28px; height: 28px; border-radius: var(--r-3); }
+      .ipb-id .ip-title { font-size: var(--fs-13); line-height: 1.3; }
+      .ipb-meta {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+        padding: 6px 12px 0; font-size: var(--fs-11); color: var(--text-tertiary);
+      }
+      .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 9px 12px 11px; }
+      .chip2 {
+        display: inline-flex; align-items: baseline; gap: 3px;
+        height: 20px; padding: 0 7px;
+        border: 1px solid var(--border-subtle); border-radius: var(--r-full);
+        background: var(--bg-subtle);
+        font-size: var(--fs-11); color: var(--text-tertiary);
+      }
+      .chip2 b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+
+      /* ---------------------------------------------------------- 方案 C */
+      .ipc-tabs { display: grid; grid-template-columns: repeat(3, 1fr); height: 32px; border-bottom: 1px solid var(--border); }
+      .ipc-tabs i {
+        position: relative; display: flex; align-items: center; justify-content: center; gap: 5px;
+        font-style: normal; font-size: var(--fs-11); color: var(--text-tertiary);
+      }
+      .ipc-tabs i.on { color: var(--accent-600); font-weight: 600; background: var(--bg-surface); }
+      .ipc-tabs i.on::after {
+        content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px;
+        height: 2px; border-radius: 2px 2px 0 0; background: var(--accent-500);
+      }
+      .ipc-id { display: flex; align-items: center; gap: 9px; padding: 11px 12px 0; min-width: 0; }
+      .ipc-id .ip-glyph { width: 32px; height: 32px; border-radius: var(--r-3); }
+      .ipc-sub { display: flex; align-items: center; gap: 5px; margin-top: 2px; font-size: var(--fs-11); color: var(--text-tertiary); }
+      .ipc-card {
+        margin: 10px 12px 0; padding: 10px 12px;
+        border: 1px solid var(--border-subtle); border-radius: var(--r-4);
+        background: var(--bg-subtle);
+      }
+      .ipc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; }
+      .ipc-cell b { display: block; font-size: var(--fs-15); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+      .ipc-cell span { display: block; margin-top: 1px; font-size: var(--fs-11); color: var(--text-tertiary); }
+
+      /* ---------------------------------------------------------- 说明 */
+      .notes { max-width: 1120px; padding: 12px 32px 48px; }
+      .notes h2 {
+        margin: 24px 0 8px; font-size: var(--fs-13); font-weight: 600;
+      }
+      .notes ol { margin: 0; padding-left: 18px; font-size: var(--fs-12); line-height: 1.8; color: var(--text-secondary); }
+      .notes li { margin: 2px 0; }
+      .notes p { margin: 0; font-size: var(--fs-12); line-height: 1.7; color: var(--text-secondary); }
+      .notes code { font-family: var(--font-mono); font-size: 11px; background: var(--n-200); border-radius: 4px; padding: 1px 4px; color: var(--n-700); }
+    </style>
+  </head>
+  <body>
+    <header class="page-head">
+      <h1>信息面板 · 对象头顶部重设计</h1>
+      <p>
+        针对表 / 列页信息面板顶部的红框区域：现状是「居中大图标 + 标题 + 副标题 + 一行连接引用」，
+        上下各留 20px 以上空白，红框里只有 <code>TradeRecord</code>、<code>表</code>、<code>TiDB</code> 三个信息点，
+        而右侧却还有三个只有图标的视图切换按钮。以下三个方案把这块区域改成「身份 + 规模 + 视图切换」的紧凑结构，
+        全部沿用 v2 令牌（面板宽 292px，字号 11 / 12 / 13 / 15）。
+      </p>
+    </header>
+
+    <main class="board" id="board"></main>
+
+    <section class="notes">
+      <h2>改动清单（A / B / C 共有）</h2>
+      <ol>
+        <li>连接引用从独立「引用行」并入顶部连接 chip（品牌 logo + 连接名），释放 28–40px 垂直空间，连接不再孤立成行。</li>
+        <li>对象头由「居中 48px 图标 + 标题 + 副标题」改为左对齐身份块：图标瓦片 + 15px 标题 + 类型 chip（数据源标识只出现在顶部连接 chip，不在图标上重复叠加）。</li>
+        <li>把散落在键值表里的规模字段（列数量 / 索引数量 / 外键数量 / 行）提升为指标带或胶囊，数字 600 字重 + 等宽数字，扫视即可比较。</li>
+        <li>三视图切换给出文字标签（A 整宽分段 / C 全宽 tab），不再只靠三个图标；只有 B 保留 icon-only，并把点击区放大到 24×20。</li>
+        <li>键值表去掉被提升的重复行，首屏能直接看到主键 / 数据长度 / 索引长度 / 引擎等真正需要的信息。</li>
+      </ol>
+
+      <h2>落地映射（本次只交设计图，未改产品代码）</h2>
+      <p>
+        方案 A 对应 <code>src/ui/InfoPanel.ts</code> 的 <code>appendTopbar → appendHeader → appendRefs → appendGroups</code> 重排为
+        <code>appendTopbar → appendIdentity → appendKpiBand → appendModes → appendGroups</code>；
+        CSS 只需替换 <code>base.css:1801–1903</code> 的 <code>.info-topbar / .info-head / .info-glyph / .info-refs</code> 四段，其余分组样式不动。
+      </p>
+    </section>
+
+    <script>
+      /* 图标 path（取自 docs/design/assets/icons.js，24 网格 / 1.75 描边） */
+      const P = {
+        info: '<circle cx="12" cy="12" r="8.4"/><path d="M12 11v5.2"/><circle cx="12" cy="7.9" r="1.05" fill="currentColor" stroke="none"/>',
+        table: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/>',
+        code: '<path d="M8.6 8.4 4.8 12l3.8 3.6M15.4 8.4 19.2 12l-3.8 3.6M13.4 5.6l-2.8 12.8"/>',
+        columns: '<rect x="3.6" y="5" width="16.8" height="14" rx="2"/><path d="M9.4 5v14M14.6 5v14"/>',
+        key: '<circle cx="8.2" cy="8.2" r="3.6"/><path d="M10.8 10.8 19 19"/><path d="M15.6 15.6 17.8 13.4M17.8 17.8l2.2-2.2"/>',
+        index: '<path d="M4.6 6.6h14.8M4.6 12h9.4M4.6 17.4h14.8"/><circle cx="18" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
+        link: '<path d="M10 13.8a3.6 3.6 0 0 0 5.1 0l2.6-2.6a3.6 3.6 0 1 0-5.1-5.1l-1.3 1.3"/><path d="M14 10.2a3.6 3.6 0 0 0-5.1 0l-2.6 2.6a3.6 3.6 0 1 0 5.1 5.1l1.3-1.3"/>',
+        refresh: '<path d="M19.4 12a7.4 7.4 0 1 1-2.4-5.4"/><path d="M19.8 4.6v4.2h-4.2"/>',
+        more: '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+        details: '<rect x="3.6" y="4.6" width="16.8" height="14.8" rx="2"/><path d="M3.6 9.4h16.8M9.6 9.4v10"/>',
+        copy: '<rect x="8.6" y="8.6" width="10.8" height="10.8" rx="2"/><path d="M15.4 8.6V6.4a2 2 0 0 0-2-2H6.4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2.2"/>',
+        clock: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.2V12l3.4 2.2"/>',
+      };
+
+      const ic = (n, s = 14, sw = 1.75) =>
+        `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
+      const logo = (kind, s = 12) => `<img src="../assets/db-logos/${kind}.svg" width="${s}" height="${s}" alt="">`;
+      const dbico = (kind, s = 12) => `<span class="dbico">${logo(kind, s)}</span>`;
+      const connChip = () => `<span class="conn-chip">${dbico("tidb", 12)}TiDB</span>`;
+      const tools = () =>
+        `<div class="tools"><span class="ibtn">${ic("refresh", 13)}</span><span class="ibtn">${ic("more", 13)}</span></div>`;
+
+      const rows = (list) =>
+        list.map(([k, v, mono]) =>
+          `<div class="kv"><span>${k}</span><span${mono ? ' class="mono"' : ""}>${v}</span></div>`).join("");
+      const groupTitle = (t) => `<div class="gtitle">${t}</div>`;
+
+      /* ------------------------------------------------------------ 现状 */
+      function beforeFrame() {
+        return `<aside>
+          <div class="bf-top">
+            <span>${ic("info", 13)}</span><span class="spacer"></span>
+            <div class="seg"><i class="on">${ic("table", 13)}</i><i>${ic("code", 13)}</i><i>${ic("columns", 13)}</i></div>
+          </div>
+          <div class="bf-head">
+            <div class="bf-glyph">${ic("table", 24)}</div>
+            <div class="bf-title">TradeRecord</div>
+            <div class="bf-sub">表</div>
+          </div>
+          <div class="bf-refs">${dbico("tidb", 12)}<span>TiDB</span></div>
+          <div class="groups">
+            ${groupTitle("概要")}
+            ${rows([["列数量", "112"], ["索引数量", "37"], ["外键数量", "0"]])}
+            ${groupTitle("属性")}
+            ${rows([
+              ["数据库", "TrustBenefit"],
+              ["主键", "tradeId"],
+              ["行", "1,252,059"],
+              ["引擎", "InnoDB"],
+              ["行格式", "Compact"],
+              ["创建日期", "2026-09-22 06:16:37"],
+            ])}
+          </div>
+        </aside>`;
+      }
+
+      /* ------------------------------------------------------------ 方案 A */
+      function aFrame(mode = "info") {
+        const glyph = (icon) =>
+          `<div class="ip-glyph">${ic(icon, 22)}</div>`;
+        const modes = (active) =>
+          `<div class="modes">
+            <i class="${active === "info" ? "on" : ""}">${ic("table", 12)}表信息</i>
+            <i class="${active === "ddl" ? "on" : ""}">${ic("code", 12)}DDL</i>
+            <i class="${active === "column" ? "on" : ""}">${ic("columns", 12)}列信息</i>
+          </div>`;
+
+        if (mode === "column") {
+          return `<aside>
+            <div class="ipa-top">${connChip()}${tools()}</div>
+            <div class="ip-id">
+              ${glyph("columns")}
+              <div class="ip-idtext">
+                <div class="ip-title">createTime</div>
+                <div class="ip-meta"><span class="kind">列</span><span>TradeRecord</span><span class="dot"></span><span class="mono">datetime(3)</span></div>
+              </div>
+            </div>
+            ${modes("column")}
+            <div class="groups">
+              ${groupTitle("基本信息")}
+              ${rows([
+                ["类型", "datetime(3)", true],
+                ["不允许 null", "否"],
+                ["默认值", "CURRENT_TIMESTAMP(3)", true],
+                ["注释", "创建时间"],
+                ["字符集", "—"],
+              ])}
+              ${groupTitle("索引")}
+              ${rows([["所属索引", "idx_create_time"], ["位置", "1 / 1"]])}
+              ${groupTitle("引用")}
+              ${rows([["外键", "—"]])}
+            </div>
+          </aside>`;
+        }
+
+        return `<aside>
+          <div class="ipa-top">${connChip()}${tools()}</div>
+          <div class="ip-id">
+            ${glyph("table")}
+            <div class="ip-idtext">
+              <div class="ip-title">TradeRecord</div>
+              <div class="ip-meta"><span class="kind">表</span><span>TrustBenefit</span><span class="dot"></span><span>InnoDB</span></div>
+            </div>
+          </div>
+          ${modes("info")}
+          <div class="kpis">
+            <div class="kpi"><b>112</b><span>列</span></div>
+            <div class="kpi"><b>37</b><span>索引</span></div>
+            <div class="kpi"><b>0</b><span>外键</span></div>
+            <div class="kpi"><b>125万</b><span>行</span></div>
+          </div>
+          <div class="groups">
+            ${groupTitle("概要")}
+            ${rows([
+              ["主键", "tradeId"],
+              ["数据长度", "850.90 MB"],
+              ["索引长度", "656.90 MB"],
+              ["排序规则", "utf8mb4_general_ci"],
+            ])}
+            ${groupTitle("属性")}
+            ${rows([
+              ["数据库", "TrustBenefit"],
+              ["引擎", "InnoDB"],
+              ["行格式", "Compact"],
+              ["自动递增", "—"],
+              ["创建日期", "2026-09-22 06:16:37"],
+              ["修改日期", "—"],
+            ])}
+          </div>
+        </aside>`;
+      }
+
+      /* ------------------------------------------------------------ 方案 B */
+      function bFrame() {
+        return `<aside>
+          <div class="ipa-top">${connChip()}
+            <span class="spacer"></span>
+            <div class="seg"><i class="on">${ic("table", 13)}</i><i>${ic("code", 13)}</i><i>${ic("columns", 13)}</i></div>
+          </div>
+          <div class="ipb-id">
+            <div class="ip-glyph">${ic("table", 16)}</div>
+            <div class="ip-idtext" style="min-width:0">
+              <div class="ip-title">TradeRecord</div>
+            </div>
+            <span class="kind" style="margin-left:auto">表</span>
+          </div>
+          <div class="ipb-meta"><span>TrustBenefit</span><span class="dot"></span><span>InnoDB</span><span class="dot"></span><span>Compact</span></div>
+          <div class="chips">
+            <span class="chip2"><b>112</b>列</span>
+            <span class="chip2"><b>37</b>索引</span>
+            <span class="chip2"><b>0</b>外键</span>
+            <span class="chip2"><b>125万</b>行</span>
+          </div>
+          <div class="groups" style="border-top:1px solid var(--border-subtle);padding-top:12px">
+            ${groupTitle("概要")}
+            ${rows([["主键", "tradeId"], ["数据长度", "850.90 MB"], ["索引长度", "656.90 MB"], ["排序规则", "utf8mb4_general_ci"]])}
+            ${groupTitle("属性")}
+            ${rows([["数据库", "TrustBenefit"], ["引擎", "InnoDB"], ["行格式", "Compact"], ["创建日期", "2026-09-22 06:16:37"]])}
+          </div>
+        </aside>`;
+      }
+
+      /* ------------------------------------------------------------ 方案 C */
+      function cFrame() {
+        return `<aside>
+          <div class="ipc-tabs">
+            <i class="on">${ic("table", 12)}表信息</i>
+            <i>${ic("code", 12)}DDL</i>
+            <i>${ic("columns", 12)}列信息</i>
+          </div>
+          <div class="ipc-id">
+            <div class="ip-glyph">${ic("table", 18)}</div>
+            <div class="ip-idtext">
+              <div class="ip-title">TradeRecord</div>
+              <div class="ipc-sub">${dbico("tidb", 11)}<span>TiDB</span><span class="dot"></span><span>TrustBenefit</span></div>
+            </div>
+            <span class="kind" style="margin-left:auto">表</span>
+          </div>
+          <div class="ipc-card">
+            <div class="ipc-grid">
+              <div class="ipc-cell"><b>112</b><span>列数量</span></div>
+              <div class="ipc-cell"><b>37</b><span>索引数量</span></div>
+              <div class="ipc-cell"><b>0</b><span>外键数量</span></div>
+              <div class="ipc-cell"><b>1,252,059</b><span>行</span></div>
+            </div>
+          </div>
+          <div class="groups">
+            ${groupTitle("概要")}
+            ${rows([["主键", "tradeId"], ["数据长度", "850.90 MB"], ["索引长度", "656.90 MB"], ["排序规则", "utf8mb4_general_ci"]])}
+            ${groupTitle("属性")}
+            ${rows([["数据库", "TrustBenefit"], ["引擎", "InnoDB"], ["行格式", "Compact"], ["创建日期", "2026-09-22 06:16:37"]])}
+          </div>
+        </aside>`;
+      }
+
+      const cells = [
+        {
+          cap: "现状 · 截图复刻",
+          desc: "标题块居中、上下各约 24px 留白；红框内只有图标 + 标题 + 「表」+ 一行连接，模式按钮只有图形，且「列数量 / 索引数量 / 外键数量」沉在键值表里。",
+          html: beforeFrame(),
+        },
+        {
+          cap: "方案 A · 身份卡 + 指标带",
+          rec: true,
+          desc: "连接 chip 上移一行 → 左对齐身份块 → 整宽文字分段 → 4 格指标带。约 166px 完成「是什么 / 有多大 / 看哪一页」，省下 40px 且信息量翻倍。",
+          html: aFrame("info"),
+        },
+        {
+          cap: "方案 B · 紧凑单行头",
+          desc: "为窄面板（240px）准备：28px 图标 + 13px 标题同行，连接与库名折到第二行，规模用可换行胶囊。头部约 96px，适合宽度被拖窄或屏幕高度吃紧时。",
+          html: bFrame(),
+        },
+        {
+          cap: "方案 C · 顶栏即标签 + 概览卡",
+          desc: "三视图做成整宽 tab（2px 强调下划线），身份块精简为 32px，规模用浅底概览卡 2×2 呈现。层级最像「页签 + 属性页」，适合后续再加「依赖 / 数据」等页。",
+          html: cFrame(),
+        },
+        {
+          cap: "方案 A 状态验证 · 列信息",
+          desc: "同一套头部切到「列信息」：图标换成列、类型以等宽字体并入副行，指标带自动让位给列属性（不硬塞 112/37/0 这类表级数字）。",
+          html: aFrame("column"),
+        },
+      ];
+
+      document.getElementById("board").innerHTML = cells
+        .map(
+          (c) => `<div class="cell">
+            <div class="cap"><b>${c.cap}</b>${c.rec ? '<i class="rec">推荐</i>' : ""}<span>${c.desc}</span></div>
+            <div class="frame">${c.html}</div>
+          </div>`,
+        )
+        .join("");
+    </script>
+  </body>
+</html>

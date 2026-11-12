@@ -17,11 +17,13 @@ import { open as openFile } from "@tauri-apps/plugin-dialog";
 import {
   api,
   driverApi,
+  javaRuntimeApi,
   parseVersionSelection,
   type DatabaseDriverStatus,
   type DriverDefinition,
   type DriverProtocol,
   type DriverSource,
+  type JavaRuntimeStatus,
   type OdbcInventory,
 } from "../core/api";
 import { ensureDriverStatuses, refreshDriverStatuses, subscribeDriverStatuses } from "../core/driverStatus";
@@ -232,7 +234,55 @@ export function openDriverManager(
   refresh.type = "button";
   refresh.innerHTML = `${svg(ICON_REFRESH, 13)}<span>重新检测</span>`;
 
-  toolbar.append(searchWrap, filters, spacer, arch, refresh);
+  // Java 运行时芯片：检测缺失时可一键安装托管 JDK（JDBC / H2 连接依赖 Java 11+）。
+  let javaStatus: JavaRuntimeStatus | null = null;
+  let javaInstalling = false;
+  const javaBtn = node("button", "btn drv-java-runtime");
+  javaBtn.type = "button";
+  const paintJava = (): void => {
+    if (javaInstalling) return;
+    const state = javaStatus;
+    if (!state) {
+      javaBtn.textContent = "Java 运行时：检测中…";
+      javaBtn.disabled = true;
+      return;
+    }
+    javaBtn.title = state.message;
+    if (state.installed) {
+      javaBtn.textContent = `Java 运行时：已就绪${state.version ? `（${state.version}）` : ""}`;
+      javaBtn.disabled = true;
+      return;
+    }
+    if (state.can_install) {
+      javaBtn.textContent = state.source === "system" ? "Java 运行时：改用托管 JDK" : "Java 运行时：一键安装";
+      javaBtn.disabled = false;
+      return;
+    }
+    javaBtn.textContent = "Java 运行时：已就绪";
+    javaBtn.disabled = true;
+  };
+  const installJava = async (): Promise<void> => {
+    if (javaInstalling) return;
+    javaInstalling = true;
+    javaBtn.disabled = true;
+    javaBtn.textContent = "Java 运行时：安装中…";
+    flush.textContent = "正在下载并安装 Java 运行时（约 182MiB，需解压），请稍候…";
+    try {
+      javaStatus = await javaRuntimeApi.install();
+      javaInstalling = false;
+      paintJava();
+      if (!closed) flush.textContent = javaStatus.message;
+    } catch (error) {
+      javaInstalling = false;
+      javaBtn.disabled = false;
+      javaBtn.textContent = "Java 运行时：重试安装";
+      if (!closed) flush.textContent = `Java 运行时安装失败：${String(error)}`;
+    }
+  };
+  javaBtn.addEventListener("click", () => { void installJava(); });
+  paintJava();
+
+  toolbar.append(searchWrap, filters, spacer, arch, javaBtn, refresh);
 
   const list = node("div", "drv-list");
   list.setAttribute("role", "navigation");
@@ -730,6 +780,16 @@ export function openDriverManager(
     closed = true;
     unsubscribe();
     if (previousFocus?.isConnected) previousFocus.focus();
+  });
+
+  void javaRuntimeApi.status().then((state) => {
+    javaStatus = state;
+    if (!closed) paintJava();
+  }).catch(() => {
+    if (closed) return;
+    javaBtn.textContent = "Java 运行时：未知";
+    javaBtn.title = "无法读取 Java 运行时状态";
+    javaBtn.disabled = false;
   });
 
   void reloadStatuses(false);

@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "run_id": "6ef50270-1b52-458c-a39d-56059e525174",
+  "timestamp_utc": "2026-11-07T04:06:23.783Z",
+  "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",
+  "status": "SIMULATED_SYNC_PASS",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "source_hashes": {
+    "src-tauri/src/sync.rs": "8e38d219e2250d1eaeb1bdc42f44007daf3fde5e4fb2ab2b028c9bfb3ea97ef4",
+    "src-tauri/src/transfer.rs": "07038eb8eb00d64f1f4cf01212941c1ad7cfb995b4d303aa79a3b2608578b7bc",
+    "src-tauri/src/mssql.rs": "2e971da8f65756a98fe8a780f27946ea349ccbc19b98e01dc106aba48f4d360a",
+    "src-tauri/src/odbc_db.rs": "fd8882c114ab461c0ac3513fc073865e28bb4747b0859817a6b43620490cea0e",
+    "src-tauri/src/schema.rs": "b9ee62d8449657c46fdfafcebc2a2e434bb7bd0b7f3e3afbd918055ca11a1591",
+    "src-tauri/src/db.rs": "217dec741db49d58cc5a5d176febe3eebeddb97512da9cd228fecadb847e0758",
+    "src-tauri/tests/e2e_sync_simulated.rs": "5ca3f20017e07a28d33dd7cdb36316a685e429dbe891112ec4bd860a1a3842c2",
+    "src-tauri/tests/support/sync_simulated/mod.rs": "9e829100c24b405913a91ff18efa00a154761be0af0360849836d2833acc1978",
+    "src-tauri/tests/support/sync_simulated/tds_sync_server.py": "d481f5a7c62ee1291a99c7e7442dc9460e6385a4a61f578e3bbd6c19ec48d6be",
+    "src-tauri/tests/support/sync_simulated/clickhouse_sync_server.py": "ae5710fadccc7bba7ab439350173a14f0fe17fa8e67bdcd240d990d5d2852204",
+    "tools/acceptance/simulation/native/tds_server.py": "17e49e85eefeda6de0f0b630738d6af859fbad94f9ed9074e23c1e3ac6e2bca9",
+    "tools/acceptance/sync/run-simulations.mjs": "ba1973093587b49eb17fa6a5fab93320b5b3cbbb40498ebb09082c8237696022"
+  },
+  "runtime_artifacts": {
+    "NAVKIT_SIM_ODBC_DRIVER": {
+      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\navkit_sim_odbc.dll",
+      "status": "PRESENT",
+      "bytes": 6144,
+      "sha256": "c78f15e37ddbf4006df9261ecd93b01c2be792288043ab715f2e0ae0c1b7beef"
+    },
+    "NAVKIT_SIM_ODBC_BACKEND": {
+      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\sim_duck_backend.dll",
+      "status": "PRESENT",
+      "bytes": 41386800,
+      "sha256": "9fa507ac3a43d0664c0e5214ba34551e9ea26a17f71415b3ffe18cc698fae563"
+    }
+  },
+  "runtime": {
+    "platform": "win32",
+    "arch": "x64",
+    "node": "v24.8.0"
+  },
+  "executions": [
+    {
+      "label": "tds-sqlserver",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_tds",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_PASS",
+      "report": "tds-sqlserver.json",
+      "exit_code": 0,
+      "elapsed_ms": 131572,
+      "counts": {
+        "pass": 8,
+        "fail": 0
+      },
+      "cleanup_success": true,
+      "executed_binary": {
+        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+      },
+      "errors": []
+    },
+    {
+      "label": "clickhouse-http_sql_subset",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_clickhouse",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_PASS",
+      "report": "clickhouse-http_sql_subset.json",
+      "exit_code": 0,
+      "elapsed_ms": 7442,
+      "counts": {
+        "pass": 8,
+        "fail": 0
+      },
+      "cleanup_success": true,
+      "executed_binary": {
+        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+      },
+      "errors": []
+    },
+    {
+      "label": "odbc-odbc",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_PASS",
+      "report": "odbc-odbc.json",
+      "exit_code": 0,
+      "elapsed_ms": 4170,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      },
+      "cleanup_success": true,
+      "executed_binary": {
+        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+      },
+      "errors": []
+    },
+    {
+      "label": "odbc-oracle",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_PASS",
+      "report": "odbc-oracle.json",
+      "exit_code": 0,
+      "elapsed_ms": 4889,
+      "counts": {
+        "pass": 6,
+        "fail": 0
+      },
+      "cleanup_success": true,
+      "executed_binary": {
+        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+      },
+      "errors": []
+    },
+    {
+      "label": "odbc-dameng",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_PASS",
+      "report": "odbc-dameng.json",
+      "exit_code": 0,
+      "elapsed_ms": 4871,
+      "counts": {
+        "pass": 6,
+        "fail": 0
+      },
+      "cleanup_success": true,
+      "executed_binary": {
+        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+      },
+      "errors": []
+    },
+    {
+      "label": "odbc-db2",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_PASS",
+      "report": "odbc-db2.json",
+      "exit_code": 0,
+      "elapsed_ms": 4144,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      },
+      "cleanup_success": true,
+      "executed_binary": {
+        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+      },
+      "errors": []
+    }
+  ],
+  "counts": {
+    "suites": 6,
+    "pass": 42,
+    "fail": 0,
+    "vendor_real_pass": 0
+  },
+  "limitations": [
+    "Stateful simulations are not vendor database certification",
+    "Case counts are scenario bundles, not Rust test counts or individual SQL calls",
+    "Outer managed executor must cancel a native driver that never returns; incomplete cleanup is never a PASS"
+  ],
+  "fresh_project_build": {
+    "command": [
+      "cargo",
+      "clean",
+      "--offline",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      "-p",
+      "navkit"
+    ],
+    "status": "PASS",
+    "log": "fresh-project-build.log",
+    "exit_code": 0
+  },
+  "source_hashes_after": {
+    "src-tauri/src/sync.rs": "8e38d219e2250d1eaeb1bdc42f44007daf3fde5e4fb2ab2b028c9bfb3ea97ef4",
+    "src-tauri/src/transfer.rs": "07038eb8eb00d64f1f4cf01212941c1ad7cfb995b4d303aa79a3b2608578b7bc",
+    "src-tauri/src/mssql.rs": "2e971da8f65756a98fe8a780f27946ea349ccbc19b98e01dc106aba48f4d360a",
+    "src-tauri/src/odbc_db.rs": "fd8882c114ab461c0ac3513fc073865e28bb4747b0859817a6b43620490cea0e",
+    "src-tauri/src/schema.rs": "b9ee62d8449657c46fdfafcebc2a2e434bb7bd0b7f3e3afbd918055ca11a1591",
+    "src-tauri/src/db.rs": "217dec741db49d58cc5a5d176febe3eebeddb97512da9cd228fecadb847e0758",
+    "src-tauri/tests/e2e_sync_simulated.rs": "5ca3f20017e07a28d33dd7cdb36316a685e429dbe891112ec4bd860a1a3842c2",
+    "src-tauri/tests/support/sync_simulated/mod.rs": "9e829100c24b405913a91ff18efa00a154761be0af0360849836d2833acc1978",
+    "src-tauri/tests/support/sync_simulated/tds_sync_server.py": "d481f5a7c62ee1291a99c7e7442dc9460e6385a4a61f578e3bbd6c19ec48d6be",
+    "src-tauri/tests/support/sync_simulated/clickhouse_sync_server.py": "ae5710fadccc7bba7ab439350173a14f0fe17fa8e67bdcd240d990d5d2852204",
+    "tools/acceptance/simulation/native/tds_server.py": "17e49e85eefeda6de0f0b630738d6af859fbad94f9ed9074e23c1e3ac6e2bca9",
+    "tools/acceptance/sync/run-simulations.mjs": "ba1973093587b49eb17fa6a5fab93320b5b3cbbb40498ebb09082c8237696022"
+  },
+  "source_unchanged_during_run": true,
+  "runtime_artifacts_after": {
+    "NAVKIT_SIM_ODBC_DRIVER": {
+      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\navkit_sim_odbc.dll",
+      "status": "PRESENT",
+      "bytes": 6144,
+      "sha256": "c78f15e37ddbf4006df9261ecd93b01c2be792288043ab715f2e0ae0c1b7beef"
+    },
+    "NAVKIT_SIM_ODBC_BACKEND": {
+      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\sim_duck_backend.dll",
+      "status": "PRESENT",
+      "bytes": 41386800,
+      "sha256": "9fa507ac3a43d0664c0e5214ba34551e9ea26a17f71415b3ffe18cc698fae563"
+    }
+  },
+  "runtime_artifacts_unchanged_during_run": true,
+  "runtime_artifacts_available": true,
+  "executed_binary_unchanged_between_suites": true,
+  "finished_utc": "2026-11-07T04:09:01.921Z"
+}

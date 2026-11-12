@@ -230,7 +230,7 @@ pub fn literal(ep: &Endpoint, text: &str) -> String {
 }
 pub fn table() -> String { format!("T{}", uuid::Uuid::new_v4().simple()).to_ascii_uppercase() }
 pub fn options(source: &Endpoint, source_table: &str, target: &Endpoint, target_table: &str) -> SyncOptions {
-    SyncOptions {task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection: "owned-source".into(), source_schema: source.namespace.clone(), source_table: source_table.into(), target_connection: "owned-target".into(), target_schema: target.namespace.clone(), target_table: target_table.into(), mode: "both".into(), write_mode: "append".into(), sync_mode: "full".into(), incremental_update: false, create_target: true, columns: Vec::new(), where_clause: None}
+    SyncOptions {task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection: "owned-source".into(), source_schema: source.namespace.clone(), source_table: source_table.into(), target_connection: "owned-target".into(), target_schema: target.namespace.clone(), target_table: target_table.into(), mode: "both".into(), write_mode: "append".into(), sync_mode: "full".into(), incremental_update: false, create_target: true, columns: Vec::new(), key_columns: Vec::new(), delete_missing: false, where_clause: None}
 }
 pub fn diff_request(opts: &SyncOptions) -> SyncDiffRequest {
     SyncDiffRequest {source_connection: opts.source_connection.clone(), source_schema: opts.source_schema.clone(), source_table: opts.source_table.clone(), target_connection: opts.target_connection.clone(), target_schema: opts.target_schema.clone(), target_table: opts.target_table.clone(), where_clause: opts.where_clause.clone(), columns: opts.columns.clone()}

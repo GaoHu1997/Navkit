@@ -6,7 +6,7 @@ async fn h2_memory_queries_metadata_and_schemas_share_one_real_session() {
     let root = storage::portable_root();
     assert!(root.starts_with(std::env::temp_dir()), "refuse user storage: {}", root.display());
     assert!(root.file_name().unwrap().to_string_lossy().starts_with("navkit-command-tests-h2-"));
-    let state = AppState { store: Store::load(), registry: Arc::new(DbRegistry::default()), manual_transactions: Default::default(), activity: Default::default() };
+    let state = AppState { store: Store::load(), registry: Arc::new(DbRegistry::default()), manual_transactions: Default::default(), executions: Default::default(), mutations: Default::default(), connection_runtime: Default::default(), activity: Default::default(), query_results: Default::default() };
     let kind = DbKind::of("h2");
     let id = "h2-memory-command-probe";
     let config = ConnectionConfig {

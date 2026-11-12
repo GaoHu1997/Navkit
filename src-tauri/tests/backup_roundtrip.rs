@@ -47,6 +47,7 @@ async fn sqlite_dump_and_restore_roundtrip() {
         &DbKind::of("sqlite"),
         "demo", // SQLite 下该 schema 名必须被忽略
         &[],
+        &[], // 例程：SQLite 无例程
         true,
         true,
         &dump_file.to_string_lossy(),

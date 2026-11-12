@@ -1,0 +1,11 @@
+字段
+索引
+外键
+检查
+触发器
+选项
+注释
+SQL 预览
+IpcError: error returned from database: 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'generated, COLLATION_NAME AS collation, ORDINAL_POSITION AS ordinal FROM informa' at line 1
+
+表设计元数据尚未完整读取。

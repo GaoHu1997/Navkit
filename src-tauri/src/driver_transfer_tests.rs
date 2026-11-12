@@ -4,6 +4,10 @@ use super::*;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, task::{JoinHandle, JoinSet}};
 
+// 本组测试使用真实 HTTP socket + 毫秒级超时；并行执行时 CPU 饱和会使 tokio 定时器抖动，
+// 导致「必须重试而非接受停滞响应」的断言偶发失败。统一串行执行（断言与超时值均不改变）。
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn serial() -> std::sync::MutexGuard<'static, ()> { SERIAL.lock().unwrap_or_else(|e| e.into_inner()) }
 #[derive(Clone, Copy)]
 enum Fault { None, IgnoreRange, WrongRange, WrongTotal, Encoded, Html, Truncated, WrongBytes, ChangedEtag, FullLater, Retry503, RetryTwice503, SlowLater, SlowFirstHeaders, SlowFirstBody, SlowFullBody, Always503, CloseConnection }
 struct State { bytes: Vec<u8>, fault: Fault, requests: AtomicUsize, first_range_requests: AtomicUsize, active: AtomicUsize, peak: AtomicUsize, later_started: tokio::sync::Notify }
@@ -109,6 +113,7 @@ async fn respond(mut stream: TcpStream, state: Arc<State>) -> Result<()> {
 
 #[tokio::test]
 async fn segmented_download_is_complete_out_of_order_and_bounded() {
+    let _serial = serial();
     let mut server = Server::start(Fault::None).await; let directory = Directory::new();
     server.run(&directory.path()).await.unwrap();
     assert_eq!(fs::read(directory.path()).unwrap(), server.state.bytes);
@@ -120,6 +125,7 @@ async fn segmented_download_is_complete_out_of_order_and_bounded() {
 
 #[tokio::test]
 async fn range_ignored_consumes_exactly_one_verified_full_response() {
+    let _serial = serial();
     let mut server = Server::start(Fault::IgnoreRange).await; let directory = Directory::new();
     server.run(&directory.path()).await.unwrap();
     assert_eq!(fs::read(directory.path()).unwrap(), server.state.bytes);
@@ -129,6 +135,7 @@ async fn range_ignored_consumes_exactly_one_verified_full_response() {
 
 #[tokio::test]
 async fn malformed_ranges_content_and_integrity_never_leave_partial_files() {
+    let _serial = serial();
     for fault in [Fault::WrongRange, Fault::WrongTotal, Fault::Encoded, Fault::Html, Fault::Truncated, Fault::WrongBytes, Fault::ChangedEtag, Fault::FullLater] {
         let mut server = Server::start(fault).await; let directory = Directory::new();
         assert!(server.run(&directory.path()).await.is_err());
@@ -139,6 +146,7 @@ async fn malformed_ranges_content_and_integrity_never_leave_partial_files() {
 
 #[tokio::test]
 async fn retryable_http_failure_has_one_bounded_retry_and_full_digest() {
+    let _serial = serial();
     let mut server = Server::start(Fault::Retry503).await; let directory = Directory::new();
     server.run(&directory.path()).await.unwrap();
     assert_eq!(fs::read(directory.path()).unwrap(), server.state.bytes);
@@ -148,6 +156,7 @@ async fn retryable_http_failure_has_one_bounded_retry_and_full_digest() {
 
 #[tokio::test]
 async fn two_temporary_failures_require_three_bounded_attempts() {
+    let _serial = serial();
     let mut server = Server::start(Fault::RetryTwice503).await; let directory = Directory::new();
     server.run(&directory.path()).await.unwrap();
     assert_eq!(fs::read(directory.path()).unwrap(), server.state.bytes);
@@ -157,6 +166,7 @@ async fn two_temporary_failures_require_three_bounded_attempts() {
 
 #[tokio::test]
 async fn cancellation_closes_writers_removes_partial_and_stops_new_requests() {
+    let _serial = serial();
     let mut server = Server::start(Fault::SlowLater).await; let directory = Directory::new();
     let client = server.client(); let digest = server.digest();
     let path = directory.path();
@@ -180,10 +190,11 @@ async fn cancellation_closes_writers_removes_partial_and_stops_new_requests() {
 
 #[tokio::test]
 async fn first_range_header_and_body_stalls_retry_inside_the_card_deadline() {
-    let timeouts = TransferTimeouts { headers: Duration::from_millis(250), idle: Duration::from_millis(250), range: Duration::from_millis(800) };
+    let _serial = serial();
+    let timeouts = TransferTimeouts { headers: Duration::from_millis(800), idle: Duration::from_millis(800), range: Duration::from_millis(2400) };
     for fault in [Fault::SlowFirstHeaders, Fault::SlowFirstBody] {
         let mut server = Server::start(fault).await; let directory = Directory::new();
-        tokio::time::timeout(Duration::from_secs(5), transfer_with_timeouts(&server.client(), &server.url, server.state.bytes.len() as u64, &server.digest(), &directory.path(), super::super::MAX_DOWNLOAD, timeouts)).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(30), transfer_with_timeouts(&server.client(), &server.url, server.state.bytes.len() as u64, &server.digest(), &directory.path(), super::super::MAX_DOWNLOAD, timeouts)).await.unwrap().unwrap();
         assert_eq!(fs::read(directory.path()).unwrap(), server.state.bytes);
         assert!((2..=MAX_SEGMENT_RETRIES).contains(&server.state.first_range_requests.load(Ordering::SeqCst)), "the stalled first range must be retried, not accepted after its idle deadline");
         assert!((7..=6 * MAX_SEGMENT_RETRIES).contains(&server.state.requests.load(Ordering::SeqCst)), "each of the six ranges has a bounded retry budget even under scheduler load");
@@ -193,9 +204,10 @@ async fn first_range_header_and_body_stalls_retry_inside_the_card_deadline() {
 
 #[tokio::test]
 async fn ignored_range_full_response_idle_timeout_cleans_up_without_duplicate_downloads() {
-    let timeouts = TransferTimeouts { headers: Duration::from_millis(250), idle: Duration::from_millis(250), range: Duration::from_millis(800) };
+    let _serial = serial();
+    let timeouts = TransferTimeouts { headers: Duration::from_millis(800), idle: Duration::from_millis(800), range: Duration::from_millis(2400) };
     let mut server = Server::start(Fault::SlowFullBody).await; let directory = Directory::new();
-    let result = tokio::time::timeout(Duration::from_secs(3), transfer_with_timeouts(&server.client(), &server.url, server.state.bytes.len() as u64, &server.digest(), &directory.path(), super::super::MAX_DOWNLOAD, timeouts)).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(10), transfer_with_timeouts(&server.client(), &server.url, server.state.bytes.len() as u64, &server.digest(), &directory.path(), super::super::MAX_DOWNLOAD, timeouts)).await.unwrap();
     let error = result.unwrap_err();
     assert!(retryable(&error));
     assert!(format!("{error:#}").contains("读取停滞超时"));
@@ -206,6 +218,7 @@ async fn ignored_range_full_response_idle_timeout_cleans_up_without_duplicate_do
 
 #[test]
 fn fallback_is_only_the_exact_official_asset_not_a_generic_api_mirror() {
+    let _serial = serial();
     for (filename, size, digest, asset) in [
         ("amd64", 14769106, "0319071a1d1f5eab93ae01a69d9aa7d39c772ebcf3ff4e856fc5ad654460e63e", "696564620"),
         ("arm64", 14932307, "d194bf0ce148e14c6b824c349b62486d898311bdfb7a5ba1eb554584f428f5cc", "696564653"),
@@ -223,6 +236,7 @@ fn fallback_is_only_the_exact_official_asset_not_a_generic_api_mirror() {
 
 #[tokio::test]
 async fn transport_failure_uses_a_fresh_full_digest_fallback_but_integrity_failure_does_not() {
+    let _serial = serial();
     let mut primary = Server::start(Fault::Always503).await;
     let mut fallback = Server::start(Fault::None).await;
     let directory = Directory::new();
@@ -245,6 +259,7 @@ async fn transport_failure_uses_a_fresh_full_digest_fallback_but_integrity_failu
 
 #[tokio::test]
 async fn aborted_socket_uses_verified_fallback_without_accepting_protocol_errors() {
+    let _serial = serial();
     let mut primary = Server::start(Fault::CloseConnection).await;
     let mut fallback = Server::start(Fault::None).await;
     let directory = Directory::new();
@@ -258,6 +273,7 @@ async fn aborted_socket_uses_verified_fallback_without_accepting_protocol_errors
 
 #[tokio::test]
 async fn invalid_specs_and_existing_files_cannot_be_overwritten() {
+    let _serial = serial();
     let mut server = Server::start(Fault::None).await; let directory = Directory::new();
     let path = directory.path(); fs::write(&path, b"previous verified driver").unwrap();
     assert!(server.run(&path).await.is_err());

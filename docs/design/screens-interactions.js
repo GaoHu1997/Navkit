@@ -200,7 +200,6 @@ const CTX_TREE_DB = [
   { label: "导出向导...", icon: "wizard" },
   "-",
   { label: "转储 SQL 文件...", icon: "dump" },
-  { label: "逆向数据库到模型...", icon: "model" },
   { label: "服务器信息", icon: "info" },
   "-",
   { label: "刷新", key: "F5", icon: "refresh" },

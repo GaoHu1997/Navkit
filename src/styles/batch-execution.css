@@ -1,0 +1,43 @@
+/* 受控批执行局部样式，沿用应用灰阶/强调色与原生按钮。 */
+.batch-execution-dialog-body { min-height: 0; overflow: auto; }
+.batch-execution-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; width: 100%; color: var(--text); font-size: var(--fs-12); }
+.batch-task-picker { display: flex; align-items: center; gap: 12px; }
+.batch-task-picker > span { flex: 0 0 auto; color: var(--text-secondary); }
+.batch-task-picker > select { flex: 1; min-width: 0; width: 100%; }
+.batch-execution-scope { flex: 0 0 auto; color: var(--text-secondary); overflow-wrap: anywhere; }
+.batch-execution-state { font-weight: 600; min-height: 18px; }
+.batch-execution-panel[data-state='failed'] .batch-execution-state,
+.batch-execution-panel[data-state='unknown'] .batch-execution-state { color: var(--danger-600); }
+.batch-execution-panel[data-state='succeeded'] .batch-execution-state { color: var(--ok-600); }
+.batch-execution-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 10px 0; border-block: 1px solid var(--border); }
+.batch-execution-metrics > div { padding: 0 14px; border-inline-end: 1px solid var(--border); }
+.batch-execution-metrics > div:first-child { padding-inline-start: 0; }
+.batch-execution-metrics > div:last-child { border-inline-end: 0; }
+.batch-execution-metrics dt { color: var(--text-secondary); }
+.batch-execution-metrics dd { margin: 4px 0 0; font-size: var(--fs-18); font-variant-numeric: tabular-nums; }
+.batch-execution-receipt { flex: 0 0 auto; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.batch-execution-note { flex: 0 0 auto; min-height: 18px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.batch-execution-log-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.batch-execution-log-heading strong { font-weight: 600; }
+.batch-execution-log-heading .checkbox { gap: 6px; }
+.batch-execution-logs { flex: 0 0 210px; height: 210px; min-height: 210px; box-sizing: border-box; overflow: auto; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-2); background: var(--bg-subtle); color: var(--text); font: var(--fs-12)/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.batch-execution-truncated { min-height: 16px; font-size: var(--fs-11); color: var(--text-secondary); overflow-wrap: anywhere; }
+.batch-execution-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.batch-sql-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.batch-sql-tabs > button { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.batch-sql-tabs > button[aria-selected='true'] { color: var(--text-accent); border-bottom-color: var(--accent-500); background: var(--bg-selected); }
+.batch-fixed-scope { margin: 0; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; }
+.batch-fixed-scope dt { color: var(--text-secondary); }
+.batch-fixed-scope dd { margin: 0; overflow-wrap: anywhere; }
+.batch-sql-options { display: flex; flex-direction: column; gap: 12px; }
+.batch-fixed-value { width: 100%; min-width: 0; box-sizing: border-box; }
+.batch-generator-record { padding: 14px 20px; min-height: 0; overflow: auto; }
+.batch-execution-panel :is(button, select, input, pre):focus-visible,
+.batch-sql-tabs > button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
+.batch-execution-panel [hidden], .batch-generator-record[hidden], .batch-sql-tabpanel[hidden] { display: none; }
+@media (max-width: 600px) {
+  .batch-execution-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+  .batch-execution-metrics > div:nth-child(odd) { padding-inline-start: 0; }
+  .batch-execution-metrics > div:nth-child(2) { border-inline-end: 0; }
+  .batch-execution-log-heading { align-items: flex-start; flex-wrap: wrap; }
+}

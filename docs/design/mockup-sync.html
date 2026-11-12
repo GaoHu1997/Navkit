@@ -1,0 +1,104 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{font:13px/1.4 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;color:#2b2f36;background:#fff;-webkit-font-smoothing:antialiased}
+.app{display:flex;flex-direction:column;height:100vh;width:1600px;overflow:hidden}
+.toolbar{flex:0 0 52px;display:flex;align-items:center;gap:7px;padding:0 12px;border-bottom:1px solid #e4e7eb;background:#fff;white-space:nowrap;filter:grayscale(.2);opacity:.55}
+.sel{height:30px;padding:0 8px;border:1px solid #d6dae0;border-radius:7px;background:#fff;color:#3a3f47;font-size:13px}
+.search{display:flex;align-items:center;gap:6px;height:30px;width:230px;background:#f3f5f7;border:1px solid #eef0f2;border-radius:7px;padding:0 9px;color:#98a1ab;font-size:13px}
+.seg{display:flex;border:1px solid #d6dae0;border-radius:7px;overflow:hidden;height:30px}
+.seg button{border:0;background:#fff;padding:0 12px;font-size:13px;color:#4a5058}
+.seg button.on{background:#eaf2fd;color:#2f7de1;font-weight:600}
+.btn{height:30px;display:inline-flex;align-items:center;gap:6px;padding:0 11px;border:1px solid #d6dae0;border-radius:7px;background:#fff;color:#3a3f47;font-size:13px}
+.btn.primary{background:#2f7de1;border-color:#2f7de1;color:#fff;font-weight:600}
+.spacer{flex:1}
+svg.ic{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.main{flex:1;position:relative;overflow:hidden;background-color:#fbfbfc;background-image:radial-gradient(#d8dce1 1.1px,transparent 1.1px);background-size:22px 22px}
+.ghost{position:absolute;width:236px;background:#fff;border:1px solid #dfe3e8;border-radius:9px;height:120px;opacity:.5}
+.scrim{position:fixed;inset:0;background:rgba(17,23,33,.34)}
+.modal{position:fixed;left:50%;top:58px;transform:translateX(-50%);width:900px;background:#fff;border-radius:12px;box-shadow:0 24px 70px rgba(15,20,30,.38);overflow:hidden}
+.m-head{padding:15px 20px;border-bottom:1px solid #e4e7eb;display:flex;align-items:flex-start;gap:10px}
+.m-head .ttl{font-size:16px;font-weight:700}
+.m-head .sub{color:#8a929c;font-size:12px;margin-top:3px}
+.m-head .x{margin-left:auto;color:#9aa2ab;width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+.m-body{padding:14px 20px}
+.risk{background:#fdeceb;border:1px solid #f3c4c1;color:#b23b36;border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:12px;display:flex;gap:7px;align-items:center}
+.chg{display:flex;gap:11px;padding:11px 12px;border:1px solid #eceef1;border-radius:9px;margin-bottom:9px;align-items:flex-start;background:#fff}
+.chg.off{opacity:.62}
+.chg input[type=checkbox]{margin-top:2px;width:15px;height:15px;accent-color:#2f7de1}
+.pill{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;white-space:nowrap}
+.pill.new{background:#e7f4ec;color:#1f7a45}
+.pill.alter{background:#eaf2fd;color:#2f7de1}
+.pill.drop{background:#fdeceb;color:#d64545}
+.chg .body{flex:1;min-width:0}
+.chg .t1{display:flex;align-items:center;gap:8px}
+.chg .t1 b{font-size:13px}
+.chg .d{color:#8a929c;font-size:12px;margin-top:2px}
+.code{margin-top:8px;background:#f6f8fa;border:1px solid #e7ebef;border-radius:7px;padding:8px 10px;font:12px/1.55 Consolas,"Courier New",monospace;color:#3a4652;white-space:pre-wrap;word-break:break-all}
+.sec{font-size:12px;color:#8a929c;margin:14px 0 6px;font-weight:600}
+pre.sql{background:#f6f8fa;border:1px solid #e7ebef;border-radius:8px;padding:12px;font:12px/1.6 Consolas,"Courier New",monospace;color:#2f3a46;white-space:pre;overflow:auto;margin:0}
+.m-foot{padding:13px 20px;border-top:1px solid #e4e7eb;display:flex;align-items:center;gap:10px;background:#fcfcfd}
+.foot-left{color:#8a929c;font-size:12px}
+.foot-right{margin-left:auto;display:flex;gap:10px}
+</style></head><body>
+<svg style="display:none"><symbol id="i-db" viewBox="0 0 16 16"><ellipse cx="8" cy="3.6" rx="5" ry="2"/><path d="M3 3.6v8.8c0 1.1 2.2 2 5 2s5-.9 5-2V3.6"/><path d="M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></symbol><symbol id="i-sync" viewBox="0 0 16 16"><path d="M3 6.4a5 5 0 0 1 8.6-2.1M13 9.6a5 5 0 0 1-8.6 2.1"/><path d="M11.6 1.8v2.7H8.9M4.4 14.2v-2.7h2.7"/></symbol><symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol><symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.5 14.5 13.5h-13z"/><path d="M8 6.5v3.2M8 11.6v.01"/></symbol><symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol></svg>
+<div class="app">
+  <div class="toolbar">
+    <button class="sel">navkit_accept</button><button class="sel">navkit_accept</button>
+    <div class="search">搜索表 / 字段 / 外键...</div>
+    <div class="seg"><button class="on">表结构图</button><button>工程 ER 图</button></div>
+    <button class="btn">+ 新建表</button><span class="spacer"></span>
+    <button class="btn primary"><svg class="ic"><use href="#i-sync"/></svg>同步到数据库</button>
+  </div>
+  <div class="main">
+    <div class="ghost" style="left:60px;top:120px"></div>
+    <div class="ghost" style="left:352px;top:120px"></div>
+    <div class="ghost" style="left:660px;top:120px"></div>
+  </div>
+</div>
+<div class="scrim"></div>
+<div class="modal">
+  <div class="m-head">
+    <div><div class="ttl">同步到数据库</div><div class="sub">连接 navkit_accept · 数据库 navkit_accept · 将执行 3 项结构变更</div></div>
+    <span class="x"><svg class="ic"><use href="#i-x"/></svg></span>
+  </div>
+  <div class="m-body">
+    <div class="risk"><svg class="ic" style="width:14px;height:14px"><use href="#i-warn"/></svg>检测到 1 项破坏性变更（DROP COLUMN），执行后不可恢复，请确认后再勾选。</div>
+    <div class="chg">
+      <input type="checkbox" checked>
+      <div class="body"><div class="t1"><span class="pill new">新建</span><b>新建表 t_fk_child</b></div>
+        <div class="d">3 个字段 · 主键 cid · 外键 pid → t_fk_parent.pid</div>
+        <div class="code">CREATE TABLE t_fk_child ( cid INT PRIMARY KEY, pid INT, memo VARCHAR(100) );</div></div>
+    </div>
+    <div class="chg">
+      <input type="checkbox" checked>
+      <div class="body"><div class="t1"><span class="pill alter">新增列</span><b>t_types 新增字段 e_col</b></div>
+        <div class="d">ENUM('a','b','c') · 允许 NULL</div>
+        <div class="code">ALTER TABLE t_types ADD COLUMN e_col ENUM('a','b','c') NULL;</div></div>
+    </div>
+    <div class="chg off">
+      <input type="checkbox">
+      <div class="body"><div class="t1"><span class="pill drop">删除列</span><b>t_types 删除字段 plain_varchar</b></div>
+        <div class="d">破坏性操作 · 未勾选（默认不执行）</div>
+        <div class="code">ALTER TABLE t_types DROP COLUMN plain_varchar;</div></div>
+    </div>
+    <div class="sec">执行脚本预览</div>
+    <pre class="sql">-- 1) 新建表
+CREATE TABLE t_fk_child (
+  cid  INT PRIMARY KEY,
+  pid  INT,
+  memo VARCHAR(100)
+);
+
+-- 2) 新增列
+ALTER TABLE t_types ADD COLUMN e_col ENUM('a','b','c') NULL;</pre>
+  </div>
+  <div class="m-foot">
+    <span class="foot-left">共 3 项 · 已选 2 项 · 预计执行 ALTER / CREATE</span>
+    <div class="foot-right">
+      <button class="btn">取消</button>
+      <button class="btn">复制 SQL</button>
+      <button class="btn primary"><svg class="ic"><use href="#i-sync"/></svg>执行同步（2）</button>
+    </div>
+  </div>
+</div>
+</body></html>

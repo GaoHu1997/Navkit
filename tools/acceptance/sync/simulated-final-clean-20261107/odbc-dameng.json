@@ -1,0 +1,689 @@
+{
+  "schema_version": 1,
+  "protocol": "odbc",
+  "tag": "dameng",
+  "executed_binary": {
+    "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+    "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+  },
+  "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",
+  "status": "SIMULATED_SYNC_PASS",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "limitations": [
+    "Not a vendor server or certification",
+    "Finite documented SQL/wire subset with actual mutable backend state",
+    "No user connection secrets or data/ files are used",
+    "Existing proxy translates a finite family-dialect subset to actual DuckDB; not Oracle/Dameng/Db2 vendor syntax/type certification"
+  ],
+  "cases": [
+    {
+      "name": "sqlite_to_odbc_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 331,
+      "evidence": {
+        "baseline": {
+          "source_kind": "sqlite",
+          "target_kind": "dameng",
+          "source_table": "TFE33A8FD264C42A0A48F7F7B5A272B9E",
+          "target_table": "T490D152823634768BC0F25E8FED58D02",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "262daf79-352d-49a8-8845-4205e7a59e39:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "262daf79-352d-49a8-8845-4205e7a59e39:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "2787a6b8-9e06-49db-b60a-2c19538cc04f:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:6dc10c30-1301-4104-8975-a0d12a38f50b:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_sqlite_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 309,
+      "evidence": {
+        "baseline": {
+          "source_kind": "dameng",
+          "target_kind": "sqlite",
+          "source_table": "T8B0D3D85DD7744AB955CBA6124B1D529",
+          "target_table": "T4D669C64A7E64B2CB18409E59ABFB5FD",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "43c38152-5b5f-4c4a-bd23-2c86481e1a4d:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "43c38152-5b5f-4c4a-bd23-2c86481e1a4d:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "36d11fd7-1796-41d8-867a-dec52f17b5c3:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:e761499f-987b-4ba6-859f-db0f56ad84e6:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_odbc_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 448,
+      "evidence": {
+        "baseline": {
+          "source_kind": "dameng",
+          "target_kind": "dameng",
+          "source_table": "T68C1A18C49CA400586054B491DCC7EC6",
+          "target_table": "T7078F20482A54021B5B3783C1A8E58E2",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "062fd074-35e0-4d61-bf02-820189b0fb38:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "062fd074-35e0-4d61-bf02-820189b0fb38:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "4a2ec7ce-4bd7-4394-b297-e3c9f7df2377:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:7342d4c9-ead2-42da-b9bf-67a2942f0487:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_nontransactional_failure_after_first_write",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 44,
+      "evidence": {
+        "sync_error": "第 2 条目标语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚: ODBC 执行失败: ODBC emitted an error calling 'SQLExecDirect':\nState: HY000, Native error: 0, Message: ODBC_DuckDB->SingleExecuteStmt\nConstraint Error: CHECK constraint failed on table \"TE93CECE2528747099AD9B03F0DA389F6\" with expression CHECK((ID != 2))",
+        "committed_rows_after_error": [
+          [
+            "1",
+            "e9485d5b-2994-490a-a222-6385f55f95fb:中文;O'Reilly\\尾🙂",
+            null
+          ]
+        ],
+        "task": {
+          "task_id": "1b879d49-cb0e-4760-83b3-468eaf02dad2",
+          "status": "failed",
+          "phase": "write",
+          "processed": 1,
+          "total": 2,
+          "message": "第 2 条目标语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚: ODBC 执行失败: ODBC emitted an error calling 'SQLExecDirect':\nState: HY000, Native error: 0, Message: ODBC_DuckDB->SingleExecuteStmt\nConstraint Error: CHECK constraint failed on table \"TE93CECE2528747099AD9B03F0DA389F6\" with expression CHECK((ID != 2))"
+        },
+        "atomicity": "NON_TRANSACTIONAL_EARLIER_WRITE_REMAINS"
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "sqlite_to_odbc_binary_4values_exact_bytes_null_empty",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 45,
+      "evidence": {
+        "source_kind": "sqlite",
+        "target_kind": "dameng",
+        "source_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "expected_rows": [
+          [
+            "1",
+            "0X00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0X"
+          ],
+          [
+            "4",
+            "0X00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "cases": [
+          "NUL_and_non_UTF8",
+          "NULL",
+          "empty_BLOB",
+          "mixed_binary_UTF8_bytes"
+        ],
+        "physical_storage": {
+          "fixture_backend_type_and_hex": [
+            [
+              "1",
+              "BLOB",
+              "00FF1080"
+            ],
+            [
+              "2",
+              "BLOB",
+              null
+            ],
+            [
+              "3",
+              "BLOB",
+              ""
+            ],
+            [
+              "4",
+              "BLOB",
+              "00017F80FEFF41C3A9F09F9982"
+            ]
+          ]
+        },
+        "sync": {
+          "rows": 4,
+          "created": true,
+          "warnings": [
+            "该目标通道不支持事务：语句逐条自动提交，中途失败时已写入的部分不会自动回滚",
+            "ODBC 目标按 ANSI SQL 生成（Oracle/DB2/达梦 系对象名自动大写）；建议先小规模试跑核对类型与对象名"
+          ]
+        }
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_sqlite_binary_4values_exact_bytes_null_empty",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 38,
+      "evidence": {
+        "source_kind": "dameng",
+        "target_kind": "sqlite",
+        "source_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "expected_rows": [
+          [
+            "1",
+            "0X00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0X"
+          ],
+          [
+            "4",
+            "0X00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "cases": [
+          "NUL_and_non_UTF8",
+          "NULL",
+          "empty_BLOB",
+          "mixed_binary_UTF8_bytes"
+        ],
+        "physical_storage": {
+          "storage_classes": [
+            "blob",
+            "null",
+            "blob",
+            "blob"
+          ],
+          "decoded_bytes": [
+            [
+              0,
+              255,
+              16,
+              128
+            ],
+            null,
+            [],
+            [
+              0,
+              1,
+              127,
+              128,
+              254,
+              255,
+              65,
+              195,
+              169,
+              240,
+              159,
+              153,
+              130
+            ]
+          ]
+        },
+        "sync": {
+          "rows": 4,
+          "created": true,
+          "warnings": []
+        }
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    }
+  ],
+  "cleanup": {
+    "success": true,
+    "root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-496976220adb4e55bc12ae877ce3c8d4",
+    "errors": [],
+    "scope": "explicit pool close; owned child kill/reap; only UUID fixture directory"
+  },
+  "fixture_root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-496976220adb4e55bc12ae877ce3c8d4",
+  "wire": [],
+  "counts": {
+    "pass": 6,
+    "fail": 0,
+    "vendor_real_pass": 0
+  }
+}

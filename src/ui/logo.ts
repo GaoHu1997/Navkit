@@ -2,11 +2,14 @@
  * NavKit 品牌 Logo（v5 · 等距数据层 · 透明无容器）。
  *
  * 三层等距菱形悬浮堆叠，去掉背景板：可直接叠在任意底色、壁纸、标题栏上，不发生色块冲突。
- *   · 顶层青色 = 活动数据 / 当前连接
- *   · 中层白色 = 数据本体
- *   · 底层靛蓝 = 存储基座
+ *   · 顶层冰青 #a9f6fe = 活动数据 / 当前连接（最亮，有"在发光"的意思）
+ *   · 中层青瓷 #bde0d5 = 数据本体（温润的实体感，替代原白色中层）
+ *   · 底层雾蓝 #849dcb = 存储基座（最沉、最稳）
+ * 三色取自品牌色卡「Pastel Rainbow · 冰青 / Celestial Sea · 青瓷、雾蓝」，
+ * 明度阶梯 90 → 85 → 64，色相 187° → 160° → 220°：
+ * 中上两层靠色相分开、中下两层靠明度分开，缩到 16px 仍读得出三层。
  * 每层带一条同族加深的细描边 —— 无容器时这是必需项而非装饰：
- * 白色中层要在浅色标题栏上看清、青色顶层要在深色任务栏上看清，全靠这条边。
+ * 浅色中层要在浅色标题栏上看清、冰青顶层要在深色任务栏上看清，全靠这条边。
  *
  * 用法：标题栏 20px、关于对话框 48px；最小 16px。
  * 禁止拉伸 / 旋转 / 把描边改成异色。
@@ -40,25 +43,25 @@ export function navkitLogo(size = 20): string {
   return `<svg class="navkit-logo" width="${size}" height="${size}" viewBox="0 0 32 32" aria-label="NavKit" role="img">
   <defs>
     <linearGradient id="${uid}t" x1="16" y1="${LAYER_CY[0] - HH}" x2="16" y2="${LAYER_CY[0] + HH}" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5ee7f5"/>
-      <stop offset="1" stop-color="#22c8e0"/>
+      <stop offset="0" stop-color="#baf8fe"/>
+      <stop offset="1" stop-color="#97dce7"/>
     </linearGradient>
     <linearGradient id="${uid}m" x1="16" y1="${LAYER_CY[1] - HH}" x2="16" y2="${LAYER_CY[1] + HH}" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#eaf1ff"/>
+      <stop offset="0" stop-color="#cae6dd"/>
+      <stop offset="1" stop-color="#a9c9c3"/>
     </linearGradient>
     <linearGradient id="${uid}b" x1="16" y1="${LAYER_CY[2] - HH}" x2="16" y2="${LAYER_CY[2] + HH}" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5b86ff"/>
-      <stop offset="1" stop-color="#3a5ce8"/>
+      <stop offset="0" stop-color="#9db1d5"/>
+      <stop offset="1" stop-color="#778eba"/>
     </linearGradient>
     <filter id="${uid}s" x="-30%" y="-30%" width="160%" height="175%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="${dy}" stdDeviation="${sd}" flood-color="#0a1c5c" flood-opacity="${so}"/>
+      <feDropShadow dx="0" dy="${dy}" stdDeviation="${sd}" flood-color="#2a3759" flood-opacity="${so}"/>
     </filter>
   </defs>
   <g stroke-width="${sw}" stroke-linejoin="round">
-    <path d="${diamond(16, LAYER_CY[2])}" fill="url(#${uid}b)" stroke="#3556dc" filter="url(#${uid}s)"/>
-    <path d="${diamond(16, LAYER_CY[1])}" fill="url(#${uid}m)" stroke="#9fb9e0" filter="url(#${uid}s)"/>
-    <path d="${diamond(16, LAYER_CY[0])}" fill="url(#${uid}t)" stroke="#1cb4cc" filter="url(#${uid}s)"/>
+    <path d="${diamond(16, LAYER_CY[2])}" fill="url(#${uid}b)" stroke="#677ca6" filter="url(#${uid}s)"/>
+    <path d="${diamond(16, LAYER_CY[1])}" fill="url(#${uid}m)" stroke="#91aead" filter="url(#${uid}s)"/>
+    <path d="${diamond(16, LAYER_CY[0])}" fill="url(#${uid}t)" stroke="#82becc" filter="url(#${uid}s)"/>
   </g>
 </svg>`;
 }

@@ -1,0 +1,8 @@
+.draft-dialog .dialog-body { padding: 16px; background: var(--bg-surface, #fff); color: var(--text-primary, #23272f); }
+.draft-dialog p { margin: 0 0 12px; line-height: 1.6; }
+.draft-dialog ul { margin: 12px 0; padding-left: 20px; max-height: 220px; overflow: auto; }
+.draft-recovery-list { margin-top: 12px; max-height: 360px; overflow: auto; border-top: 1px solid var(--border, #e4e7ec); }
+.draft-recovery-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border, #e4e7ec); }
+.draft-recovery-row > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.draft-text { display: block; width: 100%; height: 320px; margin-top: 8px; resize: vertical; font-family: var(--font-mono, monospace); }
+.draft-dialog :focus-visible, .grid-wrap:focus-visible { outline: 2px solid var(--accent-500, #3574f0) !important; outline-offset: 2px; }

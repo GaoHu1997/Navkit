@@ -4,7 +4,7 @@
  * 设计语言（docs/design/DESIGN.md v3 §图标）：
  *  · 24×24 网格，双色扁平：浅色填充 + 中色调描边 + 白色细节线
  *  · 与树/网格中的对象图标同族同色（表=蓝、视图=青、函数=紫、用户=琥珀、
- *    备份=石墨、模型=橙、图表=多彩柱），命令条与树联动时视觉一致
+ *    备份=石墨、图表=多彩柱），命令条与树联动时视觉一致
  *  · 「新建」语义 = 右下绿色加号徽章（连接 / 新建查询）
  *  · 圆角端点，描边 1.5–1.6，图形占位 18–20px
  */
@@ -65,20 +65,21 @@ const PICT_ICONS: Record<string, string> = {
     <path d="M3.5 9.8h17" stroke="#64748b" stroke-width="1.5"/>
     <rect x="8.2" y="5.5" width="7.6" height="3.6" rx="1.4" fill="#aebacb"/>
     <path d="M12 17.2v-4.4M9.9 14.8l2.1-2.1 2.1 2.1" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
-  自动运行: `
+  自动任务: `
     <circle cx="12" cy="12.6" r="8.2" fill="#e1e6ee" stroke="#64748b" stroke-width="1.5"/>
     <path d="M12 8.2v4.4l3.2 1.9" fill="none" stroke="#3574f0" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M5.6 4.4 7.2 3M18.4 4.4 16.8 3" stroke="#64748b" stroke-width="1.6" stroke-linecap="round"/>`,
-  模型: `
-    <rect x="2.8" y="3" width="8.4" height="6.8" rx="1.8" fill="#fce4cc" stroke="#e8862e" stroke-width="1.5"/>
-    <rect x="12.8" y="3" width="8.4" height="6.8" rx="1.8" fill="#fce4cc" stroke="#e8862e" stroke-width="1.5"/>
-    <rect x="7.8" y="14.2" width="8.4" height="6.8" rx="1.8" fill="#fce4cc" stroke="#e8862e" stroke-width="1.5"/>
-    <path d="M7 9.8v4.4h4.4M17 9.8v4.4h-4.4" fill="none" stroke="#e8862e" stroke-width="1.5"/>`,
   图表: `
     <path d="M3.4 3.6v16.8h17.2" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round"/>
     <rect x="6" y="12.6" width="3.6" height="6" rx="1.1" fill="#3574f0"/>
     <rect x="11.2" y="7.6" width="3.6" height="11" rx="1.1" fill="#0e9384"/>
     <rect x="16.4" y="10.2" width="3.6" height="8.4" rx="1.1" fill="#e8862e"/>`,
+  关系图: `
+    <rect x="3.2" y="3.2" width="7.2" height="5.6" rx="1.6" fill="#dce9fc" stroke="#3574f0" stroke-width="1.5"/>
+    <rect x="13.6" y="3.2" width="7.2" height="5.6" rx="1.6" fill="#e1e6ee" stroke="#64748b" stroke-width="1.5"/>
+    <rect x="8.4" y="15.2" width="7.2" height="5.6" rx="1.6" fill="#dce9fc" stroke="#3574f0" stroke-width="1.5"/>
+    <path d="M10.4 8.8v3.4M17.2 8.8v3.4a2 2 0 0 1-2 2h-4.8a2 2 0 0 1-2-2"
+      fill="none" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/>`,
 };
 
 /** label 别名（命令条文案 ≠ 图标 key 时使用） */

@@ -56,6 +56,8 @@ impl ClickHouseClient {
 
     /// 执行返回结果集的查询（自动追加 JSON 格式声明）。
     pub async fn query_rows(&self, sql: &str) -> Result<ChResult> {
+        let mut sql_history=crate::sql_history::Guard::new(&format!("{}\nFORMAT JSONCompactEachRowWithNamesAndTypes", sql.trim_end_matches(';').trim()),Vec::new());
+        let result: Result<ChResult> = async {
         let body = format!("{}\nFORMAT JSONCompactEachRowWithNamesAndTypes", sql.trim_end_matches(';').trim());
         let resp = self
             .post(&body)
@@ -71,10 +73,16 @@ impl ClickHouseClient {
             ));
         }
         parse_json_compact(&bytes)
+    
+        }.await;
+        sql_history.result(&result,|r|r.rows.len() as i64);
+        result
     }
 
     /// 执行不返回结果集的语句（DDL / INSERT / ALTER），返回影响行数（尽力而为）。
     pub async fn execute(&self, sql: &str) -> Result<u64> {
+        let mut sql_history=crate::sql_history::Guard::new(sql.trim_end_matches(';').trim(),Vec::new());
+        let result: Result<u64> = async {
         let resp = self
             .post(sql.trim_end_matches(';').trim())
             .send()
@@ -101,6 +109,10 @@ impl ClickHouseClient {
             }
         }
         Ok(0)
+    
+        }.await;
+        sql_history.result(&result,|n|*n as i64);
+        result
     }
 
     /// 查询单值。

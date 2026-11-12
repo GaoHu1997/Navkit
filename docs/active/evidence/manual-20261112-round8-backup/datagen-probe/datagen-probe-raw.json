@@ -1,0 +1,152 @@
+[
+  {
+    "ctx": {
+      "execution_id": "bd95774a-7150-4f9f-8743-86a6b41e6d98",
+      "connection_id": "a497e453-8a14-4f24-8ddf-baf03ed7ef96",
+      "namespace": "navkit_manual",
+      "owner_id": "18dce26e-3efa-4cfc-b8c6-117752323f5d"
+    },
+    "outcome": {
+      "execution_id": "bd95774a-7150-4f9f-8743-86a6b41e6d98",
+      "state": "succeeded",
+      "result": {
+        "sets": [],
+        "messages": [
+          "已扫描 5，执行回执 5，错误 0，影响行 5"
+        ],
+        "elapsed_ms": 23,
+        "spool_id": null
+      },
+      "error": null,
+      "deadline": {
+        "execution_id": "bd95774a-7150-4f9f-8743-86a6b41e6d98",
+        "budget_ms": 30000,
+        "elapsed_ms": 23,
+        "deadline_reached": false,
+        "stop_confirmed": false
+      },
+      "effects": "completed",
+      "transaction_state": "committed",
+      "resources_pending": false
+    },
+    "status": {
+      "execution_id": "bd95774a-7150-4f9f-8743-86a6b41e6d98",
+      "state": "succeeded",
+      "deadline": {
+        "execution_id": "bd95774a-7150-4f9f-8743-86a6b41e6d98",
+        "budget_ms": 30000,
+        "elapsed_ms": 23,
+        "deadline_reached": false,
+        "stop_confirmed": false
+      },
+      "resources_pending": false
+    },
+    "transaction": "committed",
+    "logs": [
+      {
+        "sequence": 2,
+        "level": "info",
+        "phase": "execute",
+        "statement": null,
+        "row": null,
+        "message": "真实字段/生成列/必填/主键及参数宽度校验通过；一个固定物理会话的单批事务",
+        "sql_template": "INSERT INTO `navkit_manual`.`t_empty` (`id`, `payload`) VALUES (?, ?)",
+        "ts_ms": 1794434125639,
+        "elapsed_ms": null,
+        "affected_rows": null,
+        "error_code": null
+      },
+      {
+        "sequence": 3,
+        "level": "success",
+        "phase": "execute",
+        "statement": null,
+        "row": 1,
+        "message": "参数绑定行执行收到数据库回执（尚待整批提交）",
+        "sql_template": null,
+        "ts_ms": 1794434125640,
+        "elapsed_ms": 0,
+        "affected_rows": 1,
+        "error_code": null
+      },
+      {
+        "sequence": 4,
+        "level": "success",
+        "phase": "execute",
+        "statement": null,
+        "row": 2,
+        "message": "参数绑定行执行收到数据库回执（尚待整批提交）",
+        "sql_template": null,
+        "ts_ms": 1794434125640,
+        "elapsed_ms": 0,
+        "affected_rows": 1,
+        "error_code": null
+      },
+      {
+        "sequence": 5,
+        "level": "success",
+        "phase": "execute",
+        "statement": null,
+        "row": 3,
+        "message": "参数绑定行执行收到数据库回执（尚待整批提交）",
+        "sql_template": null,
+        "ts_ms": 1794434125640,
+        "elapsed_ms": 0,
+        "affected_rows": 1,
+        "error_code": null
+      },
+      {
+        "sequence": 6,
+        "level": "success",
+        "phase": "execute",
+        "statement": null,
+        "row": 4,
+        "message": "参数绑定行执行收到数据库回执（尚待整批提交）",
+        "sql_template": null,
+        "ts_ms": 1794434125641,
+        "elapsed_ms": 0,
+        "affected_rows": 1,
+        "error_code": null
+      },
+      {
+        "sequence": 7,
+        "level": "success",
+        "phase": "execute",
+        "statement": null,
+        "row": 5,
+        "message": "参数绑定行执行收到数据库回执（尚待整批提交）",
+        "sql_template": null,
+        "ts_ms": 1794434125641,
+        "elapsed_ms": 0,
+        "affected_rows": 1,
+        "error_code": null
+      },
+      {
+        "sequence": 8,
+        "level": "info",
+        "phase": "commit",
+        "statement": null,
+        "row": null,
+        "message": "等待整批 COMMIT 回执",
+        "sql_template": null,
+        "ts_ms": 1794434125641,
+        "elapsed_ms": null,
+        "affected_rows": null,
+        "error_code": null
+      },
+      {
+        "sequence": 9,
+        "level": "success",
+        "phase": "finish",
+        "statement": null,
+        "row": null,
+        "message": "任务完成",
+        "sql_template": null,
+        "ts_ms": 1794434125651,
+        "elapsed_ms": null,
+        "affected_rows": null,
+        "error_code": null
+      }
+    ]
+  }
+]

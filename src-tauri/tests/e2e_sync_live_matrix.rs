@@ -87,7 +87,7 @@ async fn provision(kind: &str, role: &str, root: &Path, token: &str) -> Result<E
     Ok(endpoint)
 }
 fn opts(source: &Endpoint, target: &Endpoint, table: &str, target_table: &str) -> SyncOptions {
-    SyncOptions { task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection: source.id.clone(), source_schema: source.namespace.clone(), source_table: table.into(), target_connection: target.id.clone(), target_schema: target.namespace.clone(), target_table: target_table.into(), mode: "both".into(), write_mode: "append".into(), sync_mode: "full".into(), incremental_update: false, create_target: true, columns: vec![], where_clause: None }
+    SyncOptions { task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection: source.id.clone(), source_schema: source.namespace.clone(), source_table: table.into(), target_connection: target.id.clone(), target_schema: target.namespace.clone(), target_table: target_table.into(), mode: "both".into(), write_mode: "append".into(), sync_mode: "full".into(), incremental_update: false, create_target: true, columns: vec![], key_columns: Vec::new(), delete_missing: false, where_clause: None }
 }
 async fn run_sync(source: &Endpoint, target: &Endpoint, options: &mut SyncOptions) -> Result<sync::SyncReport> {
     options.task_id = Some(uuid::Uuid::new_v4().to_string());

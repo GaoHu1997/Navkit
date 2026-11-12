@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "evidence_type": "RECONCILIATION_OF_ACTUAL_DYNAMIC_SYNC_RUN",
+  "timestamp_utc": "2026-11-07T04:17:54.284Z",
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "real_database_9_directions_108_scenarios_and_cleanup",
+      "status": "PASS"
+    },
+    {
+      "name": "six_stateful_simulation_suites_42_scenarios_and_vendor_zero",
+      "status": "PASS"
+    },
+    {
+      "name": "current_source_matches_actual_live_and_simulated_runs",
+      "status": "PASS"
+    },
+    {
+      "name": "unchanged_existing_odbc_runtime_artifacts",
+      "status": "PASS"
+    },
+    {
+      "name": "13_real_sqlite_precision_key_cancel_bulk_regressions",
+      "status": "PASS"
+    },
+    {
+      "name": "rebuilt_rust_library_and_existing_sqlite_and_live_transfer_logs",
+      "status": "PASS"
+    },
+    {
+      "name": "current_node_auxiliary_regression_167_pass",
+      "status": "PASS"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "tools/acceptance/sync/live-report.json",
+      "bytes": 60658,
+      "sha256": "a0c8fc89083a1e824d16294b7a39cd8fd03422909df3874920e88a2c652a16a0"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/simulations-run.json",
+      "bytes": 10184,
+      "sha256": "f93d8bac34367b905ea8e8b54f009fc2756ea9d159e5e72230d2d0a032e8e349"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/tds-sqlserver.json",
+      "bytes": 139121,
+      "sha256": "23002d61350bf7f8c438fecf0d7d3b09f091c8a07872dba3d941f79f047060a3"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/tds-sqlserver.log",
+      "bytes": 3514,
+      "sha256": "053ff66f226b2421447efc0ff6e8909f6e2775df642b3706473a087a4c456ff4"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/clickhouse-http_sql_subset.json",
+      "bytes": 58217,
+      "sha256": "711cbcb63f9f6b23e8b009541cd5da74f6a8f4b48a848f1802be38dc0a2e80ef"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/clickhouse-http_sql_subset.log",
+      "bytes": 3470,
+      "sha256": "d3b1f8358257fd61d77d4be2cc5371cbbbce98cd4f6773add7fb1cbe31e4389d"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-odbc.json",
+      "bytes": 14901,
+      "sha256": "233d32b32172da8b14295fef8d22a0163f8458d685f4f6011975c5e5aaa31e8c"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-odbc.log",
+      "bytes": 3447,
+      "sha256": "6d58393f659551edc1cdc270db1a671601642cb5d09f10057eefb80694d9efdc"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-oracle.json",
+      "bytes": 17143,
+      "sha256": "19b80b2eb3988d11d662bae45253038973519c2d9e42418800368ff8e3f6d7b6"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-oracle.log",
+      "bytes": 3449,
+      "sha256": "c11d9ea206d01009d1b408496bf22026fc2b387f26959c987e9d005f7159d6e2"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-dameng.json",
+      "bytes": 17143,
+      "sha256": "8f6cece72eeb39c42fa8c342c076c06f4ebb1be27f57538ce41526b348d9967f"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-dameng.log",
+      "bytes": 3449,
+      "sha256": "b95c181879e7f30ca7493a460c4f48d5b3a094e9e1f829ba842de746e87b1a01"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-db2.json",
+      "bytes": 14895,
+      "sha256": "aad60bfbd8559515295117857ed323c6d4bad0d032f6d223ee1384d7ab99875d"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/odbc-db2.log",
+      "bytes": 3446,
+      "sha256": "76e6d4c11b062e4fc4c431fc1e47bbc343559d23900464d74696c3c39017c817"
+    },
+    {
+      "path": "tools/acceptance/sync/simulated-final-clean-20261107/fresh-project-build.log",
+      "bytes": 21,
+      "sha256": "0bdaeb2aa6a92a0fdfec2d2cc4d0ab71946de5d0654e08c526e4629130ae0f28"
+    },
+    {
+      "path": "tools/acceptance/simulation/odbc/runtime/navkit_sim_odbc.dll",
+      "bytes": 6144,
+      "sha256": "c78f15e37ddbf4006df9261ecd93b01c2be792288043ab715f2e0ae0c1b7beef"
+    },
+    {
+      "path": "tools/acceptance/simulation/odbc/runtime/sim_duck_backend.dll",
+      "bytes": 41386800,
+      "sha256": "9fa507ac3a43d0664c0e5214ba34551e9ea26a17f71415b3ffe18cc698fae563"
+    },
+    {
+      "path": "tools/acceptance/sync/regressions-report.json",
+      "bytes": 4534,
+      "sha256": "45d39cb89d35a1e5a554eea6a9bbf905f4d81815fe4acf1377eb685bb189900c"
+    },
+    {
+      "path": "tools/acceptance/sync/core-final-clean-20261107.log",
+      "bytes": 35907,
+      "sha256": "9cd349d9a6b87ccd93ef6cc29e0f7b6d7e1aa012903c8c768eb93b0dce488190"
+    },
+    {
+      "path": "tools/acceptance/sync/live-final-clean-20261107.log",
+      "bytes": 9707,
+      "sha256": "6477a15bfd316fb2b361beb5eb4d2bf90c3943af4dcca244229d07d1492cf04e"
+    },
+    {
+      "path": "src-tauri/target/debug/deps/navkit_lib-5e45f1ac1e9eff95.exe",
+      "bytes": 59183616,
+      "sha256": "93394c5ecd0eeb4b119295a23ca869c6c289b22fb81a289e312af3cccfdf6245"
+    },
+    {
+      "path": "src-tauri/target/debug/deps/e2e_sync_diff_incremental-69279e34dc71123f.exe",
+      "bytes": 30793728,
+      "sha256": "55ac22686272f1e339fc27fa9d7f034a5e26af1964949d0ffd780356350e3e17"
+    },
+    {
+      "path": "src-tauri/target/debug/deps/e2e_sync_regressions-b31e02683ed2fd08.exe",
+      "bytes": 30903296,
+      "sha256": "e6ab7f439f4378322aa430fe41e7a202a4fc8bdc87d8faae60d214e43b8ded94"
+    },
+    {
+      "path": "src-tauri/target/debug/deps/transfer_sync_acceptance-8ab22985367350eb.exe",
+      "bytes": 31378432,
+      "sha256": "07b057c877d107d086eec735e97efdc3434372ad39574b72738c56d327aa99cf"
+    },
+    {
+      "path": "src-tauri/target/debug/deps/e2e_sync_live_matrix-971eec0a1e4ebd11.exe",
+      "bytes": 51581952,
+      "sha256": "96738ae1b63d3c776446c18b9f8b53c90466e29d6dc6c544423908a4b4570fca"
+    },
+    {
+      "path": "tools/acceptance/sync/ui-final-20261107.log",
+      "bytes": 16992,
+      "sha256": "edb2725600fccfa0ac9f0ab7d2608a315b0c17f2a7b9b7b9c4e2b3894ca2fa9b"
+    },
+    {
+      "path": "tools/acceptance/sync/create-sync-run-record.mjs",
+      "bytes": 11015,
+      "sha256": "1e44735dd86d7c320844ca4a79d52efaecf74b2d24cf7e3329de0574cc613671"
+    }
+  ],
+  "limitations": [
+    "This verifier aggregates prior actual executions; it is not an additional database scenario.",
+    "Protocol simulation does not certify the corresponding vendor databases.",
+    "Conditional ignored tests are not counted as passes."
+  ],
+  "live": {
+    "counts": {
+      "directions": 9,
+      "homogeneous_directions": 3,
+      "heterogeneous_directions": 6,
+      "cases": 108,
+      "pass": 108,
+      "fail_or_not_run": 0
+    },
+    "setup": [
+      {
+        "kind": "sqlite",
+        "role": "source",
+        "status": "LIVE_CONNECTED",
+        "version": "3.46.0"
+      },
+      {
+        "kind": "sqlite",
+        "role": "target",
+        "status": "LIVE_CONNECTED",
+        "version": "3.46.0"
+      },
+      {
+        "kind": "mysql",
+        "role": "source",
+        "status": "LIVE_CONNECTED",
+        "version": "8.0.44"
+      },
+      {
+        "kind": "mysql",
+        "role": "target",
+        "status": "LIVE_CONNECTED",
+        "version": "8.0.44"
+      },
+      {
+        "kind": "postgresql",
+        "role": "source",
+        "status": "LIVE_CONNECTED",
+        "version": "16.4"
+      },
+      {
+        "kind": "postgresql",
+        "role": "target",
+        "status": "LIVE_CONNECTED",
+        "version": "16.4"
+      }
+    ],
+    "executed_binary": {
+      "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_live_matrix-971eec0a1e4ebd11.exe",
+      "sha256": "96738ae1b63d3c776446c18b9f8b53c90466e29d6dc6c544423908a4b4570fca"
+    },
+    "all_cleanup_succeeded": true
+  },
+  "simulated": {
+    "counts": {
+      "suites": 6,
+      "pass": 42,
+      "fail": 0,
+      "vendor_real_pass": 0
+    },
+    "all_cleanup_succeeded": true,
+    "executed_binary": {
+      "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+      "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+    },
+    "vendor_server_status": "NOT_TESTED",
+    "vendor_real_pass": 0
+  },
+  "source_hashes": {
+    "src-tauri/src/sync.rs": "8e38d219e2250d1eaeb1bdc42f44007daf3fde5e4fb2ab2b028c9bfb3ea97ef4",
+    "src-tauri/src/transfer.rs": "07038eb8eb00d64f1f4cf01212941c1ad7cfb995b4d303aa79a3b2608578b7bc",
+    "src-tauri/src/mssql.rs": "2e971da8f65756a98fe8a780f27946ea349ccbc19b98e01dc106aba48f4d360a",
+    "src-tauri/src/odbc_db.rs": "fd8882c114ab461c0ac3513fc073865e28bb4747b0859817a6b43620490cea0e",
+    "src-tauri/src/schema.rs": "b9ee62d8449657c46fdfafcebc2a2e434bb7bd0b7f3e3afbd918055ca11a1591",
+    "src-tauri/src/db.rs": "217dec741db49d58cc5a5d176febe3eebeddb97512da9cd228fecadb847e0758",
+    "src-tauri/tests/e2e_sync_simulated.rs": "5ca3f20017e07a28d33dd7cdb36316a685e429dbe891112ec4bd860a1a3842c2",
+    "src-tauri/tests/support/sync_simulated/mod.rs": "9e829100c24b405913a91ff18efa00a154761be0af0360849836d2833acc1978",
+    "src-tauri/tests/support/sync_simulated/tds_sync_server.py": "d481f5a7c62ee1291a99c7e7442dc9460e6385a4a61f578e3bbd6c19ec48d6be",
+    "src-tauri/tests/support/sync_simulated/clickhouse_sync_server.py": "ae5710fadccc7bba7ab439350173a14f0fe17fa8e67bdcd240d990d5d2852204",
+    "tools/acceptance/simulation/native/tds_server.py": "17e49e85eefeda6de0f0b630738d6af859fbad94f9ed9074e23c1e3ac6e2bca9",
+    "tools/acceptance/sync/run-simulations.mjs": "ba1973093587b49eb17fa6a5fab93320b5b3cbbb40498ebb09082c8237696022",
+    "src-tauri/tests/e2e_sync_live_matrix.rs": "4cfc01ca6939d71b9a60a664b3b2f27f0454c11702ba519688e59ec70b3c8dad",
+    "src-tauri/tests/e2e_sync_diff_incremental.rs": "0e0ed0ee778d2c99e60b06230d9a9f4a689f0915c00afc545293584fb023d2a7",
+    "src-tauri/tests/e2e_sync_regressions.rs": "39f6f7fab308e48fe2ed0d5622d8e53b192c4f76ae1ce57828747fc8d33c2fea",
+    "src-tauri/tests/transfer_sync_acceptance.rs": "8aa57986701cc28891d6d7f7cb881e56ea53a55095c1190f6dbfa37e946d9d94"
+  },
+  "sqlite_regressions": {
+    "total": 13,
+    "pass": 13,
+    "fail": 0
+  },
+  "rust_library": {
+    "passed": 274,
+    "failed": 0,
+    "ignored": 23
+  },
+  "existing_sqlite_diff_incremental": {
+    "passed": 12,
+    "failed": 0
+  },
+  "transfer": {
+    "sqlite_passed": 1,
+    "live_mysql_pg_passed": 1,
+    "failed": 0
+  },
+  "node_auxiliary": {
+    "passed": 167,
+    "failed": 0,
+    "skipped": 0,
+    "gui_click_end_to_end": false
+  }
+}

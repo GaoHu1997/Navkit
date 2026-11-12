@@ -1,0 +1,15 @@
+{
+  "created_at": "2026-11-12",
+  "kind": "frozen-working-tree-not-HEAD",
+  "source": "src-tauri/target/sql-file-perf-baseline",
+  "files": [
+    "batch_execution.rs",
+    "batch_sql_reader.rs",
+    "transfer.rs",
+    "status.txt",
+    "worktree.patch",
+    "index.patch"
+  ],
+  "scope": "batch execution/reader and transfer detailed only",
+  "note": "preserve prior uncommitted work; batch files were already untracked at capture"
+}

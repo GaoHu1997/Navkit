@@ -1,0 +1,1524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据字典导出 · 向导式 — UI 设计稿 (NavKit)</title>
+<style>
+/* ============================================================================
+   设计稿外壳 —— 令牌逐字取自 src/styles/base.css :root（v3 · 专业桌面版）
+   画板内的界面组件复用 base.css 的真实类名与尺寸：
+     对话框 标题36/页脚48 · 控件26 · 树行24 · 按钮 .btn/.btn.primary
+     向导 .wizard-steps/.wizard-panel/.wizard-panel-card/.wizard-actions
+   ========================================================================== */
+:root{
+  --n-0:#ffffff; --n-25:#fbfcfd; --n-50:#f7f8fa; --n-100:#f1f3f6; --n-150:#e8ebef;
+  --n-200:#e4e7ec; --n-300:#d3d8e0; --n-400:#a8b3c1; --n-500:#7d8794; --n-600:#5c6673;
+  --n-700:#3c434e; --n-800:#23272f; --n-900:#14171c;
+  --accent-50:#f2f7fe; --accent-100:#e3edfd; --accent-200:#c4d9fa; --accent-300:#9abef6;
+  --accent-400:#6396f3; --accent-500:#3574f0; --accent-600:#2b62d9; --accent-700:#2450b4;
+  --ok-50:#e9f7ef; --ok-100:#d3eedd; --ok-500:#1f9254; --ok-600:#177346;
+  --warn-50:#fdf1e5; --warn-100:#f9e0c3; --warn-500:#b54708; --warn-600:#8f3a08;
+  --danger-50:#fdeceb; --danger-100:#fad8d5; --danger-500:#d92d20; --danger-600:#b42318;
+
+  --bg-app:var(--n-50); --bg-chrome:var(--n-50); --bg-surface:var(--n-0);
+  --bg-subtle:var(--n-50); --bg-sunken:var(--n-100); --bg-hover:var(--n-100);
+  --bg-pressed:var(--n-150); --bg-selected:var(--accent-100);
+  --border:var(--n-200); --border-subtle:var(--n-150); --border-strong:var(--n-300);
+  --text:var(--n-800); --text-secondary:var(--n-600); --text-tertiary:var(--n-500);
+  --text-disabled:var(--n-400); --text-inverse:#fff; --ring:rgba(53,116,240,.16);
+
+  --font-ui:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+  --fs-11:11px; --fs-12:12px; --fs-13:13px; --fs-15:15px; --fs-18:18px;
+  --lh-tight:1.25; --lh-normal:1.5;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px;
+  --r-1:3px; --r-2:4px; --r-3:6px; --r-4:8px; --r-5:10px; --r-full:999px;
+  --shadow-1:0 1px 2px rgba(16,24,40,.05);
+  --shadow-2:0 2px 6px rgba(16,24,40,.07),0 1px 2px rgba(16,24,40,.04);
+  --shadow-3:0 12px 32px rgba(16,24,40,.14),0 2px 8px rgba(16,24,40,.06);
+  --shadow-pop:0 4px 16px rgba(16,24,40,.13),0 1px 4px rgba(16,24,40,.08);
+  --h-titlebar:36px; --h-command:44px; --h-tabstrip:32px; --h-toolbar:32px;
+  --h-statusbar:26px; --h-row:26px; --h-header:28px; --h-tree-row:24px; --h-control:26px;
+  --w-sidebar:264px;
+  --ease-out:cubic-bezier(.2,.7,.3,1); --dur-fast:100ms; --dur-base:150ms;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font-ui); font-size:var(--fs-13); line-height:var(--lh-normal);
+  color:var(--text); background:var(--n-100); -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-100)}
+h1,h2,h3,h4,p{margin:0}
+
+/* ---------------------------------------------------------------- 设计稿骨架 */
+.spec-top{
+  position:sticky; top:0; z-index:60; height:44px; display:flex; align-items:center; gap:var(--sp-3);
+  padding:0 var(--sp-5); background:rgba(255,255,255,.92); backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--border);
+}
+.spec-brand{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-13);font-weight:600}
+.spec-brand .mark{width:14px;height:14px;transform:rotate(45deg);border-radius:2px;background:var(--accent-500);box-shadow:6px 6px 0 -3px var(--accent-300)}
+.spec-top .sep{width:1px;height:16px;background:var(--border)}
+.spec-top .sub{font-size:var(--fs-12);color:var(--text-tertiary)}
+.spec-top .grow{flex:1}
+.spec-top .tag{
+  font-size:var(--fs-11); color:var(--text-secondary); padding:2px 8px; border-radius:var(--r-full);
+  background:var(--n-100); border:1px solid var(--border-subtle);
+}
+.spec-top .tag.ok{background:var(--ok-50);border-color:var(--ok-100);color:var(--ok-600)}
+
+.spec-nav{
+  position:sticky; top:44px; z-index:55; display:flex; gap:2px; padding:6px var(--sp-5);
+  background:var(--n-50); border-bottom:1px solid var(--border-subtle); overflow-x:auto;
+}
+.spec-nav a{
+  padding:5px 10px; border-radius:var(--r-2); font-size:var(--fs-12); color:var(--text-secondary);
+  text-decoration:none; white-space:nowrap; border:1px solid transparent;
+}
+.spec-nav a:hover{background:var(--bg-hover);color:var(--text)}
+.spec-nav a.on{background:var(--bg-surface);border-color:var(--border);color:var(--text);font-weight:600}
+
+.spec-main{max-width:1280px;margin:0 auto;padding:var(--sp-5) var(--sp-5) 80px;display:flex;flex-direction:column;gap:var(--sp-5)}
+
+.board{
+  background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-4);
+  box-shadow:var(--shadow-1); overflow:hidden;
+}
+.board-head{
+  display:flex; align-items:flex-start; gap:var(--sp-3);
+  padding:var(--sp-4) var(--sp-5); border-bottom:1px solid var(--border-subtle);
+}
+.board-idx{
+  flex:0 0 auto; width:26px; height:26px; border-radius:var(--r-2);
+  background:var(--n-100); color:var(--text-secondary); font-size:var(--fs-11); font-weight:700;
+  display:flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums;
+}
+.board-title{font-size:var(--fs-15);font-weight:600;letter-spacing:.01em}
+.board-desc{margin-top:2px;font-size:var(--fs-12);color:var(--text-tertiary);line-height:1.6;max-width:820px}
+.board-desc code,.mono{font-family:var(--font-mono);font-size:11.5px;background:var(--n-100);border-radius:3px;padding:1px 4px}
+.board-body{padding:var(--sp-5);background:var(--n-50)}
+.board-body.flush{padding:0;background:var(--n-100)}
+
+/* ---------------------------------------------------------------- 应用外壳（NavKit） */
+.app-frame{
+  width:1080px; height:552px; margin:0 auto; background:var(--bg-app);
+  border:1px solid var(--border-strong); border-radius:var(--r-3); overflow:hidden;
+  display:flex; flex-direction:column; box-shadow:var(--shadow-2); position:relative;
+  font-size:var(--fs-12);
+}
+.app-titlebar{
+  height:var(--h-titlebar); flex:0 0 auto; display:flex; align-items:center; gap:var(--sp-2);
+  padding:0 var(--sp-2) 0 var(--sp-3); background:var(--bg-chrome); border-bottom:1px solid var(--border-subtle);
+}
+.app-titlebar .logo{width:13px;height:13px;transform:rotate(45deg);border-radius:2px;background:var(--accent-500);box-shadow:5px 5px 0 -2.5px var(--accent-300)}
+.app-titlebar .name{font-weight:600;font-size:var(--fs-12);letter-spacing:.02em}
+.app-titlebar .doc{margin-left:var(--sp-2);font-size:var(--fs-11);color:var(--text-tertiary)}
+.app-win{display:flex;gap:2px;margin-left:auto}
+.app-win i{width:34px;height:22px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);border-radius:var(--r-2);font-style:normal;font-size:11px}
+
+.app-menubar{
+  height:26px; flex:0 0 auto; display:flex; align-items:center; gap:1px; padding:0 var(--sp-2);
+  background:var(--bg-chrome); border-bottom:1px solid var(--border-subtle);
+}
+.app-menubar span{padding:2px 8px;border-radius:var(--r-2);color:var(--text-secondary);font-size:var(--fs-12)}
+.app-menubar span.on{background:var(--bg-pressed);color:var(--text)}
+.app-menubar span:hover{background:var(--bg-hover)}
+
+.app-command{
+  height:var(--h-command); flex:0 0 auto; display:flex; align-items:center; gap:2px;
+  padding:0 var(--sp-3); background:var(--bg-chrome); border-bottom:1px solid var(--border);
+}
+.cmd{
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  width:56px; height:40px; border-radius:var(--r-2); color:var(--text-secondary);
+}
+.cmd.on{background:var(--bg-selected);color:var(--accent-700)}
+.cmd:hover{background:var(--bg-hover)}
+.cmd svg{width:20px;height:20px}
+.cmd b{font-size:10px;font-weight:400;line-height:1}
+.cmd-sep{width:1px;height:26px;background:var(--border-subtle);margin:0 6px}
+
+.app-tabstrip{
+  height:var(--h-tabstrip); flex:0 0 auto; display:flex; align-items:flex-end; gap:1px;
+  padding:0 var(--sp-2); background:var(--bg-chrome); border-bottom:1px solid var(--border);
+}
+.app-tab{
+  height:28px; display:flex; align-items:center; gap:6px; padding:0 10px;
+  font-size:var(--fs-12); color:var(--text-secondary); border-radius:var(--r-2) var(--r-2) 0 0;
+  border:1px solid transparent; border-bottom:0;
+}
+.app-tab.on{background:var(--bg-surface);border-color:var(--border);color:var(--text);box-shadow:inset 0 2px 0 var(--accent-500)}
+
+.app-main{flex:1;min-height:0;display:flex}
+.app-tree{
+  width:232px; flex:0 0 auto; background:var(--bg-chrome); border-right:1px solid var(--border);
+  padding:var(--sp-2) 0; overflow:hidden;
+}
+.tree-row{height:var(--h-tree-row);display:flex;align-items:center;gap:5px;padding:0 10px;font-size:12px;color:var(--n-700);white-space:nowrap}
+.tree-row.sel{background:var(--bg-selected);color:var(--accent-700)}
+.tree-row .caret{width:8px;color:var(--n-400);font-size:8px}
+.tree-row .ico{width:13px;height:13px;border-radius:2px;background:var(--n-300);flex:0 0 auto}
+.tree-row .ico.t{background:#dce9fc;border:1px solid #9abef6}
+.tree-row .ico.v{background:#cbeae6;border:1px solid #0e9384}
+.tree-row .ico.f{background:#e1e6ee;border:1px solid #64748b}
+.tree-row .cnt{margin-left:auto;font-size:10px;color:var(--text-disabled);font-variant-numeric:tabular-nums}
+.tree-row .pad{width:14px;flex:0 0 auto}
+
+.app-work{flex:1;min-width:0;background:var(--bg-surface);display:flex;flex-direction:column}
+.work-bar{height:var(--h-toolbar);flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-3);border-bottom:1px solid var(--border-subtle);font-size:var(--fs-12);color:var(--text-secondary)}
+.work-grid{flex:1;min-height:0;padding:0}
+.gtbl{width:100%;border-collapse:separate;border-spacing:0;font-size:12px}
+.gtbl th{
+  height:var(--h-header); text-align:left; font-weight:600; font-size:11px; color:var(--text-secondary);
+  background:var(--n-50); border-bottom:1px solid var(--border); border-right:1px solid var(--border-subtle);
+  padding:0 8px; white-space:nowrap;
+}
+.gtbl td{height:var(--h-row);padding:0 8px;border-bottom:1px solid var(--border-subtle);border-right:1px solid var(--border-subtle);color:var(--n-700);white-space:nowrap}
+.gtbl tr:nth-child(even) td{background:var(--n-25)}
+.gtbl .rr{color:var(--text-disabled);font-variant-numeric:tabular-nums;text-align:right;width:38px}
+
+.app-status{
+  height:var(--h-statusbar); flex:0 0 auto; display:flex; align-items:center; gap:var(--sp-3);
+  padding:0 var(--sp-3); background:var(--bg-chrome); border-top:1px solid var(--border);
+  font-size:var(--fs-11); color:var(--text-tertiary);
+}
+.app-status .dot{width:6px;height:6px;border-radius:50%;background:var(--ok-500)}
+.app-status .grow{flex:1}
+
+/* ---------------------------------------------------------------- 菜单浮层 */
+.menu-pop{
+  position:absolute; z-index:40; min-width:196px; padding:4px;
+  background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--r-3);
+  box-shadow:var(--shadow-pop); font-size:var(--fs-12);
+}
+.menu-pop .mi{height:var(--h-row);display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:var(--r-2);color:var(--n-700)}
+.menu-pop .mi .sc{margin-left:auto;font-size:10.5px;color:var(--text-disabled);font-variant-numeric:tabular-nums}
+.menu-pop .mi .arw{margin-left:auto;color:var(--text-tertiary);font-size:10px}
+.menu-pop .mi.on{background:var(--bg-selected);color:var(--accent-700)}
+.menu-pop .mi.hl{background:var(--accent-500);color:#fff}
+.menu-pop .mi.hl .sc{color:rgba(255,255,255,.72)}
+.menu-pop hr{border:0;border-top:1px solid var(--border-subtle);margin:4px 6px}
+.menu-pop .cap{padding:4px 8px 2px;font-size:10.5px;color:var(--text-disabled)}
+
+/* ---------------------------------------------------------------- 通用控件（照抄 base.css） */
+.btn{
+  height:var(--h-control); padding:0 var(--sp-3); display:inline-flex; align-items:center; justify-content:center;
+  gap:6px; border:1px solid var(--border-strong); border-radius:var(--r-2);
+  background:var(--bg-surface); color:var(--text); font:inherit; font-size:var(--fs-12); cursor:default;
+  transition:background var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out);
+  white-space:nowrap;
+}
+.btn:hover{background:var(--bg-hover)}
+.btn:active{background:var(--bg-pressed)}
+.btn:disabled{color:var(--text-disabled);border-color:var(--border);background:var(--bg-surface)}
+.btn.primary{background:var(--accent-500);border-color:var(--accent-500);color:#fff;font-weight:500}
+.btn.primary:hover{background:var(--accent-600);border-color:var(--accent-600)}
+.btn.sm{height:22px;padding:0 8px;font-size:var(--fs-11)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--bg-hover)}
+
+.field{display:grid;grid-template-columns:var(--label-w,104px) 1fr;gap:var(--sp-3);align-items:center;margin-bottom:18px}
+.field-label{font-size:var(--fs-12);color:var(--text-secondary);text-align:right;padding-right:2px;line-height:1.45}
+.field-control{min-width:0;display:flex;align-items:center;gap:var(--sp-2)}
+.field-note{grid-column:2;font-size:var(--fs-11);color:var(--text-tertiary);margin-top:-2px}
+
+.input,.select{
+  height:var(--h-control); width:100%; padding:0 8px; border:1px solid var(--border-strong);
+  border-radius:var(--r-2); background:var(--bg-surface); color:var(--text);
+  font:inherit; font-size:var(--fs-12); display:flex; align-items:center;
+}
+.input:focus,.select:focus{outline:0;border-color:var(--accent-500);box-shadow:0 0 0 3px var(--ring)}
+.input.plain{border-color:var(--border);background:var(--n-50)}
+.select::after{content:"▾";margin-left:auto;color:var(--text-tertiary);font-size:10px}
+.input .ph{color:var(--text-disabled)}
+.input .val{color:var(--text)}
+.input .suffix{margin-left:auto;font-size:var(--fs-11);color:var(--text-tertiary)}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-12);color:var(--text)}
+.chk i{width:14px;height:14px;border:1px solid var(--border-strong);border-radius:3px;background:var(--bg-surface);display:inline-flex;align-items:center;justify-content:center;font-style:normal}
+.chk i.on{background:var(--accent-500);border-color:var(--accent-500);color:#fff;font-size:9px}
+.chk.dim{color:var(--text-disabled)}
+.chk.dim i{border-color:var(--border);background:var(--n-50)}
+
+/* 徽标 */
+.pill{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 7px;border-radius:var(--r-full);
+  font-size:10.5px;background:var(--n-100);color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.pill.accent{background:var(--accent-100);color:var(--accent-700)}
+.pill.ok{background:var(--ok-50);color:var(--ok-600)}
+.pill.warn{background:var(--warn-50);color:var(--warn-600)}
+</style>
+</head>
+<body>
+<header class="spec-top">
+  <div class="spec-brand"><i class="mark"></i>NavKit</div>
+  <div class="sep"></div>
+  <div class="sub">数据字典导出 · 向导式 — UI 设计稿 v1</div>
+  <div class="grow"></div>
+  <span class="tag">设计令牌：DESIGN.md v3</span>
+  <span class="tag">版式来源：SmartSQL ExportDoc</span>
+  <span class="tag ok">可交互</span>
+</header>
+
+<nav class="spec-nav">
+  <a href="#board-a" class="on">01 入口</a>
+  <a href="#board-b">02 向导（可点击）</a>
+  <a href="#board-c">03 导出版式五联</a>
+  <a href="#board-d">04 规格表</a>
+</nav>
+
+<main class="spec-main">
+
+  <!-- ======================================================== 画板 A 入口 -->
+  <section id="board-a" class="board">
+    <div class="board-head">
+      <div class="board-idx">01</div>
+      <div>
+        <div class="board-title">入口 — 文件菜单 · 导出（设计建议）</div>
+        <div class="board-desc">
+          与现有外壳一致：标题栏 36 / 菜单条 26 / 命令条 44 / 标签条 32 / 状态栏 26。
+          现有 <code>src/ui/menu.ts</code> 只有一个独立的 <code>export</code>（导出）命令，还没有数据字典入口；
+          本设计建议在该命令下新增「数据字典导出…」并复用同一 action id，属待实现方案，不是现有能力。
+        </div>
+      </div>
+    </div>
+    <div class="board-body">
+      <div class="app-frame">
+        <div class="app-titlebar">
+          <i class="logo"></i><span class="name">NavKit</span>
+          <span class="doc">navkit_demo（MySQL 8.0.36）— 连接 1</span>
+          <div class="app-win"><i>─</i><i>□</i><i>✕</i></div>
+        </div>
+        <div class="app-menubar">
+          <span class="on">文件</span><span>编辑</span><span>查看</span><span>工具</span><span>窗口</span><span>帮助</span>
+        </div>
+
+        <div class="menu-pop" style="left:10px; top:84px;">
+          <div class="mi">新建<span class="sc">Ctrl+N</span></div>
+          <div class="mi">打开 SQL 文件…</div>
+          <div class="mi">打开连接</div>
+          <div class="mi">连接属性</div>
+          <hr>
+          <div class="mi">导入</div>
+          <div class="mi on">导出<span class="arw">▸</span></div>
+          <div class="mi">SQL 转储</div>
+          <div class="mi">数据传输</div>
+          <hr>
+          <div class="mi">保存<span class="sc">Ctrl+S</span></div>
+          <div class="mi">打印<span class="sc">Ctrl+P</span></div>
+          <div class="mi">退出<span class="sc">Alt+F4</span></div>
+        </div>
+
+        <div class="menu-pop" style="left:186px; top:242px; min-width:224px;">
+          <div class="cap">导出（建议新增「数据字典导出…」）</div>
+          <div class="mi">导出表数据…</div>
+          <div class="mi">导出查询结果…</div>
+          <div class="mi">SQL 转储…</div>
+          <hr>
+          <div class="mi hl">数据字典导出…（建议项，待实现）<span class="sc">Word · PDF · HTML · MD · Excel</span></div>
+        </div>
+
+        <div class="app-command">
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="10" cy="5.5" rx="6" ry="2.5"/><path d="M4 5.5v9c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-9"/><path d="M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5"/></svg>
+            <b>连接</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M3 7.5h14M7.5 7.5V17"/></svg>
+            <b>新建查询</b>
+          </div>
+          <div class="cmd-sep"></div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="14" height="3.4" rx="1"/><rect x="3" y="9" width="14" height="3.4" rx="1"/><rect x="3" y="14" width="14" height="3.4" rx="1"/></svg>
+            <b>表</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14M8 8v8"/></svg>
+            <b>视图</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 16V6.5A2.5 2.5 0 0 1 6.5 4H16"/><path d="M6 16h9.5M4 16v-2"/></svg>
+            <b>函数</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="7" r="3.2"/><path d="M4 17c0-3.1 2.7-5 6-5s6 1.9 6 5"/></svg>
+            <b>用户</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15" cy="10" r="1.4"/></svg>
+            <b>其它</b>
+          </div>
+          <div class="cmd-sep"></div>
+          <div class="cmd on">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3v9"/><path d="M6.5 8.5 10 12l3.5-3.5"/><path d="M3.5 14.5v1.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-1.5"/></svg>
+            <b>数据字典</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h12M4 10h12M4 14h7"/></svg>
+            <b>查询</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="10" cy="5" rx="6" ry="2.2"/><path d="M4 5v10c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2V5"/></svg>
+            <b>备份</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l2.6 1.6"/></svg>
+            <b>自动运行</b>
+          </div>
+          <div class="cmd">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="11" y="3" width="6" height="6" rx="1"/><rect x="3" y="11" width="6" height="6" rx="1"/><rect x="11" y="11" width="6" height="6" rx="1"/></svg>
+            <b>模型</b>
+          </div>
+        </div>
+
+        <div class="app-tabstrip">
+          <div class="app-tab on">navkit_demo</div>
+          <div class="app-tab">查询 1</div>
+          <div class="app-tab">sys_user · 数据</div>
+        </div>
+
+        <div class="app-main">
+          <div class="app-tree">
+            <div class="tree-row"><i class="caret">▾</i><i class="ico f"></i>连接 1<span class="cnt">3</span></div>
+            <div class="tree-row" style="padding-left:24px"><i class="caret">▾</i><i class="ico"></i>navkit_demo<span class="cnt">51</span></div>
+            <div class="tree-row sel" style="padding-left:40px"><i class="caret">▾</i><i class="ico t"></i>表<span class="cnt">42</span></div>
+            <div class="tree-row" style="padding-left:56px"><i class="pad"></i><i class="ico t"></i>sys_user</div>
+            <div class="tree-row" style="padding-left:56px"><i class="pad"></i><i class="ico t"></i>sys_role</div>
+            <div class="tree-row" style="padding-left:56px"><i class="pad"></i><i class="ico t"></i>sys_user_role</div>
+            <div class="tree-row" style="padding-left:40px"><i class="caret">▸</i><i class="ico v"></i>视图<span class="cnt">6</span></div>
+            <div class="tree-row" style="padding-left:40px"><i class="caret">▸</i><i class="ico f"></i>函数<span class="cnt">3</span></div>
+          </div>
+          <div class="app-work">
+            <div class="work-bar">
+              <span>sys_user</span>
+              <span class="pill">42 列</span>
+              <span class="pill accent">3 索引</span>
+              <span style="margin-left:auto;color:var(--text-tertiary)">数据 · 结构</span>
+            </div>
+            <div class="work-grid">
+              <table class="gtbl">
+                <thead><tr><th style="width:38px">#</th><th>列名</th><th>数据类型</th><th style="width:64px">长度</th><th style="width:56px">主键</th><th style="width:56px">自增</th><th style="width:72px">允许空</th><th>默认值</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr><td class="rr">1</td><td>id</td><td>bigint</td><td>20</td><td>是</td><td>是</td><td>否</td><td></td><td>主键ID</td></tr>
+                  <tr><td class="rr">2</td><td>user_name</td><td>varchar</td><td>64</td><td>否</td><td>否</td><td>否</td><td>&#39;&#39;</td><td>登录名</td></tr>
+                  <tr><td class="rr">3</td><td>nick_name</td><td>varchar</td><td>64</td><td>否</td><td>否</td><td>是</td><td></td><td>昵称</td></tr>
+                  <tr><td class="rr">4</td><td>email</td><td>varchar</td><td>128</td><td>否</td><td>否</td><td>是</td><td></td><td>邮箱</td></tr>
+                  <tr><td class="rr">5</td><td>dept_id</td><td>bigint</td><td>20</td><td>否</td><td>否</td><td>是</td><td></td><td>部门ID</td></tr>
+                  <tr><td class="rr">6</td><td>status</td><td>tinyint</td><td>4</td><td>否</td><td>否</td><td>否</td><td>1</td><td>状态：0停用 1启用</td></tr>
+                  <tr><td class="rr">7</td><td>created_at</td><td>datetime</td><td>0</td><td>否</td><td>否</td><td>否</td><td>CURRENT_TIMESTAMP</td><td>创建时间</td></tr>
+                  <tr><td class="rr">8</td><td>updated_at</td><td>datetime</td><td>0</td><td>否</td><td>否</td><td>是</td><td></td><td>更新时间</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="app-status">
+          <i class="dot"></i><span>已连接 · MySQL 8.0.36</span>
+          <span class="grow"></span>
+          <span>42 表 · 6 视图 · 3 存储过程</span>
+          <span>UTF-8</span>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- ======================================================== 画板 B 向导 -->
+  <style>
+  /* ------------------------------------------------ 画板 B：对话框 + 向导 */
+  .stage{
+    width:1080px; height:688px; margin:0 auto; position:relative; border-radius:var(--r-4);
+    background:
+      radial-gradient(circle at 22% 18%, rgba(53,116,240,.06), transparent 46%),
+      repeating-linear-gradient(0deg, var(--n-100) 0 1px, transparent 1px 24px),
+      repeating-linear-gradient(90deg, var(--n-100) 0 1px, transparent 1px 24px),
+      var(--n-50);
+    border:1px solid var(--border-strong); overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .dialog{
+    width:940px; height:640px; background:var(--bg-surface); border:1px solid var(--border-strong);
+    border-radius:var(--r-4); box-shadow:var(--shadow-3); display:flex; flex-direction:column;
+    overflow:hidden; position:relative;
+  }
+  .dialog-title{
+    height:36px; min-height:36px; display:flex; align-items:center; gap:var(--sp-2);
+    padding:0 var(--sp-2) 0 var(--sp-4); background:var(--bg-surface);
+    border-bottom:1px solid var(--border-subtle);
+  }
+  .dialog-title-text{flex:1;font-size:var(--fs-13);font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px}
+  .dialog-title-text .sub{font-weight:400;font-size:var(--fs-11);color:var(--text-tertiary)}
+  .dialog-title-close{
+    width:26px;height:26px;display:flex;align-items:center;justify-content:center;
+    border-radius:var(--r-2);color:var(--text-tertiary);font-size:11px;
+  }
+  .dialog-title-close:hover{background:var(--bg-pressed);color:var(--text)}
+
+  /* 步骤条（照抄 .wizard-steps） */
+  .wizard-steps{
+    display:flex; align-items:center; gap:var(--sp-2); padding:var(--sp-3) var(--sp-4);
+    background:var(--bg-surface); border-bottom:1px solid var(--border-subtle); flex:0 0 auto;
+  }
+  .wizard-step{
+    display:flex; align-items:center; gap:var(--sp-2); padding:3px var(--sp-2) 3px 3px;
+    border-radius:var(--r-full); font-size:var(--fs-12); color:var(--text-tertiary);
+    white-space:nowrap; transition:background var(--dur-fast) var(--ease-out);
+  }
+  .wizard-step-num{
+    width:20px;height:20px;flex:0 0 20px;border-radius:50%;border:1px solid var(--border-strong);
+    background:var(--bg-surface);display:flex;align-items:center;justify-content:center;
+    font-size:var(--fs-11);font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-tertiary);
+  }
+  .wizard-step-num svg{width:12px;height:12px;display:block}
+  .wizard-step.active{color:var(--text);font-weight:600}
+  .wizard-step.active .wizard-step-num{background:var(--accent-500);border-color:var(--accent-500);color:#fff}
+  .wizard-step.done{color:var(--text-secondary);cursor:pointer}
+  .wizard-step.done:hover{background:var(--bg-hover)}
+  .wizard-step.done .wizard-step-num{background:var(--ok-50);border-color:var(--ok-100);color:var(--ok-500)}
+  .wizard-step-line{flex:1;height:1px;min-width:16px;margin:0 var(--sp-1);background:var(--border);position:relative}
+  .wizard-step-line::after{content:"";position:absolute;inset:0;background:var(--ok-500);opacity:0;transition:opacity var(--dur-base) var(--ease-out)}
+  .wizard-step-line.is-done::after{opacity:.55}
+
+  .wizard-body{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg-subtle)}
+  .wizard-panel{flex:1;min-height:0;display:flex;flex-direction:column}
+  .wizard-panel[hidden]{display:none}
+  .wizard-panel-inner{flex:1;min-height:0;overflow:auto;padding:var(--sp-4);display:flex;flex-direction:column;gap:var(--sp-3)}
+  .wizard-panel-head{display:grid;grid-template-columns:1fr auto;gap:2px var(--sp-3);align-items:baseline;flex:0 0 auto}
+  .wizard-panel-title{font-size:var(--fs-13);font-weight:600;color:var(--text);letter-spacing:.01em}
+  .wizard-panel-hint{grid-column:1;font-size:var(--fs-11);line-height:1.55;color:var(--text-tertiary)}
+  .wizard-panel-count{grid-column:2;grid-row:1;font-size:var(--fs-11);font-variant-numeric:tabular-nums;color:var(--text-disabled)}
+  .wizard-panel-card{
+    flex:0 0 auto;display:flex;flex-direction:column;padding:var(--sp-4);
+    background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--r-3);
+  }
+  .wizard-panel-card.flush{padding:0;overflow:hidden}
+  .wizard-panel-note{margin-top:var(--sp-3);font-size:var(--fs-11);line-height:1.6;color:var(--text-tertiary)}
+  .dialog-footer{
+    height:48px;min-height:48px;display:flex;align-items:center;gap:var(--sp-2);
+    padding:0 var(--sp-4);background:var(--bg-subtle);border-top:1px solid var(--border-subtle);flex:0 0 auto;
+  }
+  .wizard-actions{display:flex;align-items:center;gap:var(--sp-2);margin-right:auto}
+  .wizard-error{
+    margin:0 var(--sp-4) var(--sp-3);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);
+    background:var(--danger-50);border:1px solid var(--danger-100);color:var(--danger-600);
+    font-size:var(--fs-12);line-height:1.5;
+  }
+  .wizard-error[hidden]{display:none}
+
+  /* 步骤 2：对象勾选 */
+  .pick-grid{display:grid;grid-template-columns:1fr 300px;gap:var(--sp-3);flex:1;min-height:0}
+  .pick-tree{border:1px solid var(--border-subtle);border-radius:var(--r-3);background:var(--bg-surface);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .pick-search{
+    height:30px;margin:var(--sp-3);display:flex;align-items:center;gap:6px;padding:0 8px;
+    border:1px solid var(--border);border-radius:var(--r-2);background:var(--n-50);
+    font-size:var(--fs-12);color:var(--text-disabled);
+  }
+  .pick-search svg{width:13px;height:13px}
+  .pick-list{flex:1;min-height:0;overflow:auto;padding:0 6px 8px}
+  .pick-row{height:26px;display:flex;align-items:center;gap:7px;padding:0 6px;border-radius:var(--r-2);font-size:var(--fs-12);color:var(--n-700)}
+  .pick-row:hover{background:var(--bg-hover)}
+  .pick-row.group{font-weight:600;color:var(--text);height:28px}
+  .pick-row.group .cnt{font-weight:400;font-size:10.5px;color:var(--text-disabled);font-variant-numeric:tabular-nums}
+  .pick-row .caret{width:8px;font-size:8px;color:var(--n-400)}
+  .pick-row .pad{width:14px;flex:0 0 auto}
+  .pick-row .cmt{margin-left:auto;font-size:10.5px;color:var(--text-disabled);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pick-row .ico{width:13px;height:13px;border-radius:2px;flex:0 0 auto}
+  .pick-row .ico.t{background:#dce9fc;border:1px solid #9abef6}
+  .pick-row .ico.v{background:#cbeae6;border:1px solid #0e9384}
+  .pick-row .ico.p{background:#e9e4fd;border:1px solid #7a5af8}
+
+  .pick-sel{border:1px solid var(--border-subtle);border-radius:var(--r-3);background:var(--bg-surface);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .pick-sel-head{
+    height:34px;flex:0 0 34px;display:flex;align-items:center;gap:6px;padding:0 var(--sp-3);
+    border-bottom:1px solid var(--border-subtle);font-size:var(--fs-11);color:var(--text-tertiary);
+  }
+  .pick-sel-body{flex:1;min-height:0;overflow:auto;padding:6px}
+  .sel-row{height:26px;display:flex;align-items:center;gap:7px;padding:0 6px;border-radius:var(--r-2);font-size:var(--fs-12);color:var(--n-700)}
+  .sel-row:hover{background:var(--bg-hover)}
+  .sel-row .x{margin-left:auto;font-size:11px;color:var(--text-disabled)}
+  .pick-sel-foot{flex:0 0 auto;padding:8px var(--sp-3);border-top:1px solid var(--border-subtle);font-size:var(--fs-11);color:var(--text-tertiary);line-height:1.6}
+
+  /* 步骤 3：格式卡 */
+  .fmt-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:var(--sp-2)}
+  .fmt-card{
+    position:relative;height:104px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+    padding:12px 12px 10px;border:1px solid var(--border);border-radius:var(--r-3);
+    background:var(--bg-surface);text-align:left;
+    transition:border-color var(--dur-fast) var(--ease-out),box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .fmt-card:hover{border-color:var(--border-strong);background:var(--n-25)}
+  .fmt-card:hover .fmt-ic{color:var(--text-secondary)}
+  .fmt-card.on{border-color:var(--accent-500);box-shadow:0 0 0 3px var(--ring);background:var(--accent-50)}
+  .fmt-card.on .fmt-ic{color:var(--accent-600)}
+  .fmt-card.on .fmt-x{color:var(--accent-600)}
+  .fmt-ic{color:var(--n-500);margin-bottom:2px}
+  .fmt-ic svg{width:20px;height:20px}
+  .fmt-t{font-size:var(--fs-12);font-weight:600;color:var(--text)}
+  .fmt-x{font-size:10.5px;color:var(--text-disabled);font-family:var(--font-mono)}
+  .fmt-cap{position:absolute;right:8px;bottom:8px;font-size:9.5px;color:var(--text-disabled);letter-spacing:.02em}
+  .fmt-card.on .fmt-cap{color:var(--accent-600)}
+  .fmt-card .tick{
+    position:absolute;top:9px;right:9px;width:14px;height:14px;border-radius:50%;
+    background:var(--accent-500);color:#fff;display:none;align-items:center;justify-content:center;font-size:8px;
+  }
+  .fmt-card.on .tick{display:flex}
+
+  .section-chks{display:flex;flex-wrap:wrap;gap:var(--sp-4);margin-top:2px}
+  .section-chk{display:flex;align-items:flex-start;gap:7px}
+  .section-chk .lbl{font-size:var(--fs-12);color:var(--text)}
+  .section-chk .sm{display:block;font-size:10.5px;color:var(--text-tertiary);margin-top:1px}
+
+  /* 步骤 5：预览 + 摘要 */
+  .export-grid{display:grid;grid-template-columns:1fr 268px;gap:var(--sp-3);flex:1;min-height:0}
+  .preview-pane{border:1px solid var(--border-subtle);border-radius:var(--r-3);background:var(--bg-surface);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .preview-bar{
+    height:32px;flex:0 0 32px;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-3);
+    border-bottom:1px solid var(--border-subtle);font-size:var(--fs-11);color:var(--text-tertiary);background:var(--n-50);
+  }
+  .preview-bar .grow{flex:1}
+  .preview-stage{flex:1;min-height:0;overflow:auto;background:var(--n-100);padding:14px}
+  .preview-stage #previewStage{transform-origin:top left}
+  .focus-c #board-a, .focus-c #board-b, .focus-c #board-d, .focus-c .spec-nav{display:none}
+  .focus-s #board-a, .focus-s #board-b, .focus-s #board-c, .focus-s .spec-nav{display:none}
+
+  .summary{display:flex;flex-direction:column;gap:var(--sp-3);min-height:0;overflow:auto}
+  .sum-card{border:1px solid var(--border-subtle);border-radius:var(--r-3);background:var(--bg-surface);padding:var(--sp-3)}
+  .sum-card h4{font-size:var(--fs-11);color:var(--text-tertiary);font-weight:600;letter-spacing:.05em;margin-bottom:var(--sp-2)}
+  .kv{display:grid;grid-template-columns:64px 1fr;gap:4px var(--sp-2);font-size:var(--fs-12);line-height:1.6}
+  .kv dt{color:var(--text-tertiary)}
+  .kv dd{margin:0;color:var(--text);word-break:break-all}
+  .kv dd .mono{font-size:11px}
+  .progress-wrap{margin-top:var(--sp-2)}
+  .progress-track{height:6px;border-radius:var(--r-full);background:var(--n-150);overflow:hidden}
+  .progress-fill{height:100%;width:0;background:var(--accent-500);border-radius:var(--r-full);transition:width .28s var(--ease-out)}
+  .progress-meta{display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:var(--fs-11);color:var(--text-tertiary)}
+  .progress-meta .n{margin-left:auto;font-variant-numeric:tabular-nums}
+  .export-state{
+    display:flex;align-items:center;gap:8px;margin-top:10px;font-size:var(--fs-12);color:var(--text-secondary);
+  }
+  .export-state .dot{width:7px;height:7px;border-radius:50%;background:var(--accent-500)}
+  .export-state.done .dot{background:var(--ok-500)}
+  .export-state.done{color:var(--ok-600)}
+  </style>
+
+  <section id="board-b" class="board">
+    <div class="board-head">
+      <div class="board-idx">02</div>
+      <div>
+        <div class="board-title">向导 — 数据源 → 对象 → 格式 → 文件 → 导出</div>
+        <div class="board-desc">
+          可点击：步骤条可回退，格式卡可切换（右侧预览随之变化），「开始导出」跑一遍真实进度。
+          步骤条 / 面板 / 卡片 / 页脚全部沿用 <code>src/ui/Wizard.ts</code> + <code>base.css</code> 的既有类名与尺寸，
+          不引入新的布局语言。对话框 940×640，标题栏 36，页脚 48。
+        </div>
+      </div>
+    </div>
+    <div class="board-body">
+      <div class="stage">
+        <div class="dialog" id="ddDialog">
+          <div class="dialog-title">
+            <div class="dialog-title-text">数据字典导出<span class="sub">navkit_demo · MySQL</span></div>
+            <div class="dialog-title-close">✕</div>
+          </div>
+
+          <div class="wizard-steps" id="wizSteps">
+            <div class="wizard-step active" data-i="0"><span class="wizard-step-num">1</span><span>数据源</span></div>
+            <div class="wizard-step-line"></div>
+            <div class="wizard-step" data-i="1"><span class="wizard-step-num">2</span><span>对象</span></div>
+            <div class="wizard-step-line"></div>
+            <div class="wizard-step" data-i="2"><span class="wizard-step-num">3</span><span>格式</span></div>
+            <div class="wizard-step-line"></div>
+            <div class="wizard-step" data-i="3"><span class="wizard-step-num">4</span><span>文件</span></div>
+            <div class="wizard-step-line"></div>
+            <div class="wizard-step" data-i="4"><span class="wizard-step-num">5</span><span>导出</span></div>
+          </div>
+
+          <div class="wizard-body" id="wizBody">
+
+            <!-- STEP 1 -->
+            <section class="wizard-panel" data-step="0">
+              <div class="wizard-panel-inner">
+                <div class="wizard-panel-head">
+                  <div class="wizard-panel-title">选择数据源</div>
+                  <div class="wizard-panel-count">1 / 5</div>
+                  <div class="wizard-panel-hint">数据字典按库生成：先选连接，再选库。库列表与左侧对象树同源，切换连接时同步刷新。</div>
+                </div>
+                <div class="wizard-panel-card" style="--label-w:76px">
+                  <div class="field">
+                    <div class="field-label">连接</div>
+                    <div class="field-control">
+                      <div class="select"><span class="val">生产库 · MySQL 8.0.36 · 10.0.12.31:3306</span></div>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <div class="field-label">数据库</div>
+                    <div class="field-control">
+                      <div class="select"><span class="val">navkit_demo</span></div>
+                    </div>
+                  </div>
+                  <div class="field" style="align-items:flex-start">
+                    <div class="field-label">库信息</div>
+                    <div class="field-control" style="flex-wrap:wrap;gap:6px">
+                      <span class="pill accent">42 张表</span>
+                      <span class="pill">6 视图</span>
+                      <span class="pill">3 存储过程</span>
+                      <span class="pill">utf8mb4 · 512 MB</span>
+                    </div>
+                  </div>
+                  <div class="field" style="margin-bottom:0">
+                    <div class="field-label">读取状态</div>
+                    <div class="field-control">
+                      <span class="pill ok">已读取对象元数据</span>
+                      <span style="font-size:11px;color:var(--text-tertiary)">2026-11-11 20:35:21</span>
+                    </div>
+                  </div>
+                  <div class="wizard-panel-note">列集照 HTML / Word 模板：Oracle 连接不输出「自增」列，其余数据库输出 9 列。</div>
+                </div>
+              </div>
+            </section>
+
+            <!-- STEP 2 -->
+            <section class="wizard-panel" data-step="1" hidden>
+              <div class="wizard-panel-inner">
+                <div class="wizard-panel-head">
+                  <div class="wizard-panel-title">选择导出对象</div>
+                  <div class="wizard-panel-count">已选 3 表 · 1 视图 · 1 存储过程</div>
+                  <div class="wizard-panel-hint">勾选表 / 视图 / 存储过程。左侧分组可整组勾选，右侧是最终导出顺序（即文档中的排列顺序）。</div>
+                </div>
+                <div class="pick-grid">
+                  <div class="pick-tree">
+                    <div class="pick-search">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3 3"/></svg>
+                      搜索表 / 视图 / 存储过程
+                    </div>
+                    <div class="pick-list">
+                      <div class="pick-row group"><span class="caret">▾</span><span class="chk"><i class="on">✓</i></span><i class="ico t"></i>表<span class="cnt">3 / 42</span></div>
+                      <div class="pick-row" style="padding-left:28px"><span class="chk"><i class="on">✓</i></span><i class="ico t"></i>sys_user<span class="cmt">用户表</span></div>
+                      <div class="pick-row" style="padding-left:28px"><span class="chk"><i class="on">✓</i></span><i class="ico t"></i>sys_role<span class="cmt">角色表</span></div>
+                      <div class="pick-row" style="padding-left:28px"><span class="chk"><i class="on">✓</i></span><i class="ico t"></i>sys_user_role<span class="cmt">用户角色关联</span></div>
+                      <div class="pick-row group"><span class="caret">▾</span><span class="chk"><i class="on">✓</i></span><i class="ico v"></i>视图<span class="cnt">1 / 6</span></div>
+                      <div class="pick-row" style="padding-left:28px"><span class="chk"><i class="on">✓</i></span><i class="ico v"></i>v_user_role<span class="cmt">用户角色视图</span></div>
+                      <div class="pick-row group"><span class="caret">▾</span><span class="chk"><i class="on">✓</i></span><i class="ico p"></i>存储过程<span class="cnt">1 / 3</span></div>
+                      <div class="pick-row" style="padding-left:28px"><span class="chk"><i class="on">✓</i></span><i class="ico p"></i>sp_rebuild_stat<span class="cmt">重建统计</span></div>
+                    </div>
+                  </div>
+                  <div class="pick-sel">
+                    <div class="pick-sel-head">导出顺序<span style="margin-left:auto">5 项</span></div>
+                    <div class="pick-sel-body">
+                      <div class="sel-row"><i class="ico t" style="width:13px;height:13px;border-radius:2px;background:#dce9fc;border:1px solid #9abef6"></i>sys_user<span class="x">✕</span></div>
+                      <div class="sel-row"><i class="ico t" style="width:13px;height:13px;border-radius:2px;background:#dce9fc;border:1px solid #9abef6"></i>sys_role<span class="x">✕</span></div>
+                      <div class="sel-row"><i class="ico t" style="width:13px;height:13px;border-radius:2px;background:#dce9fc;border:1px solid #9abef6"></i>sys_user_role<span class="x">✕</span></div>
+                      <div class="sel-row"><i class="ico v" style="width:13px;height:13px;border-radius:2px;background:#cbeae6;border:1px solid #0e9384"></i>v_user_role<span class="x">✕</span></div>
+                      <div class="sel-row"><i class="ico p" style="width:13px;height:13px;border-radius:2px;background:#e9e4fd;border:1px solid #7a5af8"></i>sp_rebuild_stat<span class="x">✕</span></div>
+                    </div>
+                    <div class="pick-sel-foot">文档章节顺序：表 → 视图 → 存储过程。<br>Excel / Word / HTML 仅导出表；PDF / Markdown 才含视图与存储过程。</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- STEP 3 -->
+            <section class="wizard-panel" data-step="2" hidden>
+              <div class="wizard-panel-inner">
+                <div class="wizard-panel-head">
+                  <div class="wizard-panel-title">文档格式</div>
+                  <div class="wizard-panel-count">单选</div>
+                  <div class="wizard-panel-hint">文档类型为单选。Excel、Word、HTML 仅支持导出表；PDF、Markdown 支持表 / 视图 / 存储过程。</div>
+                </div>
+                <div class="wizard-panel-card" style="gap:var(--sp-3)">
+                  <div class="fmt-grid" id="fmtGrid">
+                    <button class="fmt-card" data-fmt="word">
+                      <span class="tick">✓</span>
+                      <span class="fmt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3.5h8L19 8v12.5H6z"/><path d="M14 3.5V8h5"/><path d="M9 12.5h7M9 16h7"/></svg></span>
+                      <span class="fmt-t">Word</span><span class="fmt-x">.docx</span><span class="fmt-cap">表</span>
+                    </button>
+                    <button class="fmt-card" data-fmt="pdf">
+                      <span class="tick">✓</span>
+                      <span class="fmt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3.5h8L19 8v12.5H6z"/><path d="M14 3.5V8h5"/><path d="M9.5 12h5v5h-5z"/></svg></span>
+                      <span class="fmt-t">PDF</span><span class="fmt-x">.pdf</span><span class="fmt-cap">全部</span>
+                    </button>
+                    <button class="fmt-card" data-fmt="html">
+                      <span class="tick">✓</span>
+                      <span class="fmt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3.5h8L19 8v12.5H6z"/><path d="M14 3.5V8h5"/><path d="m9.5 12.5 2 2-2 2M13.5 16.5h3"/></svg></span>
+                      <span class="fmt-t">HTML</span><span class="fmt-x">.html</span><span class="fmt-cap">表</span>
+                    </button>
+                    <button class="fmt-card on" data-fmt="markdown">
+                      <span class="tick">✓</span>
+                      <span class="fmt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M7 15V9l2.5 3L12 9v6M16 9v6M14.2 13.2 16 15l1.8-1.8"/></svg></span>
+                      <span class="fmt-t">Markdown</span><span class="fmt-x">.md</span><span class="fmt-cap">全部</span>
+                    </button>
+                    <button class="fmt-card" data-fmt="excel">
+                      <span class="tick">✓</span>
+                      <span class="fmt-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 9.5h16M4 15h16M9.5 9.5V20M15 9.5V20"/></svg></span>
+                      <span class="fmt-t">Excel</span><span class="fmt-x">.xlsx</span><span class="fmt-cap">表</span>
+                    </button>
+                  </div>
+
+                  <style>
+                  .excel-opt{margin-top:var(--sp-3);border-top:1px solid var(--border-subtle);padding-top:var(--sp-3)}
+                  .excel-opt[hidden]{display:none}
+                  .excel-opt-label{font-size:11px;color:var(--text-tertiary);margin-bottom:8px;letter-spacing:.05em;font-weight:600}
+                  .excel-opt-group{display:flex;flex-direction:column;gap:6px}
+                  .excel-opt-item{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border-subtle);border-radius:var(--r-2);cursor:pointer;background:var(--bg-surface)}
+                  .excel-opt-item:hover{border-color:var(--border)}
+                  .excel-opt-item:has(input:checked){border-color:var(--accent-500);background:var(--accent-100)}
+                  .excel-opt-item input{margin:3px 0 0;accent-color:var(--accent-500);flex:0 0 auto}
+                  .eo-body{display:flex;flex-direction:column;gap:2px}
+                  .eo-body b{font-size:12px;font-weight:600;color:var(--text)}
+                  .eo-desc{font-size:11px;color:var(--text-tertiary);line-height:1.45}
+                  </style>
+                  <div id="excelOpt" class="excel-opt" hidden>
+                    <div class="excel-opt-label">Excel 工作表方式</div>
+                    <div class="excel-opt-group" role="radiogroup" aria-label="Excel 工作表方式">
+                      <label class="excel-opt-item">
+                        <input type="radio" name="xlMode" value="single" checked>
+                        <span class="eo-body"><b>所有表放在一个 sheet</b><span class="eo-desc">与 SmartSqlT 现有行为一致：修订日志 / 目录 / 表 三个 sheet，表结构汇总在「表」中</span></span>
+                      </label>
+                      <label class="excel-opt-item">
+                        <input type="radio" name="xlMode" value="perTable">
+                        <span class="eo-body"><b>每张表单独一个 sheet</b><span class="eo-desc">扩展项：修订日志 / 目录 之外，每张表各占一个工作表，便于分表查看</span></span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div style="border-top:1px solid var(--border-subtle);padding-top:var(--sp-3)">
+                    <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;letter-spacing:.05em;font-weight:600">章节包含</div>
+                    <div class="section-chks" id="sectionChks">
+                      <label class="section-chk">
+                        <span class="chk"><i class="on">✓</i></span>
+                        <span class="lbl">表结构<span class="sm">必选 · 所有格式均输出</span></span>
+                      </label>
+                      <label class="section-chk" id="chkView">
+                        <span class="chk"><i class="on">✓</i></span>
+                        <span class="lbl">视图<span class="sm">仅 PDF / Markdown</span></span>
+                      </label>
+                      <label class="section-chk" id="chkProc">
+                        <span class="chk"><i class="on">✓</i></span>
+                        <span class="lbl">存储过程<span class="sm">仅 PDF / Markdown</span></span>
+                      </label>
+                      <label class="section-chk">
+                        <span class="chk"><i class="on">✓</i></span>
+                        <span class="lbl">修订日志<span class="sm">Word / PDF / Excel 自动生成（HTML / Markdown 不含）</span></span>
+                      </label>
+                    </div>
+                    <div class="wizard-panel-note" id="fmtNote">当前格式：Markdown — 表 / 视图 / 存储过程全部导出，SQL 段落以 ```sql 围栏包裹。</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- STEP 4 -->
+            <section class="wizard-panel" data-step="3" hidden>
+              <div class="wizard-panel-inner">
+                <div class="wizard-panel-head">
+                  <div class="wizard-panel-title">文档名称与输出位置</div>
+                  <div class="wizard-panel-count">4 / 5</div>
+                  <div class="wizard-panel-hint">名称即文档标题（Word / PDF / Excel 首页标题、HTML 顶部标题、Markdown 目录名）。</div>
+                </div>
+                <div class="wizard-panel-card" style="--label-w:76px">
+                  <div class="field">
+                    <div class="field-label">文档名称</div>
+                    <div class="field-control">
+                      <div class="input"><span class="val">navkit_demo数据库设计文档20261111203521</span></div>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <div class="field-label">输出路径</div>
+                    <div class="field-control">
+                      <div class="input plain" style="flex:1"><span class="val mono" style="font-size:11.5px">D:\导出\数据字典</span></div>
+                      <button class="btn" style="flex:0 0 auto">浏览…</button>
+                    </div>
+                  </div>
+                  <div class="field" style="align-items:flex-start;margin-bottom:0">
+                    <div class="field-label">将生成</div>
+                    <div class="field-control" style="flex-direction:column;align-items:flex-start;gap:6px">
+                      <div class="mono" style="font-size:11.5px;background:var(--n-50);border:1px solid var(--border-subtle);border-radius:var(--r-2);padding:6px 8px;width:100%">
+                        D:\导出\数据字典\navkit_demo数据库设计文档20261111203521<span id="extInline" style="color:var(--accent-600)">.md</span>
+                      </div>
+                      <div style="font-size:11px;color:var(--text-tertiary)">导出前校验名称与输出路径</div>
+                    </div>
+                  </div>
+                  <div class="wizard-panel-note" style="color:var(--warn-600)">文档名称不能包含下列任何符号：\ / : * ? " &lt; &gt; |</div>
+                </div>
+              </div>
+            </section>
+
+            <!-- STEP 5 -->
+            <section class="wizard-panel" data-step="4" hidden>
+              <div class="wizard-panel-inner">
+                <div class="wizard-panel-head">
+                  <div class="wizard-panel-title">预览与导出</div>
+                  <div class="wizard-panel-count">5 / 5</div>
+                  <div class="wizard-panel-hint">右侧为版式预览，用于确认章节与列集；最终文件由导出器按 SmartSQL 模板生成。</div>
+                </div>
+                <div class="export-grid">
+                  <div class="preview-pane">
+                    <div class="preview-bar">
+                      <span id="pvName">navkit_demo数据库设计文档20261111203521.md</span>
+                      <span class="grow"></span>
+                      <span class="pill" id="pvFmt">Markdown</span>
+                    </div>
+                    <div class="preview-stage"><div class="doc-viewport" id="previewStage" data-doc="markdown"></div></div>
+                  </div>
+                  <div class="summary">
+                    <div class="sum-card">
+                      <h4>导出摘要</h4>
+                      <dl class="kv">
+                        <dt>连接</dt><dd>生产库 · MySQL</dd>
+                        <dt>数据库</dt><dd>navkit_demo</dd>
+                        <dt>对象</dt><dd>3 表 · 1 视图 · 1 存储过程</dd>
+                        <dt>格式</dt><dd id="sumFmt">Markdown（.md）</dd>
+                        <dt>章节</dt><dd id="sumSections">表 · 视图 · 存储过程</dd>
+                        <dt>路径</dt><dd class="mono" style="font-size:11px">D:\导出\数据字典\</dd>
+                      </dl>
+                    </div>
+                    <div class="sum-card">
+                      <h4>进度</h4>
+                      <div class="progress-wrap">
+                        <div class="progress-track"><div class="progress-fill" id="pvFill" style="width:0%"></div></div>
+                        <div class="progress-meta"><span id="pvStage">等待开始</span><span class="n" id="pvCount">0 / 5</span></div>
+                      </div>
+                      <div class="export-state" id="pvState"><span class="dot"></span><span id="pvStateText">尚未导出</span></div>
+                    </div>
+                    <button class="btn" id="btnOpen" disabled style="height:30px">打开输出文件夹</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+          </div>
+
+          <div class="wizard-error" id="wizErr" hidden></div>
+
+          <div class="dialog-footer">
+            <div class="wizard-actions">
+              <button class="btn" id="btnBack">上一步</button>
+              <button class="btn primary" id="btnNext">下一步</button>
+            </div>
+            <button class="btn ghost" id="btnCancel">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <style>
+  .doc-stack{display:flex;flex-direction:column}
+  .doc-frame{border-bottom:1px solid var(--border);background:var(--n-100)}
+  .doc-frame:last-child{border-bottom:0}
+  .doc-frame figcaption{
+    height:34px;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4);
+    background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);
+    font-size:var(--fs-12);color:var(--text-secondary);
+  }
+  .doc-frame figcaption b{color:var(--text);font-weight:600}
+  .doc-frame figcaption .src{
+    margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--text-disabled);
+    background:var(--n-50);border:1px solid var(--border-subtle);border-radius:var(--r-2);padding:1px 6px;
+  }
+  .doc-frame .viewport{height:470px;overflow:hidden;background:var(--n-100);position:relative}
+  .doc-frame .viewport.scroll{overflow:auto}
+  .doc-frame .hint{
+    position:absolute;right:10px;bottom:8px;font-size:10px;color:var(--text-tertiary);
+    background:rgba(255,255,255,.86);border:1px solid var(--border-subtle);border-radius:var(--r-full);padding:2px 8px;
+  }
+  .doc-html{width:850px;margin:0 auto;padding-bottom:50px;background:#fff;font-family:verdana,fantasy;font-size:12px;line-height:150%;color:#000}
+  .doc-html .wrap{width:850px;margin:20px auto;text-align:left}
+  .doc-html h2{text-align:center;line-height:50px;font-size:18.72px;font-weight:700;margin:0}
+  .doc-html table{width:100%;background-color:#ccc;margin:5px 0;border-collapse:separate;border-spacing:1px}
+  .doc-html td{background-color:#fff;padding:3px 3px 3px 10px}
+  .doc-html thead td{text-align:center;font-weight:700;background-color:#eee;padding:3px}
+  .doc-html .tc{text-align:center;padding:3px}
+  .doc-html a{color:#015fb6;text-decoration:none}
+  .doc-html a:hover{color:#e33e06}
+  .doc-html .back{float:right;margin-top:6px}
+  .doc-html .mt{margin-top:30px}
+  .paper{width:794px;min-height:1060px;margin:16px auto;background:#fff;padding:54px 72px 72px;box-shadow:var(--shadow-2);font-family:"SimSun","宋体",serif;color:#000;font-size:12pt;line-height:1.5}
+  .paper .hdr{text-align:right;font-size:10.5pt;color:#3c3c3c;padding-bottom:6px;margin-bottom:34px}
+  .paper h1{font-size:25pt;font-weight:400;text-align:center;margin:56px 0 0;line-height:1.4}
+  .paper .chapter{text-align:center;font-size:13pt;font-weight:700;margin:46px 0 0}
+  .paper .t3{font-size:12pt;font-weight:700;margin:22px 0 10px}
+  .paper table.wt{border-collapse:collapse;width:100%;table-layout:fixed;font-size:9pt}
+  .paper table.wt th{background:#e7e6e6;font-weight:700;text-align:center;padding:5px 3px;border:0;height:22px}
+  .paper table.wt td{padding:5px 4px;border:0;height:22px;color:#000}
+  .paper table.wt td.c{text-align:center}
+  .paper table.wt td.l{text-align:left}
+  .paper .toc{font-size:10.5pt;color:#1f1f1f;margin-top:10px}
+  .paper .toc div{display:flex;gap:8px;padding:2px 0}
+  .paper .toc .dots{flex:1;border-bottom:1px dotted #b3b3b3;transform:translateY(-4px)}
+  .paper .ftr{margin-top:46px;padding-top:8px;text-align:center;font-size:9pt;color:#595959}
+  .pdf-page{width:595px;min-height:842px;margin:16px auto;background:#fff;padding:48px 40px 56px;box-shadow:var(--shadow-2);font-family:"Microsoft YaHei","微软雅黑",sans-serif;color:#000;font-size:12px}
+  .pdf-page h1{font-size:30px;font-weight:700;text-align:center;line-height:1.35}
+  .pdf-page .sub{font-size:20px;text-align:center;margin-top:8px;color:#111}
+  .pdf-page .chap{font-size:15px;font-weight:700;margin:34px 0 8px}
+  .pdf-page .objname{font-size:12px;font-weight:700;margin:16px 0 6px}
+  .pdf-page table.pt{width:520px;margin:6px auto;border-collapse:collapse;table-layout:fixed;font-size:9px}
+  .pdf-page table.pt th{background:#d3d3d3;border:1px solid #000;font-weight:700;text-align:center;padding:6px 3px}
+  .pdf-page table.pt td{border:1px solid #000;padding:6px 4px;height:25px;vertical-align:middle}
+  .pdf-page table.pt td.c{text-align:center}
+  .pdf-page table.pt td.l{text-align:left}
+  .pdf-page .code{font-family:var(--font-mono);font-size:9px;line-height:1.55;white-space:pre-wrap;background:#fff;border:0;padding:0}
+  .md-frame{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);height:470px;background:#fff}
+  .md-src{border-right:1px solid var(--border-subtle);background:var(--n-25);overflow:auto;padding:14px 16px;font-family:var(--font-mono);font-size:11px;line-height:1.75;color:var(--n-700);white-space:pre}
+  .md-src .h{color:var(--accent-700);font-weight:600}
+  .md-render{overflow:auto;padding:18px 22px;font-family:var(--font-ui);font-size:13px;line-height:1.7;color:var(--n-800)}
+  .md-render h3{font-size:15px;font-weight:600;margin:2px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border-subtle)}
+  .md-render h4{font-size:13px;font-weight:600;margin:16px 0 4px}
+  .md-render p{margin:2px 0 8px;color:var(--text-secondary);font-size:12px}
+  .md-render table{border-collapse:collapse;width:100%;font-size:11.5px;margin:6px 0 12px}
+  .md-render th{background:var(--n-50);border:1px solid var(--border);padding:5px 8px;text-align:left;font-weight:600;color:var(--text-secondary);white-space:nowrap}
+  .md-render td{border:1px solid var(--border-subtle);padding:5px 8px;color:var(--n-700)}
+  .md-render td.c,.md-render th.c{text-align:center}
+  .md-render pre{background:var(--n-50);border:1px solid var(--border-subtle);border-radius:var(--r-2);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;overflow:auto;color:var(--n-700)}
+  .xl{width:100%;height:470px;background:#fff;display:flex;flex-direction:column;font-family:"Calibri","Microsoft YaHei",sans-serif}
+  .xl-ribbon{height:30px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid #cfcfcf;background:#f3f3f3;font-size:11px;color:#444}
+  .xl-ribbon .name{font-weight:600;color:#1f1f1f}
+  .xl-body{flex:1;min-height:0;overflow:auto;position:relative}
+  .xl-grid{border-collapse:collapse;table-layout:fixed;font-size:11px}
+  .xl-grid th,.xl-grid td{border:1px solid #d4d4d4;height:19px;padding:0 5px;white-space:nowrap;overflow:hidden}
+  .xl-grid thead th{background:#e9e9e9;font-weight:400;color:#3b3b3b;text-align:center;font-size:10px}
+  .xl-grid .rownum{background:#f7f7f7;color:#8a8a8a;text-align:center;font-size:10px;width:34px}
+  .xl-grid .tname{background:#f2f2f2;font-weight:700;font-size:10px;text-align:center;height:18px}
+  .xl-grid .hcell{background:#fff;font-weight:700;text-align:center;font-size:10px}
+  .xl-sheets{height:26px;flex:0 0 26px;display:flex;align-items:flex-end;gap:1px;padding:0 8px;background:#f3f3f3;border-top:1px solid #cfcfcf}
+  .xl-sheet{height:22px;display:flex;align-items:center;padding:0 12px;font-size:11px;color:#4a4a4a;border:1px solid #cfcfcf;border-bottom:0;border-radius:2px 2px 0 0;background:#ececec}
+  .xl-sheet.on{background:#fff;color:#1a1a1a;font-weight:600}
+  </style>
+
+  <section id="board-c" class="board">
+    <div class="board-head">
+      <div class="board-idx">03</div>
+      <div>
+        <div class="board-title">导出版式五联 — 参照 SmartSQL 模板</div>
+        <div class="board-desc">
+          预览按 SmartSQL 模板的样式参数还原，用于评审观感：HTML 的 <code>#ccc</code> 表底 + <code>cellspacing=1</code> 网格、Word 的宋体 9pt 与 <code>#e7e6e6</code> 表头、PDF 的 520pt 表宽、
+          Markdown 的 <code>📚 📒 📰 📜</code> 章节、Excel 的 <code>#f2f2f2</code> 合并表名行。真实文件仍由各导出器生成。
+        </div>
+      </div>
+    </div>
+    <div class="board-body flush">
+      <div class="doc-stack">
+        <figure class="doc-frame">
+          <figcaption><b>HTML</b><span>.html · 单文件、内联样式、无外部依赖</span><span class="src">TplFile/html/html.cshtml</span></figcaption>
+          <div class="viewport scroll"><div class="doc-viewport" data-doc-fixed="html"></div><span class="hint">850px 容器 · 12px verdana · 150% 行高</span></div>
+        </figure>
+        <figure class="doc-frame">
+          <figcaption><b>Word</b><span>.docx · Aspose.Words 版式，页眉页脚齐全</span><span class="src">DBDoc/WordDoc.cs</span></figcaption>
+          <div class="viewport scroll"><div class="doc-viewport" data-doc-fixed="word"></div><span class="hint">宋体 9pt · 表头 #e7e6e6 · 表格无框线</span></div>
+        </figure>
+        <figure class="doc-frame">
+          <figcaption><b>PDF</b><span>.pdf · iTextSharp，A4 内 520pt 表格</span><span class="src">DBDoc/PdfDoc.cs</span></figcaption>
+          <div class="viewport scroll"><div class="doc-viewport" data-doc-fixed="pdf"></div><span class="hint">表头 LIGHT_GRAY · 0.5pt 黑框 · 行高 ≥25</span></div>
+        </figure>
+        <figure class="doc-frame">
+          <figcaption><b>Markdown</b><span>.md · 左源码右渲染（同一份字节）</span><span class="src">DBDoc/MarkDownDoc.cs</span></figcaption>
+          <div class="viewport"><div class="doc-viewport" data-doc-fixed="markdown" style="height:100%"></div><span class="hint">📚 目录 · 📒 表结构 · 📰 视图 · 📜 存储过程</span></div>
+        </figure>
+        <figure class="doc-frame">
+          <figcaption><b>Excel</b><span>.xlsx · 修订日志 / 目录 / 表；可选每表一 sheet</span><span class="src">DBDoc/ExcelDoc.cs</span></figcaption>
+          <div class="viewport"><div class="doc-viewport" data-doc-fixed="excel" style="height:100%"></div><span class="hint">#f2f2f2 表名行 · thin 边框 · 自动换行</span></div>
+        </figure>
+      </div>
+    </div>
+  </section>
+  <style>
+  .spec-table{width:100%;border-collapse:collapse;font-size:12px;background:var(--bg-surface)}
+  .spec-table caption{caption-side:top;text-align:left;padding:0 0 8px;font-size:11px;color:var(--text-tertiary)}
+  .spec-table th{text-align:left;font-weight:600;font-size:11px;color:var(--text-secondary);background:var(--n-50);border-bottom:1px solid var(--border);padding:8px 10px;white-space:nowrap}
+  .spec-table td{padding:8px 10px;border-bottom:1px solid var(--border-subtle);color:var(--n-700);vertical-align:top;line-height:1.6}
+  .spec-table tr:last-child td{border-bottom:0}
+  .spec-table td.k{color:var(--text);font-weight:500;white-space:nowrap}
+  .spec-table .mono{font-size:11px}
+  .focus-b #board-a, .focus-b #board-c, .focus-b #board-d, .focus-b .spec-nav, .focus-b .spec-main > .board:not(#board-b){display:none}
+  .focus-b .spec-main{padding-top:var(--sp-4)}
+  .spec-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4)}
+  .spec-block{border:1px solid var(--border-subtle);border-radius:var(--r-3);overflow:hidden;background:var(--bg-surface)}
+  .spec-block h4{padding:10px 14px;border-bottom:1px solid var(--border-subtle);background:var(--n-25);font-size:11px;font-weight:600;color:var(--text-secondary);letter-spacing:.05em}
+  .spec-block .pad{padding:var(--sp-4)}
+  .cap-row{display:flex;gap:8px;flex-wrap:wrap}
+  .cap-pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);background:var(--n-50);border:1px solid var(--border-subtle);border-radius:var(--r-full);padding:2px 9px}
+  .cap-pill b{font-weight:600;color:var(--text)}
+  </style>
+
+  <section id="board-d" class="board">
+    <div class="board-head">
+      <div class="board-idx">04</div>
+      <div>
+        <div class="board-title">规格表 — 步骤、格式能力、命名与文案</div>
+        <div class="board-desc">开发与验收照着这张表落，避免实现时「自由发挥」。</div>
+      </div>
+    </div>
+    <div class="board-body">
+      <table class="spec-table">
+        <caption>向导步骤（5 步，与 Wizard.ts 的 steps 一一对应）</caption>
+        <thead><tr><th style="width:4%">步</th><th style="width:9%">标题</th><th style="width:33%">内容与交互</th><th style="width:31%">校验 / 回退</th><th style="width:23%">SmartSQL 对照</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="k">数据源</td><td>连接下拉 + 数据库下拉 + 库信息徽标；切换连接时重读库列表与对象元数据。</td><td>未选库 → 禁用「下一步」；库为空 → 空态「该连接下没有可访问的数据库」。</td><td class="mono">SelectDatabase 下拉 + 库图标</td></tr>
+          <tr><td>2</td><td class="k">对象</td><td>搜索框 + 三组树（表 / 视图 / 存储过程）复选；右侧「导出顺序」列表可移除。</td><td>三类全不选 → 阻止前进并提示「请选择需要导出的对象」。</td><td class="mono">TreeViewTables + 复选 + 搜索</td></tr>
+          <tr><td>3</td><td class="k">格式</td><td>5 张格式卡单选；章节包含（表必选，视图 / 存储过程受格式约束）；Excel 可选工作表方式（所有表一个 sheet / 每表一个 sheet）。</td><td>Excel / Word / HTML 时视图与存储过程自动禁用并置灰。</td><td class="mono">DocTypeToggleStyle 单选组</td></tr>
+          <tr><td>4</td><td class="k">文件</td><td>文档名称（默认 <code>{库名}数据库设计文档</code>）+ 输出路径 + 浏览。</td><td>含 <code>\ / : * ? " &lt; &gt; |</code> → 就地报错。</td><td class="mono">TxtFileName / TxtPath</td></tr>
+          <tr><td>5</td><td class="k">导出</td><td>左侧版式预览（随格式切换），右侧摘要 + 进度 + 开始导出。</td><td>导出中禁用关闭；完成后「打开输出文件夹」可用。</td><td class="mono">ExportLoading + 进度回调</td></tr>
+        </tbody>
+      </table>
+
+      <div style="height:var(--sp-5)"></div>
+
+      <table class="spec-table">
+        <caption>格式能力矩阵（对齐 SmartSQL：Excel / Word / HTML 只导表）</caption>
+        <thead><tr><th style="width:8%">格式</th><th style="width:8%">扩展名</th><th style="width:46%">输出内容</th><th style="width:38%">版式关键参数</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Word</td><td class="mono">.docx</td><td>标题页 · 修订日志 · 目录（TOC 1–3 级）· 每表一节（分页）</td><td class="mono">宋体 9pt / 行高 22 / 表头 #e7e6e6 / 列宽 8·20·12·8·8·8·8·10·30% / 页眉右对齐</td></tr>
+          <tr><td class="k">PDF</td><td class="mono">.pdf</td><td>标题 + 库名副题 · 1 修订日志 · 2 目录 · 3 表 · 视图 · 存储过程</td><td class="mono">表宽 520pt / 9 列 40·90·60·40·40·40·40·70·100 / 表头 #D3D3D3 / 0.5pt 黑框</td></tr>
+          <tr><td class="k">HTML</td><td class="mono">.html</td><td>标题 · 库信息 · 目录表 · 锚点跳转 · 每表一张列清单</td><td class="mono">850px / verdana 12px / 150% / table #ccc + cellspacing 1 / thead #eee / 链接 #015fb6</td></tr>
+          <tr><td class="k">Markdown</td><td class="mono">.md</td><td>📚 目录 · 📒 表结构 · 📰 视图 · 📜 存储过程（sql 代码围栏）</td><td class="mono">表头 序号 / 表名 / 表说明；对齐 :---: 与 :---</td></tr>
+          <tr><td class="k">Excel</td><td class="mono">.xlsx</td><td>sheet 修订日志 · 目录 · 表（可切「每表一个 sheet」）</td><td class="mono">表名行 #f2f2f2 合并 / 10pt 粗体 / thin 边框 / 列宽 10·35·15·10·10·10·10·10·35</td></tr>
+        </tbody>
+      </table>
+
+      <div style="height:var(--sp-5)"></div>
+
+      <div class="spec-grid">
+        <div class="spec-block">
+          <h4>命名与文案（对齐 SmartSQL 模板）</h4>
+          <div class="pad">
+            <table class="spec-table">
+              <tbody>
+                <tr><td class="k" style="width:104px">默认文件名</td><td class="mono">{库名}数据库设计文档</td></tr>
+                <tr><td class="k">非法字符</td><td class="mono">\ / : * ? " &lt; &gt; |</td></tr>
+                <tr><td class="k">章节名</td><td>修订日志 · 目录 · 表</td></tr>
+                <tr><td class="k">表节标题</td><td class="mono">3.{序号}. {表名} {注释}</td></tr>
+                <tr><td class="k">进度</td><td>正在生成文档：{对象名}　{build} / {total}（建议文案）</td></tr>
+                <tr><td class="k">完成</td><td>导出成功.</td></tr>
+                <tr><td class="k">失败</td><td>导出失败，原因：{message}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="spec-block">
+          <h4>实现映射（本仓库落点）</h4>
+          <div class="pad">
+            <table class="spec-table">
+              <tbody>
+                <tr><td class="k" style="width:96px">对话框</td><td><span class="mono">src/dialogs/DataDictionaryDialog.ts</span><br>复用 <span class="mono">Dialog</span> + <span class="mono">Wizard</span></td></tr>
+                <tr><td class="k">入口</td><td>建议在 <span class="mono">menu.ts</span> 的 <span class="mono">export</span> 下新增子项（待实现）；命令条 action id 复用</td></tr>
+                <tr><td class="k">元数据</td><td><span class="mono">objectDetails.ts / dbcatalog.ts</span></td></tr>
+                <tr><td class="k">渲染</td><td>Rust 侧按格式生成（docx / pdf / html / md / xlsx）</td></tr>
+                <tr><td class="k">样式</td><td>全部走本文件画板 C 的参数，不新增设计语言</td></tr>
+              </tbody>
+            </table>
+            <div class="cap-row" style="margin-top:10px">
+              <span class="cap-pill"><b>令牌</b> DESIGN.md v3</span>
+              <span class="cap-pill"><b>对话框</b> 940×640</span>
+              <span class="cap-pill"><b>步数</b> 5</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+<script>
+(function () {
+  var NL = String.fromCharCode(10);
+  var FENCE = String.fromCharCode(96, 96, 96);
+  var DB = { name: "navkit_demo", title: "navkit_demo数据库设计文档", ver: "v1.0.1", desc: "无" };
+
+  var T_USER = [
+    ["1","id","bigint","20","是","是","否","","主键ID"],
+    ["2","user_name","varchar","64","否","否","否","''","登录名"],
+    ["3","nick_name","varchar","64","否","否","是","","昵称"],
+    ["4","email","varchar","128","否","否","是","","邮箱"],
+    ["5","dept_id","bigint","20","否","否","是","","部门ID"],
+    ["6","status","tinyint","4","否","否","否","1","状态：0停用 1启用"],
+    ["7","created_at","datetime","0","否","否","否","CURRENT_TIMESTAMP","创建时间"],
+    ["8","updated_at","datetime","0","否","否","是","","更新时间"]
+  ];
+  var T_ROLE = [
+    ["1","id","bigint","20","是","是","否","","主键ID"],
+    ["2","role_code","varchar","64","否","否","否","","角色编码"],
+    ["3","role_name","varchar","64","否","否","否","","角色名"],
+    ["4","remark","varchar","255","否","否","是","","备注"]
+  ];
+  var T_LINK = [
+    ["1","user_id","bigint","20","是","否","否","","用户ID"],
+    ["2","role_id","bigint","20","是","否","否","","角色ID"]
+  ];
+  var TABLES = [
+    { order: "1", name: "sys_user", comment: "用户表", cols: T_USER },
+    { order: "2", name: "sys_role", comment: "角色表", cols: T_ROLE },
+    { order: "3", name: "sys_user_role", comment: "用户角色关联表", cols: T_LINK }
+  ];
+  var VIEWS = [{ order: "4", name: "v_user_role", comment: "用户角色视图",
+    sql: "SELECT u.id, u.user_name, r.role_code, r.role_name" + NL + "FROM sys_user u" + NL +
+         "  JOIN sys_user_role ur ON ur.user_id = u.id" + NL +
+         "  JOIN sys_role r ON r.id = ur.role_id" + NL + "WHERE u.status = 1;" }];
+  var PROCS = [{ order: "5", name: "sp_rebuild_stat", comment: "重建统计",
+    sql: "CREATE PROCEDURE sp_rebuild_stat()" + NL + "BEGIN" + NL +
+         "  DELETE FROM stat_daily WHERE stat_date < CURRENT_DATE;" + NL +
+         "  INSERT INTO stat_daily (stat_date, user_cnt)" + NL +
+         "    SELECT CURRENT_DATE, COUNT(1) FROM sys_user WHERE status = 1;" + NL + "END" }];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function repeated(s, n) { var a = [], i; for (i = 0; i < n; i++) a.push(s); return a.join(""); }
+
+  /* ------------------------------------------------------------ HTML */
+  function renderHtmlDoc() {
+    var h = [];
+    h.push('<div class="doc-html"><div class="wrap">');
+    h.push('<a name="index"></a>');
+    h.push('<h2>' + esc(DB.title) + '</h2>');
+    h.push('<div><b>数据库名：' + esc(DB.name) + '</b><br><b>文档版本：' + DB.ver + '</b><br><b>文档描述：' + esc(DB.desc) + '</b><br></div>');
+    h.push('<table cellspacing="1"><thead><tr><td style="width:40px">序号</td><td>表名</td><td>说明</td></tr></thead><tbody>');
+    var dir = TABLES;
+    dir.forEach(function (t) {
+      h.push('<tr><td class="tc">' + esc(t.order) + '</td><td><a href="#' + esc(t.name) + '">' + esc(t.name) + '</a></td><td>' + esc(t.comment) + '</td></tr>');
+    });
+    h.push('</tbody></table>');
+    TABLES.forEach(function (t) {
+      h.push('<a name="' + esc(t.name) + '"></a>');
+      h.push('<div class="mt"><a class="back" href="#index">返回目录</a><b>表名：' + esc(t.name) + '</b></div>');
+      h.push('<div>说明：' + esc(t.comment) + '</div><div>数据列：</div>');
+      h.push('<table cellspacing="1"><thead><tr><td style="width:40px">序号</td><td>列名</td><td>数据类型</td><td>长度</td><td>主键</td><td>自增</td><td>允许空值</td><td>默认值</td><td>说明</td></tr></thead><tbody>');
+      t.cols.forEach(function (c) {
+        h.push('<tr><td class="tc">' + c[0] + '</td><td>' + esc(c[1]) + '</td><td class="tc">' + esc(c[2]) + '</td><td class="tc">' + esc(c[3]) + '</td><td class="tc">' + c[4] + '</td><td class="tc">' + c[5] + '</td><td class="tc">' + c[6] + '</td><td class="tc">' + esc(c[7]) + '</td><td>' + esc(c[8]) + '</td></tr>');
+      });
+      h.push('</tbody></table>');
+    });
+    h.push('</div></div>');
+    return h.join("");
+  }
+
+  /* ------------------------------------------------------------ Word */
+  var W_COL = [8, 20, 12, 8, 8, 8, 8, 10, 30];
+  var W_HEAD = ["序号", "列名", "数据类型", "长度", "主键", "自增", "允许空", "默认值", "列说明"];
+  function wordTable(t) {
+    var h = ['<table class="wt"><colgroup>'];
+    W_COL.forEach(function (w) { h.push('<col style="width:' + w + '%">'); });
+    h.push('</colgroup><thead><tr>');
+    W_HEAD.forEach(function (x) { h.push('<th>' + x + '</th>'); });
+    h.push('</tr></thead><tbody>');
+    t.cols.forEach(function (c) {
+      h.push('<tr><td class="c">' + c[0] + '</td><td class="l">' + esc(c[1]) + '</td><td class="c">' + esc(c[2]) + '</td><td class="c">' + esc(c[3]) + '</td><td class="c">' + c[4] + '</td><td class="c">' + c[5] + '</td><td class="c">' + c[6] + '</td><td class="c">' + esc(c[7]) + '</td><td class="l">' + esc(c[8]) + '</td></tr>');
+    });
+    h.push('</tbody></table>');
+    return h.join("");
+  }
+  function renderWordDoc() {
+    var h = ['<div class="paper">'];
+    h.push('<div class="hdr">SmartSQL数据库文档工具</div>');
+    h.push('<h1>' + esc(DB.title) + '</h1>');
+    h.push('<div class="chapter">修订日志</div>');
+    h.push('<table class="wt"><thead><tr><th style="width:16%">版本号</th><th style="width:20%">修订日期</th><th style="width:32%">修订内容</th><th style="width:16%">修订人</th><th style="width:16%">审核人</th></tr></thead><tbody>');
+    for (var i = 0; i < 15; i++) h.push('<tr><td class="c">&nbsp;</td><td class="c"></td><td class="l"></td><td class="c"></td><td class="c"></td></tr>');
+    h.push('</tbody></table>');
+    h.push('<div class="chapter">目录</div>');
+    h.push('<div class="toc">');
+    h.push('<div><span>表</span><span class="dots"></span><span>3</span></div>');
+    TABLES.forEach(function (t, k) {
+      h.push('<div><span>3.' + (k + 1) + '. ' + esc(t.name) + ' ' + esc(t.comment) + '</span><span class="dots"></span><span>' + (k + 3) + '</span></div>');
+    });
+    h.push('</div>');
+    h.push('<div class="chapter">表</div>');
+    h.push('<div class="t3">3.1. sys_user 用户表</div>');
+    h.push(wordTable(TABLES[0]));
+    h.push('<div class="ftr">1 / 12</div>');
+    h.push('</div>');
+    return h.join("");
+  }
+
+  /* ------------------------------------------------------------ PDF */
+  var P_COL = [40, 90, 60, 40, 40, 40, 40, 70, 100];
+  var P_TOTAL = 520;
+  function pdfCols() {
+    return P_COL.map(function (w) { return '<col style="width:' + (w / P_TOTAL * 100).toFixed(3) + '%">'; }).join("");
+  }
+  function renderPdfDoc() {
+    var h = ['<div class="pdf-page">'];
+    h.push('<h1>' + esc(DB.title) + '</h1>');
+    h.push('<div class="sub">—— ' + esc(DB.name) + '</div>');
+    h.push('<div class="chap">1 修订日志</div>');
+    h.push('<table class="pt"><colgroup><col style="width:20%"><col style="width:22%"><col style="width:30%"><col style="width:14%"><col style="width:14%"></colgroup>');
+    h.push('<thead><tr><th>版本号</th><th>修订日期</th><th>修订内容</th><th>修订人</th><th>审核人</th></tr></thead><tbody>');
+    for (var i = 0; i < 6; i++) h.push('<tr><td class="c"></td><td class="c"></td><td class="l"></td><td class="c"></td><td class="c"></td></tr>');
+    h.push('</tbody></table>');
+    h.push('<div class="chap">2 目录</div>');
+    h.push('<table class="pt"><colgroup><col style="width:11.5%"><col style="width:44.2%"><col style="width:44.2%"></colgroup>');
+    h.push('<thead><tr><th>序号</th><th>表名</th><th>说明</th></tr></thead><tbody>');
+    TABLES.forEach(function (t) { h.push('<tr><td class="c">' + t.order + '</td><td class="l">' + esc(t.name) + '</td><td class="l">' + esc(t.comment) + '</td></tr>'); });
+    h.push('</tbody></table>');
+    h.push('<div class="chap">3 表</div>');
+    h.push('<div class="objname">sys_user 用户表</div>');
+    h.push('<table class="pt"><colgroup>' + pdfCols() + '</colgroup><thead><tr>');
+    h.push('<th>序号</th><th>列名</th><th>数据类型</th><th>长度</th><th>主键</th><th>自增</th><th>允许空</th><th>默认值</th><th>列说明</th>');
+    h.push('</tr></thead><tbody>');
+    T_USER.forEach(function (c) {
+      h.push('<tr><td class="c">' + c[0] + '</td><td class="l">' + esc(c[1]) + '</td><td class="c">' + esc(c[2]) + '</td><td class="c">' + esc(c[3]) + '</td><td class="c">' + c[4] + '</td><td class="c">' + c[5] + '</td><td class="c">' + c[6] + '</td><td class="c">' + esc(c[7]) + '</td><td class="l">' + esc(c[8]) + '</td></tr>');
+    });
+    h.push('</tbody></table>');
+    h.push('</div>');
+    return h.join("");
+  }
+
+  /* ------------------------------------------------------------ Markdown */
+  function mdSource() {
+    var L = [];
+    L.push("### 📚 数据库表目录");
+    L.push(" | 序号 | 表名 | 表说明 |");
+    L.push(" | :---: | :--- | :--- |");
+    TABLES.forEach(function (t) { L.push(" | " + t.order + " | [" + t.name + "](#" + t.name + ") | " + t.comment + " |"); });
+    VIEWS.forEach(function (v) { L.push(" | " + v.order + " | [" + v.name + "](#" + v.name + ") | " + v.comment + " |"); });
+    PROCS.forEach(function (p) { L.push(" | " + p.order + " | [" + p.name + "](#" + p.name + ") | " + p.comment + " |"); });
+    L.push("");
+    L.push("### 📒 表结构");
+    TABLES.forEach(function (t) {
+      L.push("#### 表名： " + t.name);
+      L.push("说明： " + t.comment);
+      L.push(" | 序号 | 列名 | 数据类型 | 长度 | 主键 | 自增 | 允许空 | 默认值 | 列说明 |");
+      L.push(" | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |");
+      t.cols.forEach(function (c) { L.push(" | " + c.join(" | ") + " |"); });
+      L.push("");
+    });
+    L.push("### 📰 视图");
+    VIEWS.forEach(function (v) {
+      L.push("#### 视图名： " + v.name);
+      L.push("说明： " + v.comment);
+      L.push(FENCE + " sql");
+      L.push(v.sql);
+      L.push(FENCE);
+      L.push("");
+    });
+    L.push("### 📜 存储过程");
+    PROCS.forEach(function (p) {
+      L.push("#### 存储过程名： " + p.name);
+      L.push("说明： " + p.comment);
+      L.push(FENCE + " sql");
+      L.push(p.sql);
+      L.push(FENCE);
+      L.push("");
+    });
+    return L.join(NL);
+  }
+  function renderMarkdownDoc() {
+    var src = mdSource();
+    var r = ['<div class="md-render">'];
+    r.push('<h3>📚 数据库表目录</h3>');
+    r.push('<table><thead><tr><th class="c">序号</th><th>表名</th><th>表说明</th></tr></thead><tbody>');
+    TABLES.concat(VIEWS).concat(PROCS).forEach(function (t) {
+      r.push('<tr><td class="c">' + t.order + '</td><td>' + esc(t.name) + '</td><td>' + esc(t.comment) + '</td></tr>');
+    });
+    r.push('</tbody></table>');
+    r.push('<h3>📒 表结构</h3>');
+    TABLES.forEach(function (t) {
+      r.push('<h4>表名： ' + esc(t.name) + '</h4>');
+      r.push('<p>说明： ' + esc(t.comment) + '</p>');
+      r.push('<table><thead><tr><th class="c">序号</th><th>列名</th><th class="c">数据类型</th><th class="c">长度</th><th class="c">主键</th><th class="c">自增</th><th class="c">允许空</th><th class="c">默认值</th><th>列说明</th></tr></thead><tbody>');
+      t.cols.forEach(function (c) {
+        r.push('<tr><td class="c">' + c[0] + '</td><td>' + esc(c[1]) + '</td><td class="c">' + esc(c[2]) + '</td><td class="c">' + esc(c[3]) + '</td><td class="c">' + c[4] + '</td><td class="c">' + c[5] + '</td><td class="c">' + c[6] + '</td><td class="c">' + esc(c[7]) + '</td><td>' + esc(c[8]) + '</td></tr>');
+      });
+      r.push('</tbody></table>');
+    });
+    r.push('<h3>📰 视图</h3>');
+    VIEWS.forEach(function (v) {
+      r.push('<h4>视图名： ' + esc(v.name) + '</h4><p>说明： ' + esc(v.comment) + '</p>');
+      r.push('<pre>' + esc(v.sql) + '</pre>');
+    });
+    r.push('<h3>📜 存储过程</h3>');
+    PROCS.forEach(function (p) {
+      r.push('<h4>存储过程名： ' + esc(p.name) + '</h4><p>说明： ' + esc(p.comment) + '</p>');
+      r.push('<pre>' + esc(p.sql) + '</pre>');
+    });
+    r.push('</div>');
+    return '<div class="md-frame"><div class="md-src">' + esc(src) + '</div>' + r.join("") + '</div>';
+  }
+
+  /* ------------------------------------------------------------ Excel */
+  var X_COL = [10, 35, 15, 10, 10, 10, 10, 10, 35];
+  function renderExcelDoc() {
+    var h = ['<div class="xl">'];
+    h.push('<div class="xl-ribbon"><span class="name">' + esc(DB.title) + '.xlsx</span><span>开始</span><span>插入</span><span>页面布局</span><span>数据</span><span>视图</span></div>');
+    h.push('<div class="xl-body"><table class="xl-grid" style="width:100%"><thead><tr><th class="rownum" style="width:30px"></th>');
+    var heads = ["A", "B", "C", "D", "E", "F", "G", "H", "I"];
+    var XW = [6, 21, 11, 7, 7, 7, 7, 12, 22];
+    heads.forEach(function (x, i) { h.push('<th style="width:' + XW[i] + '%">' + x + '</th>'); });
+    h.push('</tr></thead><tbody>');
+    h.push('<tr><td class="rownum">1</td><td class="tname" colspan="9">sys_user 用户表</td></tr>');
+    h.push('<tr><td class="rownum">2</td>');
+    ["序号", "列名", "数据类型", "长度", "主键", "自增", "允许空", "默认值", "列说明"].forEach(function (x) { h.push('<td class="hcell">' + x + '</td>'); });
+    h.push('</tr>');
+    T_USER.forEach(function (c, k) {
+      h.push('<tr><td class="rownum">' + (k + 3) + '</td>');
+      h.push('<td style="text-align:center">' + c[0] + '</td><td>' + esc(c[1]) + '</td><td style="text-align:center">' + esc(c[2]) + '</td><td style="text-align:center">' + esc(c[3]) + '</td><td style="text-align:center">' + c[4] + '</td><td style="text-align:center">' + c[5] + '</td><td style="text-align:center">' + c[6] + '</td><td style="text-align:center">' + esc(c[7]) + '</td><td>' + esc(c[8]) + '</td>');
+      h.push('</tr>');
+    });
+    h.push('<tr><td class="rownum">' + (T_USER.length + 3) + '</td><td colspan="9"></td></tr>');
+    h.push('</tbody></table></div>');
+    var tabs = XLS_MODE === "perTable"
+      ? '<div class="xl-sheets"><div class="xl-sheet">修订日志</div><div class="xl-sheet">目录</div><div class="xl-sheet on">sys_user</div><div class="xl-sheet">sys_role</div><div class="xl-sheet">sys_user_role</div></div>'
+      : '<div class="xl-sheets"><div class="xl-sheet">修订日志</div><div class="xl-sheet">目录</div><div class="xl-sheet on">表</div></div>';
+    h.push(tabs);
+    h.push('</div>');
+    return h.join("");
+  }
+
+  var RENDER = { html: renderHtmlDoc, word: renderWordDoc, pdf: renderPdfDoc, markdown: renderMarkdownDoc, excel: renderExcelDoc };
+
+  /* 画板 C 五联 */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-doc-fixed]"), function (el) {
+    var k = el.getAttribute("data-doc-fixed");
+    if (RENDER[k]) el.innerHTML = RENDER[k]();
+  });
+
+  /* ------------------------------------------------------------ 向导 */
+  var idx = 0, FMT = "markdown", XLS_MODE = "single", RUNNING = false, DONE = false;
+  var steps = Array.prototype.slice.call(document.querySelectorAll(".wizard-step"));
+  var lines = Array.prototype.slice.call(document.querySelectorAll(".wizard-step-line"));
+  var panels = Array.prototype.slice.call(document.querySelectorAll(".wizard-panel"));
+  var btnBack = document.getElementById("btnBack");
+  var btnNext = document.getElementById("btnNext");
+  var extInline = document.getElementById("extInline");
+  var pvName = document.getElementById("pvName");
+  var pvFmt = document.getElementById("pvFmt");
+  var previewStage = document.getElementById("previewStage");
+  var sumFmt = document.getElementById("sumFmt");
+  var sumSections = document.getElementById("sumSections");
+  var fmtNote = document.getElementById("fmtNote");
+  var chkView = document.getElementById("chkView");
+  var chkProc = document.getElementById("chkProc");
+  var pvFill = document.getElementById("pvFill");
+  var pvStage = document.getElementById("pvStage");
+  var pvCount = document.getElementById("pvCount");
+  var pvState = document.getElementById("pvState");
+  var pvStateText = document.getElementById("pvStateText");
+  var btnOpen = document.getElementById("btnOpen");
+  var excelOpt = document.getElementById("excelOpt");
+
+  var META = {
+    word: { label: "Word", ext: ".docx", tables: true },
+    pdf: { label: "PDF", ext: ".pdf", tables: false },
+    html: { label: "HTML", ext: ".html", tables: true },
+    markdown: { label: "Markdown", ext: ".md", tables: false },
+    excel: { label: "Excel", ext: ".xlsx", tables: true }
+  };
+
+  function dim(chk, on) {
+    var i = chk.querySelector("i");
+    chk.classList.toggle("dim", !on);
+    i.classList.toggle("on", on);
+  }
+
+  function syncFmt() {
+    var m = META[FMT];
+    Array.prototype.forEach.call(document.querySelectorAll(".fmt-card"), function (c) {
+      c.classList.toggle("on", c.getAttribute("data-fmt") === FMT);
+    });
+    if (extInline) extInline.textContent = m.ext;
+    if (pvName) pvName.textContent = DB.title + m.ext;
+    if (pvFmt) pvFmt.textContent = m.label;
+    if (sumFmt) sumFmt.textContent = m.label + "（" + m.ext + "）";
+    if (previewStage) {
+      previewStage.innerHTML = RENDER[FMT]();
+      previewStage.style.zoom = (FMT === "html" ? 0.72 : FMT === "word" ? 0.76 : FMT === "excel" ? 0.92 : 0.94);
+    }
+    if (excelOpt) excelOpt.hidden = FMT !== "excel";
+    dim(chkView, !m.tables);
+    dim(chkProc, !m.tables);
+    if (sumSections) {
+      if (FMT === "excel") sumSections.textContent = XLS_MODE === "perTable" ? "表 · 每表一个 sheet" : "表 · 汇总在「表」sheet";
+      else sumSections.textContent = m.tables ? "表（该格式仅导出表）" : "表 · 视图 · 存储过程";
+    }
+    if (fmtNote) {
+      var note = {
+        word: "当前格式：Word — 仅导出表；自动附带修订日志、目录（TOC 1–3 级）与页眉页脚。",
+        excel: "当前格式：Excel — 仅导出表；" + (XLS_MODE === "perTable" ? "修订日志 / 目录 + 每张表各一个 sheet。" : "修订日志 / 目录 / 表 三个 sheet，所有表汇总在「表」中。"),
+        html: "当前格式：HTML — 仅导出表；单文件内联样式，目录锚点可跳转。",
+        pdf: "当前格式：PDF — 表 / 视图 / 存储过程全部导出；章节编号 1 修订日志 · 2 目录 · 3 表。",
+        markdown: "当前格式：Markdown — 表 / 视图 / 存储过程全部导出，SQL 段落以 sql 代码围栏包裹。"
+      };
+      fmtNote.textContent = note[FMT];
+    }
+  }
+
+  function go(i) {
+    idx = Math.max(0, Math.min(4, i));
+    steps.forEach(function (s, k) {
+      s.classList.toggle("active", k === idx);
+      s.classList.toggle("done", k < idx);
+      var num = s.querySelector(".wizard-step-num");
+      if (k < idx) {
+        num.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.4 6.3 4.9 8.7 9.6 3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      } else {
+        num.textContent = String(k + 1);
+      }
+    });
+    lines.forEach(function (l, k) { l.classList.toggle("is-done", k < idx); });
+    panels.forEach(function (p, k) { p.hidden = k !== idx; });
+    btnBack.disabled = idx === 0;
+    if (idx === 4) {
+      btnNext.textContent = DONE ? "完成" : (RUNNING ? "导出中…" : "开始导出");
+      btnNext.disabled = RUNNING;
+    } else {
+      btnNext.textContent = "下一步";
+      btnNext.disabled = false;
+    }
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll(".fmt-card"), function (c) {
+    c.addEventListener("click", function () { FMT = c.getAttribute("data-fmt"); syncFmt(); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="xlMode"]'), function (r) {
+    r.addEventListener("change", function () { if (r.checked) { XLS_MODE = r.value; if (FMT === "excel") syncFmt(); } });
+  });
+  Array.prototype.forEach.call(steps, function (s, k) {
+    s.addEventListener("click", function () { if (k < idx && !RUNNING) go(k); });
+  });
+  btnBack.addEventListener("click", function () { if (!RUNNING) go(idx - 1); });
+  btnNext.addEventListener("click", function () {
+    if (RUNNING) return;
+    if (idx < 4) { go(idx + 1); return; }
+    if (DONE) return;
+    runExport();
+  });
+
+  var OBJS = ["sys_user", "sys_role", "sys_user_role", "v_user_role", "sp_rebuild_stat"];
+  function runExport() {
+    RUNNING = true;
+    btnNext.textContent = "导出中…";
+    btnNext.disabled = true;
+    pvState.classList.remove("done");
+    pvStateText.textContent = "正在生成文档…";
+    var build = 0, total = OBJS.length;
+    var timer = setInterval(function () {
+      build++;
+      var pct = Math.min(100, (build + total) / (total * 2) * 100);
+      pvFill.style.width = pct.toFixed(1) + "%";
+      pvStage.textContent = build < total ? "正在生成文档：" + OBJS[build - 1] : "文档生成完毕";
+      pvCount.textContent = build + " / " + total;
+      if (build >= total) {
+        clearInterval(timer);
+        RUNNING = false;
+        DONE = true;
+        pvFill.style.width = "100%";
+        pvState.classList.add("done");
+        pvStateText.textContent = "导出成功.";
+        btnOpen.disabled = false;
+        btnNext.textContent = "完成";
+        btnNext.disabled = false;
+      }
+    }, 520);
+  }
+
+  var hash = String(location.hash || "");
+  var combo = hash.match(/^#step([1-5])(?:-(word|pdf|html|markdown|excel))?$/);
+  var fm = hash.match(/^#fmt-(word|pdf|html|markdown|excel)$/);
+  if (combo && combo[2]) FMT = combo[2];
+  if (fm) FMT = fm[1];
+  go(combo ? (Number(combo[1]) - 1) : 0);
+  syncFmt();
+  if (combo || fm) document.body.classList.add("focus-b");
+  if (hash === "#doc") document.body.classList.add("focus-c");
+  if (hash === "#spec") document.body.classList.add("focus-s");
+})();
+</script>
+</body>
+</html>

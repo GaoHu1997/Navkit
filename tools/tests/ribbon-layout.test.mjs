@@ -13,7 +13,8 @@ test("顶部查询、备份紧随函数，其它与图表不展示", () => {
   assert.deepEqual(ids.slice(ids.indexOf("open-function"), ids.indexOf("open-function") + 3), ["open-function", "open-query", "backup"]);
   assert(!ids.includes("open-other"));
   assert(!ids.includes("chart"));
-  assert(ids.includes("open-user") && ids.includes("schedule") && ids.includes("model"));
+  assert(ids.includes("open-user") && ids.includes("schedule"));
+  assert(!ids.includes("model"), "顶部命令条不再提供模型入口");
 });
 
 test("连接按钮不带展开箭头，点击直接创建连接", () => {

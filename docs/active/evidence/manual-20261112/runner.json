@@ -1,0 +1,25 @@
+{
+  "label": "manual-20261112",
+  "root": "D:\\github\\tauri-navicat",
+  "evidence": "D:\\github\\tauri-navicat\\docs\\active\\evidence\\manual-20261112",
+  "runtime": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-manual-20261112-Nj5ywA",
+  "port": 9235,
+  "started": "2026-11-11T21:55:47.216Z",
+  "steps": [
+    {
+      "label": "manual-tests",
+      "code": 0
+    },
+    {
+      "label": "mysql-cleanup",
+      "status": "PASS"
+    },
+    {
+      "label": "runtime-cleanup",
+      "status": "PASS"
+    }
+  ],
+  "appPid": 40840,
+  "testExit": 0,
+  "finished": "2026-11-11T21:59:47.397Z"
+}

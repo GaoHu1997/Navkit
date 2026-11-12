@@ -48,8 +48,7 @@ export const ICON_USER: IconDef = pictDef("用户");
 export const ICON_OTHER: IconDef = pictDef("其它");
 export const ICON_QUERY: IconDef = pictDef("查询");
 export const ICON_BACKUP: IconDef = pictDef("备份");
-export const ICON_SCHEDULE: IconDef = pictDef("自动运行");
-export const ICON_MODEL: IconDef = pictDef("模型");
+export const ICON_SCHEDULE: IconDef = pictDef("自动任务");
 export const ICON_CHART: IconDef = pictDef("图表");
 
 /* ------------------------------------------------------------------ */
@@ -204,30 +203,51 @@ export const ICON_TRIGGER_MINI: IconDef = {
   w: 16,
   h: 16,
   body: `
-  <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="3" fill="#FBDCEB"/>
+  <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="3" fill="#FBDCEB" stroke="#DD4B93" stroke-width="1.2"/>
   <path d="M9.3 3.2 L4.7 8.9 h2.9 l-.9 4.3 4.6 -5.8 H8.4 Z" fill="#DD4B93"/>
 `,
 };
 
-/** 字段（石墨竖条卡）。 */
+/** 字段（蓝色三行字段条，扁平双色；去掉内层卡片边框，16px 下仍清晰）。 */
 export const ICON_COLUMN_MINI: IconDef = {
   w: 16,
   h: 16,
   body: `
-  <rect x="4.6" y="1.6" width="6.8" height="12.8" rx="1.8" fill="#E1E6EE" stroke="#64748B" stroke-width="1.3"/>
-  <path d="M4.6 4.8 h6.8" stroke="#64748B" stroke-width="1.2"/>
-  <path d="M6.4 8.2 h3.2 M6.4 10.8 h3.2" stroke="#64748B" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+  <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="3" fill="#DCE9FB" stroke="#3E7BD6" stroke-width="1.2"/>
+  <path d="M4.3 4.6h7.4" stroke="#3E7BD6" stroke-width="1.7" stroke-linecap="round"/>
+  <path d="M4.3 7.8h7.4" stroke="#7FA8E0" stroke-width="1.35" stroke-linecap="round"/>
+  <path d="M4.3 11h5" stroke="#7FA8E0" stroke-width="1.35" stroke-linecap="round"/>
 `,
 };
 
-/** 索引（石墨列表）。 */
+/** 索引（青绿排序列表，与彩色家族搭配）。 */
 export const ICON_INDEX_MINI: IconDef = {
   w: 16,
   h: 16,
   body: `
-  <rect x="2.2" y="1.8" width="11.6" height="12.4" rx="2" fill="#E1E6EE" stroke="#64748B" stroke-width="1.3"/>
-  <path d="M5 5.4 h6 M5 8 h6 M5 10.6 h3.8" stroke="#64748B" stroke-width="1.2" stroke-linecap="round"/>
+  <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="3" fill="#D9F2EF" stroke="#1F9C92" stroke-width="1.2"/>
+  <path d="M4.6 5.4 h6.8 M4.6 8.2 h6.8 M4.6 11 h4.2" fill="none" stroke="#1F9C92" stroke-width="1.2" stroke-linecap="round"/>
 `,
+};
+
+/** 主键（琥珀钥匙小图，字段列表中与普通字段区分）。 */
+export const ICON_PK_MINI: IconDef = {
+  w: 16,
+  h: 16,
+  body: `
+  <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="3" fill="#FAEDD4"/>
+  <g fill="none" stroke="#C08327" stroke-width="1.4" stroke-linecap="round">
+    <circle cx="5.6" cy="8" r="2.6"/>
+    <path d="M8.2 8 h5.2 M11.4 8 v2.2 M13.4 8 v1.8"/>
+  </g>
+`,
+};
+
+/** 设置（齿轮，currentColor）。 */
+export const ICON_TITLEBAR_GEAR: IconDef = {
+  w: 24,
+  h: 24,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="2.8"/><path d="M12 3.6v2.2M12 18.2v2.2M4.6 12h2.2M17.2 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"/></g>`,
 };
 
 /** 外键（橙钥匙）。 */
@@ -235,9 +255,10 @@ export const ICON_FK_MINI: IconDef = {
   w: 16,
   h: 16,
   body: `
-  <g fill="none" stroke="#E8862E" stroke-width="1.5" stroke-linecap="round">
-    <circle cx="5" cy="8" r="3.1"/>
-    <path d="M8.1 8 h6 M11.7 8 v2.6 M14.1 8 v2"/>
+  <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="3" fill="#FCE8D5" stroke="#E8862E" stroke-width="1.2"/>
+  <g fill="none" stroke="#E8862E" stroke-width="1.2" stroke-linecap="round">
+    <circle cx="5.6" cy="8" r="2.5"/>
+    <path d="M8.1 8 h4.8 M10.8 8 v2.2 M12.9 8 v1.8"/>
   </g>
 `,
 };
@@ -803,7 +824,9 @@ const NAME_MAP: Record<string, IconDef> = {
   trigger: ICON_TRIGGER_MINI,
   info_pane_column: ICON_COLUMN_MINI,
   info_pane_index: ICON_INDEX_MINI,
+  info_pane_pk: ICON_PK_MINI,
   info_pane_fk: ICON_FK_MINI,
+  settings_gear: ICON_TITLEBAR_GEAR,
   // 标签页 / 菜单
   editor: ICON_DOC_TEXT,
   columns: ICON_COLUMNS_GRID,
@@ -811,6 +834,7 @@ const NAME_MAP: Record<string, IconDef> = {
   msg_error: ICON_MSG_ERROR,
   // 标签工具栏：数据页
   dbn_applyupdates: ICON_DB_TX,
+  dbn_cancel: ICON_CROSS,
   data_filter: ICON_FUNNEL,
   tab_sort: ICON_SORT,
   data_transfer_ent_preview_image: ICON_IMPORT_GREEN,
@@ -823,6 +847,7 @@ const NAME_MAP: Record<string, IconDef> = {
   query_pin_ent_preview_image: ICON_PARENS,
   // 标签工具栏：设计器
   dbn_insert: ICON_PLUS_GREEN_SM,
+  insert_field: ICON_INSERT_LEFT,
   dbn_delete: ICON_MINUS_RED,
   dbn_edit: ICON_KEY_GOLD,
   dbn_prior: ICON_ARROW_UP,
@@ -967,8 +992,7 @@ const PICT_TREE_LABELS: Record<string, string> = {
   other: "其它",
   query: "查询",
   backup: "备份",
-  schedule: "自动运行",
-  model: "模型",
+  schedule: "自动任务",
   chart: "图表",
 };
 
@@ -1096,11 +1120,11 @@ export const ICON_TITLEBAR_SEARCH: IconDef = {
   body: `<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="5.6"/><path d="M15 15l4.4 4.4"/></g>`,
 };
 
-/** 标题栏设置（齿轮，currentColor）。 */
-export const ICON_TITLEBAR_GEAR: IconDef = {
+/** 标题栏后台任务（队列清单，currentColor）。 */
+export const ICON_TITLEBAR_TASKS: IconDef = {
   w: 24,
   h: 24,
-  body: `<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="2.8"/><path d="M12 3.6v2.2M12 18.2v2.2M4.6 12h2.2M17.2 12h2.2M6.7 6.7l1.6 1.6M15.7 15.7l1.6 1.6M17.3 6.7l-1.6 1.6M8.3 15.7l-1.6 1.6"/></g>`,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4.2" y="4.6" width="15.6" height="14.8" rx="2.2"/><path d="M8 9.2h8M8 12h8M8 14.8h5"/></g>`,
 };
 
 /* ------------------------------------------------------------------ */
@@ -1149,6 +1173,13 @@ for (const k of DB_KINDS) {
   }
 }
 
+/** 视图切换：表单（卡片 + 两行字段）。 */
+export const ICON_FORM_VIEW: IconDef = {
+  w: 16,
+  h: 16,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.6" y="1.9" width="12.8" height="12.2" rx="1.6"/><path d="M4.2 6h2.6M8.6 6h3M4.2 10h2.6M8.6 10h3"/></g>`,
+};
+
 /** 视图切换：网格。 */
 export const ICON_GRID_VIEW: IconDef = {
   w: 16,
@@ -1164,7 +1195,7 @@ export const ICON_LIST_VIEW: IconDef = {
 };
 
 /* ------------------------------------------------------------------ */
-/* 视图操作（模型页：适应窗口 / 放大 / 缩小 / 刷新）                       */
+/* 视图操作（适应窗口 / 放大 / 缩小 / 刷新）                               */
 /* ------------------------------------------------------------------ */
 
 /** 适应窗口：四角外扩箭头（currentColor）。 */
@@ -1201,10 +1232,46 @@ export const ICON_ZOOM_OUT: IconDef = {
   </g>`,
 };
 
-/* 模型页 / 通用图标名补充进 NAME_MAP（此前 full_screen / bb_zoom_in / dbn_refresh
+/* 通用图标名补充进 NAME_MAP（此前 full_screen / bb_zoom_in / dbn_refresh
    未注册，全部退化为灰色数据库图标——见设计规范 §5.1「未知名称回退」）。 */
 NAME_MAP.full_screen = ICON_FIT_WINDOW;
 NAME_MAP.bb_zoom_in = ICON_ZOOM_IN;
 NAME_MAP.bb_zoom_out = ICON_ZOOM_OUT;
 NAME_MAP.dbn_refresh = ICON_REFRESH;
+
+/* ------------------------------------------------------------------ */
+/* 文本显示格式（文本 / 十六进制 / 图像 / 网页）                          */
+/* 「文本▼」工具栏按钮按当前格式切换图标，让选中状态在按钮上可见。          */
+/* ------------------------------------------------------------------ */
+
+/** 文本格式：三行文本 + 光标。 */
+NAME_MAP.text_format_text = {
+  w: 16, h: 16,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.6 4.2h10.8M2.6 8h10.8M2.6 11.8h6.6"/><path d="M11.4 10.6v3.2" stroke-width="1.8"/></g>`,
+};
+
+/** 十六进制格式：方框内 "0F"。 */
+NAME_MAP.text_format_hex = {
+  w: 16, h: 16,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="2.6" width="12.4" height="10.8" rx="1.6"/><path d="M6 6.2 4.4 8l1.6 1.8M10 6.2 11.6 8 10 9.8"/></g>`,
+};
+
+/** 图像格式：相框 + 山与太阳。 */
+NAME_MAP.text_format_image = {
+  w: 16, h: 16,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6"/><circle cx="5.6" cy="6.4" r="1.2"/><path d="M2.4 11.6 6.6 7.8l2.6 2.4 1.8-1.6 2.6 3"/></g>`,
+};
+
+/** 电源（关机）符号：断开会话等终止型操作的图标。 */
+export const ICON_POWER: IconDef = {
+  w: 16, h: 16,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 2.4v5.2"/><path d="M4.6 4.4a5.2 5.2 0 1 0 6.8 0"/></g>`,
+};
+NAME_MAP.power = ICON_POWER;
+
+/** 网页格式：地球经纬。 */
+NAME_MAP.text_format_web = {
+  w: 16, h: 16,
+  body: `<g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="5.8"/><path d="M2.2 8h11.6M8 2.2c2.6 2.4 2.6 9.2 0 11.6-2.6-2.4-2.6-9.2 0-11.6Z"/></g>`,
+};
 NAME_MAP.info_pane_backup = ICON_BACKUP_MINI;

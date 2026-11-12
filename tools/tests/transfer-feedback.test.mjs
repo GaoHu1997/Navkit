@@ -55,7 +55,7 @@ function harness() {
   let intervalId = 0;
   let uuid = 0;
   let onClose;
-  const document = { createElement: tag => new Element(tag) };
+  const document = { addEventListener() {}, removeEventListener() {}, createElement: tag => new Element(tag) };
   const body = new Element();
   const footer = new Element();
   const control = new Element('input');
@@ -162,7 +162,7 @@ test('begin invalidates an old response without overwriting or stopping the new 
   assert.equal(currentPoll.request.taskId, newId);
   currentPoll.request.resolve(response(newId, { message: '新任务写入中', processed: 2, total: 6 }));
   await currentPoll.pending;
-  assert.equal(h.status.textContent, '新任务写入中\n2 / 6 行');
+  assert.equal(h.status.textContent, '新任务写入中\n2 / 6 行 · 33%');
   assert.equal(h.progress.value, 2);
   assert.equal(h.progress.max, 6);
   h.feedback.finish();
@@ -184,7 +184,7 @@ test('finish followed by begin isolates an old rejection and allows the new task
   assert.equal(currentPoll.request.taskId, newId);
   currentPoll.request.resolve(response(newId, { status: 'completed', message: '新任务完成', processed: 4 }));
   await currentPoll.pending;
-  assert.equal(h.status.textContent, '新任务完成\n4 / 4 行');
+  assert.equal(h.status.textContent, '新任务完成\n4 / 4 行 · 100%');
   assert.equal(h.intervals.size, 0);
   h.feedback.finish();
 });

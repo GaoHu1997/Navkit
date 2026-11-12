@@ -144,14 +144,26 @@ impl OdbcDb {
 
     /// 执行查询，返回列名 + 文本化数据行。
     pub async fn query_rows(&self, sql: &str) -> Result<OdbcResult> {
+        let mut sql_history=crate::sql_history::Guard::new(sql,Vec::new());
+        let result: Result<OdbcResult> = async {
         let sql = sql.to_string();
         blocking!(self.conn, |conn: &Connection<'static>| query_blocking(conn, &sql))
+    
+        }.await;
+        sql_history.result(&result,|r|r.rows.len() as i64);
+        result
     }
 
     /// 执行语句，返回影响行数（部分驱动不提供精确行数，返回 0）。
     pub async fn execute(&self, sql: &str) -> Result<u64> {
+        let mut sql_history=crate::sql_history::Guard::new(sql,Vec::new());
+        let result: Result<u64> = async {
         let sql = sql.to_string();
         blocking!(self.conn, |conn: &Connection<'static>| exec_blocking(conn, &sql))
+    
+        }.await;
+        sql_history.result(&result,|n|*n as i64);
+        result
     }
 
     /// 查询单值。

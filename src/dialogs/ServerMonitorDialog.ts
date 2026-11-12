@@ -1,65 +1,60 @@
-/** 数据库监控：真实只读状态采样 + 会话/正在执行的 SQL 清单与结束会话；所有数据来自本次实际采样。 */
+/** 数据库监控：选择连接后仅采样当前会话，SQL 随会话行展示，不保留已完成的语句。 */
 import { api } from "../core/api";
 import { DB_KINDS } from "../core/dbcatalog";
-import type { ConnectionConfig, ProcessInfo, ResultSet, ServerInfo } from "../core/types";
-import { Dialog, numberInput, select, field } from "../ui/Dialog";
-import { accessibleToolDialog, toolButton, toolTable } from "./toolDialog";
+import type { ConnectionConfig, ProcessInfo } from "../core/types";
+import { Dialog, numberInput, select } from "../ui/Dialog";
+import { ICON_REFRESH, iconSvgByName, svg } from "../ui/icons";
+import { accessibleToolDialog, toolButton } from "./toolDialog";
+import "../styles/server-monitor-dialog.css";
 
-export type MonitorApi = Pick<typeof api, "serverInfo" | "executeSql" | "listDbProcesses" | "killDbProcess">;
+export type MonitorApi = Pick<typeof api, "listDbProcesses" | "killDbProcess"> &
+  Partial<Pick<typeof api, "ensureConnection">>;
 export interface MonitorSnapshot {
+  connectionId: string;
   capturedAt: string;
   elapsedMs: number;
-  server: ServerInfo | null;
-  metrics: ResultSet[];
-  errors: string[];
-  /** 会话清单；不支持会话的数据源为 null（processError 说明原因）。 */
   processes: ProcessInfo[] | null;
   processError: string | null;
 }
-export function monitorQuery(kind: string): string | null {
-  switch (DB_KINDS.find(k => k.id === kind)?.protocol) {
-    case "mysql": return "SHOW GLOBAL STATUS WHERE Variable_name IN ('Uptime','Threads_connected','Threads_running','Questions','Slow_queries','Bytes_received','Bytes_sent','Connections','Aborted_connects')";
-    case "postgres": return "SELECT datname, numbackends, xact_commit, xact_rollback, blks_read, blks_hit, tup_returned, tup_fetched, tup_inserted, tup_updated, tup_deleted, deadlocks FROM pg_stat_database WHERE datname = current_database()";
-    case "sqlite": return "SELECT sqlite_version() AS version, (SELECT page_count FROM pragma_page_count) AS page_count, (SELECT page_size FROM pragma_page_size) AS page_size, (SELECT freelist_count FROM pragma_freelist_count) AS free_pages, (SELECT journal_mode FROM pragma_journal_mode) AS journal_mode, (SELECT encoding FROM pragma_encoding) AS encoding";
-    case "mssql": return "SELECT @@VERSION AS version, @@CONNECTIONS AS total_connections, @@CPU_BUSY AS cpu_busy_ticks, @@IO_BUSY AS io_busy_ticks, @@IDLE AS idle_ticks";
-    case "clickhouse": return "SELECT metric, value, description FROM system.metrics ORDER BY metric LIMIT 100";
-    default: return null;
-  }
-}
-/** 该数据源是否有服务器会话概念（数据库监控会话页）。 */
+
 export function supportsProcessList(kind: string): boolean {
   const protocol = DB_KINDS.find(k => k.id === kind)?.protocol;
-  return protocol === "mysql" || protocol === "postgres" || protocol === "mssql" || protocol === "clickhouse" || protocol === "odbc";
+  return ["mysql", "postgres", "mssql", "clickhouse", "odbc"].includes(protocol ?? "");
 }
-export async function sampleServerMonitor(connection: ConnectionConfig, protocolMetrics = true, source: MonitorApi = api): Promise<MonitorSnapshot> {
+
+/** PostgreSQL 会返回空闲连接的上一条 query；等待锁的活动查询则不能误判成空闲。 */
+export function currentProcessSql(process: ProcessInfo): string {
+  const inactive = /^(?:sleep(?:ing)?|idle(?:\b|[（(])|dormant|awaiting\s+command|空闲|事务中空闲)/i;
+  if (!process.sql?.trim() || inactive.test(process.command.trim()) || inactive.test(process.state.trim())) return "";
+  return process.sql;
+}
+
+/** 不请求服务器基本信息、协议指标或 executeSql，也不依赖已选中的数据库。 */
+export async function sampleServerMonitor(connection: ConnectionConfig, source: MonitorApi = api): Promise<MonitorSnapshot> {
   const started = performance.now();
-  const snapshot: MonitorSnapshot = { capturedAt: new Date().toISOString(), elapsedMs: 0, server: null, metrics: [], errors: [], processes: null, processError: null };
-  const query = protocolMetrics ? monitorQuery(connection.kind) : null;
-  const jobs: Promise<void>[] = [source.serverInfo(connection.id).then(info => {
-    snapshot.server = info;
-    if (!info.version) snapshot.errors.push("服务器未提供版本，基本信息不完整");
-  }).catch(e => { snapshot.errors.push(`基本信息：${e instanceof Error ? e.message : String(e)}`); })];
-  if (query) jobs.push(source.executeSql(connection.id, query, undefined, undefined, "monitor").then(result => {
-    snapshot.metrics = result.sets.filter(s => s.ok && s.has_rows);
-    for (const set of result.sets.filter(s => !s.ok)) snapshot.errors.push(set.message || "协议状态查询失败");
-    if (!snapshot.metrics.length && !result.sets.some(s => !s.ok)) snapshot.errors.push("协议状态查询没有返回指标");
-  }).catch(e => { snapshot.errors.push(`协议状态：${e instanceof Error ? e.message : String(e)}`); }));
-  if (typeof source.listDbProcesses === "function") {
-    if (supportsProcessList(connection.kind)) {
-      jobs.push(source.listDbProcesses(connection.id).then(processes => { snapshot.processes = processes; })
-        .catch(e => { snapshot.processError = e instanceof Error ? e.message : String(e); }));
-    } else {
-      snapshot.processError = "该数据源没有服务器会话概念（SQLite 为嵌入式数据库）";
-    }
+  const snapshot: MonitorSnapshot = {
+    connectionId: connection.id, capturedAt: new Date().toISOString(), elapsedMs: 0,
+    processes: null, processError: null,
+  };
+  if (!supportsProcessList(connection.kind)) {
+    snapshot.processError = "该数据源不支持服务器会话监控，请选择其他连接。";
   } else {
-    snapshot.processError = "当前环境未提供会话查询接口";
+    try {
+      const processes = await source.listDbProcesses(connection.id);
+      snapshot.processes = processes.map(process => {
+        const sql = currentProcessSql(process);
+        return { ...process, sql, elapsed_secs: sql ? process.elapsed_secs : null };
+      });
+    } catch (error) {
+      snapshot.processError = error instanceof Error ? error.message : String(error);
+    }
   }
-  await Promise.all(jobs); snapshot.elapsedMs = Math.round(performance.now() - started);
+  snapshot.elapsedMs = Math.round(performance.now() - started);
   snapshot.capturedAt = new Date().toISOString();
   return snapshot;
 }
 
-/** 非重叠刷新控制器：停止/关闭会使已发出的响应失效；不宣称终止已提交的后端查询。 */
+/** 非重叠轮询：停止/切换/关闭使旧响应失效，不宣称取消已提交的服务器查询。 */
 export class ServerMonitorController {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private version = 0;
@@ -78,7 +73,10 @@ export class ServerMonitorController {
       const result = await this.sample();
       if (!this.disposed && version === this.version) this.receive(result);
     } catch (error) {
-      if (!this.disposed && version === this.version) this.receive({ capturedAt: new Date().toISOString(), elapsedMs: 0, server: null, metrics: [], errors: [error instanceof Error ? error.message : String(error)], processes: null, processError: null });
+      if (!this.disposed && version === this.version) this.receive({
+        connectionId: "", capturedAt: new Date().toISOString(), elapsedMs: 0, processes: null,
+        processError: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       this.busy = false;
       if (!this.disposed && this.queued) { this.queued = false; void this.refresh(); }
@@ -86,7 +84,8 @@ export class ServerMonitorController {
     }
   }
   start(seconds: number): void {
-    this.stop(); this.interval = Math.max(2, Math.min(300, seconds)) * 1000;
+    this.stop();
+    this.interval = Math.max(2, Math.min(300, Number.isFinite(seconds) ? seconds : 5)) * 1000;
     void this.refresh();
   }
   stop(): void {
@@ -101,152 +100,272 @@ export class ServerMonitorController {
   }
 }
 
-export function openServerMonitorDialog(connection: ConnectionConfig, source: MonitorApi = api): Dialog {
+export function openServerMonitorDialog(
+  connections: readonly ConnectionConfig[],
+  initialConnection?: ConnectionConfig,
+  source: MonitorApi = api,
+  ensureConnection?: (id: string) => Promise<void>,
+): Dialog {
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const protocol = select([{ value: "status", label: "基本信息 + 协议状态（只读）" }, { value: "basic", label: "仅基本信息" }], "status", 260);
-  if (!monitorQuery(connection.kind)) protocol.value = "basic";
-  protocol.setAttribute("aria-label", "监控内容");
-  const interval = numberInput(5, 80); interval.min = "2"; interval.max = "300"; interval.step = "1";
-  interval.setAttribute("aria-label", "自动刷新间隔（秒）");
-  const refresh = toolButton("立即刷新"), start = toolButton("开始自动刷新"), stop = toolButton("停止"); stop.disabled = true;
-  const status = document.createElement("div"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
-  status.style.cssText = "min-height:24px;margin:8px 0;color:var(--fg-muted);";
-  const content = document.createElement("div"); content.style.cssText = "height:320px;overflow:auto;border:1px solid var(--border);";
-  const sessionContent = document.createElement("div"); sessionContent.style.cssText = "height:360px;overflow:auto;border:1px solid var(--border);";
-  const sessionStatus = document.createElement("div"); sessionStatus.setAttribute("role", "status"); sessionStatus.setAttribute("aria-live", "polite");
-  sessionStatus.style.cssText = "min-height:24px;margin:8px 0;color:var(--fg-muted);white-space:pre-wrap;";
-  let closed = false;
-  const canKill = !connection.read_only;
-  const renderOverview = (snap: MonitorSnapshot) => {
-    refresh.disabled = false; content.setAttribute("aria-busy", "false"); content.replaceChildren();
-    const rows: (string | null)[][] = [];
-    const info = snap.server;
-    if (info) {
-      for (const [key, value] of [["产品", info.product], ["版本", info.version], ["主机", info.host], ["端口", info.port ? String(info.port) : ""], ["字符集", DB_KINDS.find(k => k.id === connection.kind)?.protocol === "sqlite" ? "" : info.charset], ["排序规则", info.collation], ["运行时间", info.uptime ?? ""]]) if (value) rows.push([key, value]);
-      rows.push(...info.extra.filter(([,value]) => value));
-    }
-    if (rows.length) content.appendChild(toolTable(["服务器信息", "值"], rows));
-    for (const set of snap.metrics) content.appendChild(toolTable(set.columns.map(c => c.name), set.rows));
-    if (!rows.length && !snap.metrics.length) content.textContent = "未取得服务器状态；请检查连接与权限后重试。";
-    status.textContent = `采样 ${new Date(snap.capturedAt).toLocaleTimeString()} · ${snap.elapsedMs} ms${snap.errors.length ? ` · ${snap.errors.join("；")}` : " · 成功"}`;
-    status.setAttribute("role", snap.errors.length ? "alert" : "status");
+  const prefix = `server-monitor-${crypto.randomUUID()}`;
+  const connectionSelect = select([
+    { value: "", label: "请选择连接…" },
+    ...connections.map(connection => ({
+      value: connection.id,
+      label: `${connection.name} · ${DB_KINDS.find(kind => kind.id === connection.kind)?.label ?? connection.kind}${connection.read_only ? " · 只读" : ""}`,
+    })),
+  ], connections.some(connection => connection.id === initialConnection?.id) ? initialConnection!.id : "");
+  connectionSelect.className = "monitor-connection";
+  const interval = numberInput(5); interval.min = "2"; interval.max = "300"; interval.step = "1";
+  interval.className = "monitor-interval";
+  const pause = toolButton("暂停"), refresh = toolButton("立即刷新");
+  pause.classList.add("monitor-pause"); refresh.classList.add("monitor-refresh");
+  const refreshIcon = document.createElement("span"); refreshIcon.setAttribute("aria-hidden", "true");
+  refreshIcon.innerHTML = svg(ICON_REFRESH); refresh.prepend(refreshIcon);
+  const status = document.createElement("div"); status.className = "monitor-status"; status.id = `${prefix}-status`;
+  status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite"); status.setAttribute("aria-atomic", "true");
+  interval.setAttribute("aria-describedby", status.id);
+  const count = document.createElement("span"); count.className = "monitor-count";
+  const sampledAt = document.createElement("span"); sampledAt.className = "monitor-sampled-at";
+  const content = document.createElement("div"); content.className = "monitor-table-wrap";
+  content.setAttribute("role", "region"); content.setAttribute("aria-label", "当前连接及 SQL");
+  const table = document.createElement("table"); table.className = "monitor-table";
+  const columns = document.createElement("colgroup"); table.appendChild(columns);
+  const head = table.createTHead().insertRow(), rows = table.createTBody();
+  let closed = false, automatic = true, loading = false, generation = 0;
+  let processes: ProcessInfo[] = [];
+  const children = new Set<Dialog>();
+  let detail: { dialog: Dialog; id: string; sql: string } | null = null;
+  const selectedConnection = () => connections.find(connection => connection.id === connectionSelect.value);
+  const setStatus = (message: string, error = false) => {
+    if (closed) return;
+    status.textContent = message;
+    status.setAttribute("role", error ? "alert" : "status");
+    status.setAttribute("aria-live", error ? "assertive" : "polite");
   };
-  const renderSessions = (snap: MonitorSnapshot) => {
-    sessionContent.replaceChildren();
-    if (snap.processError) {
-      sessionContent.textContent = snap.processError;
-      sessionStatus.textContent = `会话读取于 ${new Date(snap.capturedAt).toLocaleTimeString()} · 不可用`;
-      return;
-    }
-    const processes = snap.processes ?? [];
-    if (!processes.length) {
-      sessionContent.textContent = "当前没有可见会话（或该账号无权限查看其它会话）。";
-      sessionStatus.textContent = `会话读取于 ${new Date(snap.capturedAt).toLocaleTimeString()} · 成功`;
-      return;
-    }
-    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
-    const head = table.createTHead().insertRow();
-    for (const name of ["会话ID", "用户", "来源", "库", "命令", "状态", "耗时(秒)", "正在执行的 SQL", canKill ? "操作" : ""].filter(Boolean)) {
+  const updateControls = () => {
+    const supported = supportsProcessList(selectedConnection()?.kind ?? "");
+    refresh.disabled = !supported || loading;
+    pause.disabled = !supported;
+    pause.textContent = automatic ? "暂停" : "继续";
+    content.setAttribute("aria-busy", String(loading));
+  };
+  const rebuildHead = () => {
+    head.replaceChildren(); columns.replaceChildren();
+    const names = ["会话 ID", "用户", "来源", "数据库", "状态", "耗时（秒）", "当前 SQL"];
+    if (selectedConnection() && !selectedConnection()!.read_only) names.push("操作");
+    names.forEach((name, index) => {
       const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = name;
-      cell.style.cssText = "text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);background:var(--bg-panel);position:sticky;top:0;";
-      head.appendChild(cell);
+      const column = document.createElement("col"); column.className = `monitor-column-${index}`; columns.appendChild(column);
+      cell.className = `monitor-column-${index}`; head.appendChild(cell);
+    });
+  };
+  const renderEmpty = (message: string) => {
+    rows.replaceChildren();
+    const cell = rows.insertRow().insertCell(); cell.colSpan = head.cells.length;
+    cell.className = "monitor-empty"; cell.textContent = message;
+  };
+  const restoreRowFocus = (trigger: HTMLElement) => {
+    if (closed || children.size) return;
+    const target = [...rows.querySelectorAll<HTMLElement>("[data-monitor-action]")].find(element =>
+      element.dataset.monitorAction === trigger.dataset.monitorAction && element.dataset.monitorProcess === trigger.dataset.monitorProcess);
+    (target ?? connectionSelect).focus();
+  };
+  const attachChild = (child: Dialog, title: string, trigger: HTMLElement, onClose?: () => void) => {
+    children.add(child); dlg.el.inert = true;
+    accessibleToolDialog(child, title, () => {
+      children.delete(child); onClose?.();
+      if (!closed) { dlg.el.inert = children.size > 0; restoreRowFocus(trigger); }
+    });
+  };
+  const showSql = (process: ProcessInfo, trigger: HTMLElement) => {
+    const sql = currentProcessSql(process);
+    if (closed || !sql || children.size) return;
+    const copyStatus = document.createElement("div"); copyStatus.className = "monitor-detail-status";
+    copyStatus.setAttribute("role", "status"); copyStatus.setAttribute("aria-live", "polite");
+    const child = new Dialog({ title: `会话 ${process.id} · 当前 SQL`, width: 880, render: (body, dialog) => {
+      dialog.el.classList.add("server-monitor-sql-dialog");
+      const text = document.createElement("pre"); text.className = "monitor-sql-full"; text.textContent = sql;
+      text.tabIndex = 0; text.setAttribute("aria-label", "当前 SQL 原文"); body.append(text, copyStatus);
+    }, buttons: [
+      { label: "复制 SQL", onClick: async (dialog) => {
+        const button = dialog.footer.querySelector<HTMLButtonElement>("button"); if (button?.disabled) return false;
+        if (button) button.disabled = true;
+        try {
+          await navigator.clipboard.writeText(sql);
+          if (dialog.el.isConnected) copyStatus.textContent = "已复制完整 SQL 原文。";
+        } catch (error) {
+          if (dialog.el.isConnected) { copyStatus.setAttribute("role", "alert"); copyStatus.textContent = `复制失败：${error instanceof Error ? error.message : String(error)}。可选择正文后按 Ctrl+C。`; }
+        } finally { if (button && dialog.el.isConnected) button.disabled = false; }
+        return false;
+      } },
+      { label: "关闭" },
+    ] });
+    detail = { dialog: child, id: process.id, sql };
+    attachChild(child, `会话 ${process.id} · 当前 SQL`, trigger, () => { if (detail?.dialog === child) detail = null; });
+  };
+  const confirmKill = (process: ProcessInfo, trigger: HTMLElement) => {
+    const connection = selectedConnection();
+    if (closed || children.size || !connection || connection.read_only) return;
+    const requestGeneration = generation;
+    const label = process.is_self ? "断开本会话" : "结束会话";
+    const notice = document.createElement("div"); notice.className = "monitor-confirm-status";
+    notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
+    const prompt = document.createElement("p"); prompt.id = `${prefix}-kill-prompt`;
+    prompt.textContent = `确定${label} ${process.id}（${process.user}${process.host ? ` @ ${process.host}` : ""}）？正在执行的 SQL 会被数据库终止，未提交事务可能回滚；已提交的数据不会回滚。${process.is_self ? "这是本工具的会话，监控可能暂时中断。" : ""}`;
+    let confirmClosed = false, killing = false;
+    const child = new Dialog({ title: label, width: 480, render: (body, dialog) => {
+      dialog.el.classList.add("server-monitor-confirm"); body.append(prompt, notice);
+    }, buttons: [
+      { label: "取消" },
+      { label, onClick: async (dialog) => {
+        if (killing || closed || confirmClosed) return false;
+        if (generation !== requestGeneration || selectedConnection()?.id !== connection.id) {
+          notice.setAttribute("role", "alert"); notice.textContent = "监控连接已变化，请重新选择目标会话。"; return false;
+        }
+        killing = true;
+        const buttons = [...dialog.footer.querySelectorAll<HTMLButtonElement>("button")]; buttons.forEach(button => { button.disabled = true; });
+        notice.textContent = `正在${label} ${process.id}…`;
+        try {
+          const message = await source.killDbProcess(connection.id, process.id);
+          if (!closed && generation === requestGeneration) { setStatus(message); void controller.refresh(); }
+          return !closed && !confirmClosed;
+        } catch (error) {
+          if (!confirmClosed && !closed) { notice.setAttribute("role", "alert"); notice.textContent = `${label}失败：${error instanceof Error ? error.message : String(error)}`; }
+          return false;
+        } finally {
+          killing = false;
+          if (!confirmClosed && !closed) buttons.forEach(button => { button.disabled = false; });
+        }
+      } },
+    ] });
+    attachChild(child, label, trigger, () => { confirmClosed = true; });
+    child.el.setAttribute("role", "alertdialog"); child.el.setAttribute("aria-describedby", prompt.id);
+    child.footer.lastElementChild?.classList.add("danger");
+    queueMicrotask(() => { if (!closed && !confirmClosed) child.footer.querySelector<HTMLButtonElement>("button")?.focus(); });
+  };
+  const renderSnapshot = (snapshot: MonitorSnapshot) => {
+    if (closed || (snapshot.connectionId && snapshot.connectionId !== connectionSelect.value)) return;
+    loading = false; updateControls();
+    sampledAt.textContent = `采样 ${new Date(snapshot.capturedAt).toLocaleTimeString()} · ${snapshot.elapsedMs} ms`;
+    processes = snapshot.processes ?? [];
+    if (detail && !processes.some(process => process.id === detail!.id && currentProcessSql(process) === detail!.sql)) detail.dialog.close();
+    const focused = document.activeElement instanceof HTMLElement && document.activeElement.dataset.monitorAction ? document.activeElement : null;
+    if (snapshot.processError) {
+      count.textContent = "当前连接 · 无法读取";
+      renderEmpty("当前会话读取失败，请检查连接和权限后立即刷新重试。");
+      setStatus(`读取失败：${snapshot.processError}`, true);
+      if (focused) restoreRowFocus(focused);
+      return;
     }
-    const body = table.createTBody();
-    for (const proc of processes) {
-      const tr = body.insertRow();
-      const cell = (value: string) => {
-        const td = tr.insertCell(); td.textContent = value;
-        td.style.cssText = "padding:4px 8px;border-bottom:1px solid var(--border);white-space:pre-wrap;overflow-wrap:anywhere;max-width:320px;";
-        return td;
+    count.textContent = `当前连接 ${processes.length}${selectedConnection()?.read_only ? " · 只读" : ""}`;
+    rows.replaceChildren();
+    for (const process of processes) {
+      const row = rows.insertRow(); row.dataset.sessionId = process.id;
+      const cell = (value: string, className = "") => {
+        const td = row.insertCell(); td.textContent = value; if (value) td.title = value; td.className = className; return td;
       };
-      cell(proc.is_self ? `${proc.id}（本工具）` : proc.id);
-      cell(proc.user); cell(proc.host); cell(proc.db || "-"); cell(proc.command || "-"); cell(proc.state || "-");
-      cell(proc.elapsed_secs === null || proc.elapsed_secs === undefined ? "-" : String(proc.elapsed_secs));
-      const sqlCell = cell(proc.sql ? proc.sql.replace(/\s+/g, " ").trim().slice(0, 160) : "-");
-      if (proc.sql && proc.sql.length > 160) sqlCell.title = proc.sql;
-      if (canKill) {
-        const td = tr.insertCell(); td.style.cssText = "padding:4px 8px;border-bottom:1px solid var(--border);";
-        const kill = toolButton(proc.is_self ? "断开本会话" : "结束会话");
-        kill.title = proc.is_self ? "结束本工具自身的连接（自动刷新将中断，可重新打开窗口）" : "向数据库发送 KILL 结束该会话";
-        kill.addEventListener("click", () => void confirmKill(proc));
-        td.appendChild(kill);
+      cell(process.is_self ? `${process.id} · 本工具` : process.id);
+      // 空值一律留白（不用「—」占位），悬停 title 也仅在确有内容时设置
+      cell(process.user || ""); cell(process.host || ""); cell(process.db || "");
+      const sql = currentProcessSql(process);
+      cell(sql ? "执行中" : process.command || "").title = [process.command, process.state].filter(Boolean).join(" · ");
+      cell(sql && process.elapsed_secs !== null ? String(process.elapsed_secs) : "", "monitor-elapsed");
+      const sqlCell = cell("", "monitor-sql-cell");
+      if (sql) {
+        const preview = document.createElement("span"); preview.className = "monitor-sql-preview"; preview.textContent = sql.replace(/\s+/g, " ").trim();
+        const view = toolButton("查看全文"); view.classList.add("monitor-view-sql");
+        view.dataset.viewSql = process.id; view.dataset.monitorAction = "view-sql"; view.dataset.monitorProcess = process.id;
+        view.setAttribute("aria-label", `查看会话 ${process.id} 的 SQL 全文`);
+        view.addEventListener("click", () => showSql(process, view)); sqlCell.append(preview, view);
+      } else sqlCell.textContent = "";
+      if (!selectedConnection()?.read_only) {
+        const action = cell("", "monitor-session-action");
+        // 电源（关机）图标：终止/断开会话；外层 span 置 lineHeight 0 保证垂直居中。
+        const kill = toolButton(""); kill.classList.add("monitor-kill");
+        const killIcon = document.createElement("span"); killIcon.setAttribute("aria-hidden", "true");
+        killIcon.style.lineHeight = "0"; killIcon.innerHTML = iconSvgByName("power");
+        kill.append(killIcon);
+        kill.dataset.killSession = process.id; kill.dataset.monitorAction = "kill-session"; kill.dataset.monitorProcess = process.id;
+        const killLabel = `${process.is_self ? "断开本会话" : "结束会话"} ${process.id}`;
+        kill.setAttribute("aria-label", killLabel);
+        kill.title = killLabel;
+        kill.addEventListener("click", () => confirmKill(process, kill)); action.appendChild(kill);
       }
     }
-    sessionContent.appendChild(table);
-    sessionStatus.textContent = `会话 ${processes.length} 个 · 读取于 ${new Date(snap.capturedAt).toLocaleTimeString()}${canKill ? "" : " · 只读连接不可结束会话"}`;
+    if (!processes.length) renderEmpty("当前没有可见会话；账号权限可能限制可查看的范围。");
+    setStatus(automatic ? `每 ${interval.value} 秒采样 · 已完成 SQL 不保留` : "已暂停自动采样 · 显示最后一次采样结果");
+    if (focused) restoreRowFocus(focused);
   };
-  const confirmKill = (proc: ProcessInfo): Promise<void> => (new Promise(resolve => {
-    const confirm = new Dialog({ title: "结束数据库会话", width: 460, render: body => {
-      body.textContent = `确定结束会话 ${proc.id}（${proc.user}${proc.host ? ` @ ${proc.host}` : ""}）？该会话正在执行的 SQL 将被数据库终止，未提交事务会回滚。`;
-    }, buttons: [
-      { label: "结束会话", onClick: async () => {
-          sessionStatus.textContent = `正在结束会话 ${proc.id}…`;
-          try {
-            const message = await source.killDbProcess(connection.id, proc.id);
-            sessionStatus.textContent = message;
-          } catch (e) {
-            sessionStatus.setAttribute("role", "alert");
-            sessionStatus.textContent = `结束会话失败：${String(e)}`;
-          }
-          resolve(); return true;
-        } },
-      { label: "取消", onClick: () => { resolve(); return true; } },
-    ] });
-    void confirm;
-  }));
   const controller = new ServerMonitorController(async () => {
-    if (!closed) { status.textContent = "正在读取数据库状态…"; refresh.disabled = true; content.setAttribute("aria-busy", "true"); }
-    return sampleServerMonitor(connection, protocol.value === "status", source);
-  }, snap => {
-    renderOverview(snap);
-    renderSessions(snap);
-  });
-  // 页签：概览 / 会话与执行中的 SQL
-  let showTab = (_tab: string) => {};
-  const dlg = new Dialog({ title: "数据库监控", width: 860, height: 640, render: body => {
-    const connectionText = document.createElement("div"); connectionText.textContent = `${connection.name} · ${DB_KINDS.find(k => k.id === connection.kind)?.label ?? connection.kind}`;
-    connectionText.style.marginBottom = "12px"; body.appendChild(connectionText);
-    const tabs = document.createElement("div"); tabs.style.cssText = "flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden";
-    const header = document.createElement("div"); header.setAttribute("role", "tablist"); header.style.cssText = "display:flex;gap:4px;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px";
-    const overviewPanel = document.createElement("div"); overviewPanel.setAttribute("role", "tabpanel");
-    const sessionsPanel = document.createElement("div"); sessionsPanel.setAttribute("role", "tabpanel"); sessionsPanel.hidden = true;
-    for (const [label, panel] of [["概览", overviewPanel], ["会话与执行中的 SQL", sessionsPanel]] as const) {
-      const button = document.createElement("button"); button.type = "button"; button.className = "btn"; button.textContent = label;
-      button.setAttribute("role", "tab"); button.setAttribute("aria-selected", String(panel === overviewPanel));
-      button.addEventListener("click", () => showTab(label));
-      header.appendChild(button);
+    const connection = selectedConnection();
+    if (!connection || closed) throw new Error("请先选择连接");
+    loading = true; updateControls(); setStatus("正在读取当前会话…");
+    if (ensureConnection) await ensureConnection(connection.id);
+    else if (source.ensureConnection) {
+      const result = await source.ensureConnection(connection.id);
+      if (!result.ok) throw new Error(result.message);
     }
-    overviewPanel.append(field("监控内容", protocol), field("刷新间隔（秒）", interval));
-    const actions = document.createElement("div"); actions.style.cssText = "display:flex;gap:8px;margin-top:8px;"; actions.append(refresh, start, stop);
-    overviewPanel.append(actions, status, content);
-    const note = document.createElement("div"); note.textContent = "累计计数为服务器真实原值，不是瞬时速率。SQLite 无服务器进程，仅显示数据库页/日志模式；结束会话向数据库发送 KILL，不保证已提交的数据可回滚。";
-    note.style.cssText = "margin-top:8px;color:var(--fg-muted);line-height:1.5;"; overviewPanel.appendChild(note);
-    const sessionHint = document.createElement("div");
-    sessionHint.textContent = "列出数据库当前会话与正在执行的 SQL；刷新与概览共用同一间隔。「结束会话」不可撤销。";
-    sessionHint.style.cssText = "margin-bottom:8px;color:var(--fg-muted);line-height:1.5;";
-    sessionsPanel.append(sessionHint, sessionContent, sessionStatus);
-    showTab = (label: string) => {
-      const overview = label === "概览";
-      overviewPanel.hidden = !overview; sessionsPanel.hidden = overview;
-      const buttons = [...header.querySelectorAll("button")];
-      if (buttons[0]) buttons[0].setAttribute("aria-selected", String(overview));
-      if (buttons[1]) buttons[1].setAttribute("aria-selected", String(!overview));
-    };
-    tabs.append(header, overviewPanel, sessionsPanel); body.appendChild(tabs);
+    return sampleServerMonitor(connection, source);
+  }, renderSnapshot);
+  const labelled = (text: string, control: HTMLElement, key: string, suffix?: string) => {
+    const label = document.createElement("label"); label.className = "monitor-control"; label.htmlFor = `${prefix}-${key}`; control.id = label.htmlFor;
+    const name = document.createElement("span"); name.textContent = text; label.append(name, control);
+    if (suffix) { const unit = document.createElement("span"); unit.textContent = suffix; label.appendChild(unit); }
+    return label;
+  };
+  // 固定窗口尺寸：会话行数随采样变化，尺寸跟着变会让工具栏和关闭按钮移位。
+  const dlg = new Dialog({ title: "数据库监控", width: 1240, height: 640, render: (body, dialog) => {
+    dialog.el.classList.add("server-monitor-dialog");
+    const toolbar = document.createElement("div"); toolbar.className = "monitor-toolbar";
+    toolbar.append(labelled("连接", connectionSelect, "connection"), labelled("间隔", interval, "interval", "秒"), pause, refresh);
+    const caption = document.createElement("div"); caption.className = "monitor-caption"; caption.append(count, sampledAt);
+    content.appendChild(table); body.append(toolbar, caption, content);
   }, buttons: [{ label: "关闭" }] });
-  accessibleToolDialog(dlg, "数据库监控", () => { closed = true; controller.dispose(); }, returnFocus);
-  refresh.addEventListener("click", () => void controller.refresh());
-  start.addEventListener("click", () => {
+  dlg.footer.prepend(status);
+  accessibleToolDialog(dlg, "数据库监控", () => {
+    closed = true; generation++; controller.dispose();
+    for (const child of children) child.close();
+  }, returnFocus);
+  const validInterval = () => {
     const seconds = interval.valueAsNumber;
-    if (!Number.isInteger(seconds) || seconds < 2 || seconds > 300) { interval.setAttribute("aria-invalid", "true"); status.textContent = "刷新间隔必须为 2–300 的整数秒"; return; }
-    interval.removeAttribute("aria-invalid"); start.disabled = true; stop.disabled = false; interval.disabled = true; protocol.disabled = true;
-    controller.start(seconds);
+    const valid = Number.isInteger(seconds) && seconds >= 2 && seconds <= 300;
+    if (valid) interval.removeAttribute("aria-invalid");
+    else { interval.setAttribute("aria-invalid", "true"); setStatus("采样间隔必须为 2–300 的整数秒。", true); }
+    return valid;
+  };
+  const chooseConnection = () => {
+    generation++; controller.stop();
+    for (const child of children) child.close();
+    processes = []; loading = false; sampledAt.textContent = ""; rebuildHead(); updateControls();
+    const connection = selectedConnection();
+    if (!connection) {
+      count.textContent = "当前连接";
+      renderEmpty(connections.length ? "请选择连接，随后查看其当前会话与 SQL；无需先打开数据库。" : "暂无已保存连接，请先在主界面新建连接，再打开监控。");
+      setStatus("选择连接后开始监控。不会打开数据库标签。");
+    } else if (!supportsProcessList(connection.kind)) {
+      count.textContent = "当前连接 · 不支持监控";
+      renderEmpty("该数据源没有服务器会话监控接口，请选择其他连接。");
+      setStatus("当前连接不支持会话监控，不会回退显示服务器基本信息。");
+    } else {
+      count.textContent = "当前连接 · 读取中"; renderEmpty("正在读取当前会话…");
+      if (automatic && validInterval()) controller.start(interval.valueAsNumber);
+      else void controller.refresh();
+    }
+  };
+  connectionSelect.addEventListener("change", chooseConnection);
+  refresh.addEventListener("click", () => { if (!refresh.disabled) void controller.refresh(); });
+  pause.addEventListener("click", () => {
+    if (pause.disabled) return;
+    if (automatic) {
+      automatic = false; controller.stop(); loading = false; updateControls();
+      setStatus("已暂停自动采样 · 显示最后一次采样结果；不会取消服务器正在执行的 SQL。");
+    } else if (validInterval()) { automatic = true; updateControls(); controller.start(interval.valueAsNumber); }
   });
-  stop.addEventListener("click", () => {
-    controller.stop(); start.disabled = false; stop.disabled = true; interval.disabled = false; protocol.disabled = false; refresh.disabled = false;
-    content.setAttribute("aria-busy", "false"); status.textContent = "已停止自动刷新；未完成的采样结果不会更新此窗口。";
+  interval.addEventListener("change", () => {
+    const valid = validInterval();
+    if (!valid) { automatic = false; controller.stop(); loading = false; updateControls(); }
+    else if (automatic && supportsProcessList(selectedConnection()?.kind ?? "")) controller.start(interval.valueAsNumber);
   });
-  protocol.addEventListener("change", () => { controller.stop(); void controller.refresh(); });
-  void controller.refresh();
-  return dlg;
+  chooseConnection(); return dlg;
 }

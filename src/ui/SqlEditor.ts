@@ -14,7 +14,7 @@ import {
   redo,
   undo,
 } from "@codemirror/commands";
-import { sql } from "@codemirror/lang-sql";
+import { sql, MySQL, PostgreSQL, SQLite } from "@codemirror/lang-sql";
 import { bracketMatching, indentOnInput } from "@codemirror/language";
 import {
   findNext,
@@ -35,7 +35,7 @@ import {
   rectangularSelection,
 } from "@codemirror/view";
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
-import { analyzeSqlCompletion, sqlExecutionText } from "../core/sqlCompletion";
+import { analyzeSqlCompletion, sqlExecutionText, type SqlCompletionData } from "../core/sqlCompletion";
 
 /** SQL 关键字与函数（用于自动补全）。 */
 const SQL_KEYWORDS = [
@@ -59,7 +59,7 @@ const SQL_FUNCTIONS = [
   "CHAR_LENGTH", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM", "REPLACE",
   "NOW", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME", "DATE",
   "DATETIME", "TIMESTAMP", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND",
-  "DATEDIFF", "DATE_ADD", "DATE_SUB", "IFNULL", "GROUP_CONCAT", "ROW_NUMBER",
+  "DATEDIFF", "DATE_ADD", "DATE_SUB", "IFNULL", "IF", "IIF", "GROUP_CONCAT", "ROW_NUMBER",
   "RANK", "DENSE_RANK", "LAG", "LEAD", "CAST", "CONVERT", "JSON_EXTRACT",
   "JSON_ARRAY", "JSON_OBJECT", "GREATEST", "LEAST", "RAND", "UUID",
 ];
@@ -76,6 +76,8 @@ const SQL_HIGHLIGHT = HighlightStyle.define([
 ]);
 
 export interface SqlEditorOptions {
+  /** SQL 对象设计器按实际原生协议选择语法。 */
+  dialect?: "mysql" | "postgres" | "sqlite";
   /** 是否启用自动补全。 */
   autoComplete?: boolean;
   /** 字体族。 */
@@ -83,15 +85,17 @@ export interface SqlEditorOptions {
   /** 字号。 */
   fontSize?: number;
   /** 表名 / 列名补全数据。 */
-  completionData?: () => Record<string, string[]>;
+  completionData?: () => SqlCompletionData;
+  /** 补全模式：查询页启用表/字段备注（默认基础模式，不改变其它编辑器）。 */
+  completionMode?: "basic" | "query";
   /** 初始 SQL。 */
   value?: string;
   /** 内容变化回调。 */
   onChange?: (value: string) => void;
-  /** 执行回调；所有入口均优先实际选区。 */
+  /** 执行回调；selectionOnly=true 时才读取选区，否则始终执行全文。 */
   onExecute?: (sql: string, selectionOnly: boolean) => void;
-  /** 解释选区或全文。 */
-  onExplain?: (sql: string) => void;
+  /** 解释选区或全文；true 表示只解释选区。 */
+  onExplain?: (selectionOnly: boolean) => void;
   /** 当前连接标识符引用风格。 */
   identifierQuote?: () => string;
   /** 格式化回调。 */
@@ -124,10 +128,12 @@ export class SqlEditor {
         override: [this.sqlCompletions.bind(this)],
         activateOnTyping: true,
         closeOnBlur: true,
+        tooltipClass: () => this.completionTooltipClass(),
         icons: false,
       }),
       highlightSelectionMatches(),
       sql({
+        dialect: opts.dialect === "mysql" ? MySQL : opts.dialect === "postgres" ? PostgreSQL : opts.dialect === "sqlite" ? SQLite : undefined,
         upperCaseKeywords: true,
         defaultSchema: "public",
       }),
@@ -135,14 +141,14 @@ export class SqlEditor {
         {
           key: "Mod-Enter",
           run: () => {
-            this.executeCurrent();
+            this.executeCurrent(false);
             return true;
           },
         },
         {
           key: "Mod-Shift-Enter",
           run: () => {
-            this.executeCurrent();
+            this.executeCurrent(true);
             return true;
           },
         },
@@ -156,7 +162,7 @@ export class SqlEditor {
         {
           key: "F5",
           run: () => {
-            this.executeCurrent();
+            this.executeCurrent(false);
             return true;
           },
         },
@@ -229,7 +235,14 @@ export class SqlEditor {
     if (pos === 0) return;
     const before = u.state.sliceDoc(pos - 1, pos);
     if (!/[\p{L}\p{N}_$.\s]/u.test(before)) return;
-    if (/\s/.test(before) && !/\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+$/i.test(u.state.sliceDoc(0, pos))) return;
+    if (/\s/.test(before)) {
+      // 子句起点或表名之后自动拉起补全：SELECT/FROM/WHERE… 之后给对应阶段候选，
+      // 表名（含别名）之后给 WHERE/JOIN 等子句，而不是继续堆字段。
+      const doc = u.state.sliceDoc(0, pos);
+      const tableTail = /\b(?:FROM|JOIN)\s+[\p{L}\p{N}_$."\[\]\x60]+(?:\s+(?:AS\s+)?[\p{L}\p{N}_$."\[\]\x60]+)?\s+$/iu;
+      const clauseTail = /(?:\b(?:FROM|JOIN|INTO|UPDATE|TABLE|SELECT|WHERE|ON|HAVING|SET|VALUES|AND|OR|BY|LIMIT)\s+|[,=(]\s*)$/i;
+      if (!tableTail.test(doc) && !clauseTail.test(doc)) return;
+    }
     startCompletion(u.view);
   }
 
@@ -244,10 +257,11 @@ export class SqlEditor {
     return !this.view.state.selection.main.empty;
   }
 
-  /** 设置 SQL。 */
+  /** 设置 SQL。整体替换后把光标放到文末，避免旧选区映射成反向全选或截断新内容。 */
   setSql(sql: string): void {
     this.view.dispatch({
       changes: { from: 0, to: this.view.state.doc.length, insert: sql },
+      selection: { anchor: sql.length },
     });
   }
 
@@ -303,18 +317,35 @@ export class SqlEditor {
   }
 
   /** 更新真实元数据；schema用于数据库/模式限定名。 */
-  setCompletionData(data: Record<string, string[]>, schema = ""): void {
+  setCompletionData(data: SqlCompletionData, schema = ""): void {
     this.completionData = data;
     this.completionSchema = schema;
   }
 
-  private completionData: Record<string, string[]> = {};
+  private completionData: SqlCompletionData = {};
   private completionSchema = "";
   private selectionMenu: HTMLElement | null = null;
 
-  /** 所有快捷键及选区菜单运行入口共用。 */
-  private executeCurrent(): void {
-    this.opts.onExecute?.(this.getSelection(), this.hasSelection());
+  /**
+   * 所有快捷键及选区菜单运行入口共用。
+   * selectionOnly=false 表示「运行」，必须使用全文；只有「运行已选择的」才读取选区。
+   */
+  private executeCurrent(selectionOnly = false): void {
+    if (!selectionOnly) {
+      this.opts.onExecute?.(this.getSql(), false);
+      return;
+    }
+    if (!this.hasSelection()) {
+      // 交给宿主提示「请先选中要执行的 SQL」，绝不静默退回全文。
+      this.opts.onExecute?.("", true);
+      return;
+    }
+    this.opts.onExecute?.(this.getSelection(), true);
+  }
+
+  /** 查询补全浮层的独立类名，备注样式只作用于查询页。 */
+  private completionTooltipClass(): string {
+    return this.opts.completionMode === "query" ? "sql-query-completion" : "sql-completion-default";
   }
 
   private sqlCompletions(context: CompletionContext): CompletionResult | null {
@@ -325,7 +356,19 @@ export class SqlEditor {
     if (!result?.options.length) return null;
     if (result.from === context.pos && !context.explicit && !/[.]$/.test(text.slice(0, context.pos)) &&
       !/\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+$/i.test(text.slice(0, context.pos))) return null;
-    return { ...result, filter: false, validFor: undefined };
+    // 函数候选带 cursor：插入 "FN()" 后把光标放进括号，而不是停在名字末尾。
+    const options = result.options.map((item) => {
+      const { cursor, ...rest } = item;
+      if (cursor === undefined) return rest;
+      const insert = rest.apply ?? rest.label;
+      return {
+        ...rest,
+        apply: (view: EditorView, _completion: unknown, from: number, to: number) => {
+          view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + cursor } });
+        },
+      };
+    });
+    return { ...result, options, filter: false, validFor: undefined };
   }
 
   private onContextMenu = (event: MouseEvent): void => {
@@ -356,8 +399,8 @@ export class SqlEditor {
     const selectionUnchanged = () => this.view.state.doc === documentBefore && this.hasSelection() &&
       this.view.state.selection.main.from === rangeBefore.from && this.view.state.selection.main.to === rangeBefore.to;
     const actions: { label: string; shortcut?: string; run: () => void | Promise<void>; disabled?: boolean }[] = [
-      { label: "运行已选择的", shortcut: "Ctrl+Enter", run: () => this.executeCurrent(), disabled: !this.opts.onExecute },
-      { label: "解释已选择的", run: () => this.opts.onExplain?.(this.getSelection()), disabled: !this.opts.onExplain },
+      { label: "运行已选择的", shortcut: "Ctrl+Shift+Enter", run: () => this.executeCurrent(true), disabled: !this.opts.onExecute },
+      { label: "解释已选择的", run: () => this.opts.onExplain?.(true), disabled: !this.opts.onExplain },
       { label: "复制", shortcut: "Ctrl+C", run: () => navigator.clipboard.writeText(selected), disabled: !navigator.clipboard?.writeText },
       { label: "剪切", shortcut: "Ctrl+X", run: async () => {
         await navigator.clipboard.writeText(selected);

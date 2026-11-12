@@ -1,9 +1,11 @@
 //! 元数据层：对象树、表结构、分页读取、行编辑、导入导出。
 
 use anyhow::{anyhow, Result};
+#[path = "schema_relational_keys.rs"]
+mod relational_keys;
 use sqlx::mysql::MySqlRow;
 use sqlx::postgres::PgRow;
-use sqlx::{Column, Row};
+use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 use crate::db::{quote_ident, qualified, Db};
 use crate::models::{
@@ -11,14 +13,40 @@ use crate::models::{
     PageResult, ResultColumn, RowInsert, RowUpdate, TableSchema, TreeNode,
 };
 
-/// 从一行中按列名取字符串（宽容解码：BINARY/字节数组列也会降级为文本，
-/// information_schema 列在 TiDB/OceanBase 等服务端可能以 binary 字符集返回）。
+/// 从一行中按列名取字符串（元数据专用解码）。
+/// information_schema / mysql.user 的 VARBINARY 列（COLUMN_TYPE、COLUMN_KEY、User、Host 等）
+/// 按文本展示：合法 UTF-8 字节解码为文本；非法字节保留 0x 十六进制（与数据路径一致，可往返）。
+/// 不得改 values.rs 数据路径：0x 前缀是二进制数据同步/编辑往返契约的一部分（BUG-R1-012）。
 pub(crate) fn mysql_get(row: &MySqlRow, name: &str) -> Option<String> {
     let idx = row.columns().iter().position(|c| c.name() == name)?;
+    let binary = row
+        .try_get_raw(idx)
+        .ok()
+        .map(|v| crate::values::is_binary_type(v.type_info().name()))
+        .unwrap_or(false);
+    if binary {
+        if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+            return Some(match std::str::from_utf8(&bytes) {
+                Ok(text) => text.to_string(),
+                Err(_) => crate::values::format_binary(&bytes),
+            });
+        }
+    }
     crate::values::my_row_values(row, row.columns().len())
         .get(idx)
         .cloned()
         .flatten()
+}
+
+/// 元数据行解码：与 mysql_get 相同的「合法 UTF-8 则文本」策略，按整行返回。
+pub(crate) fn mysql_meta_row_values(row: &MySqlRow) -> Vec<Option<String>> {
+    let count = row.columns().len();
+    (0..count)
+        .map(|i| {
+            let name = row.columns()[i].name().to_string();
+            mysql_get(row, &name)
+        })
+        .collect()
 }
 
 /// 从 PostgreSQL 行中按列名取字符串。
@@ -32,6 +60,8 @@ fn pg_get(row: &PgRow, name: &str) -> Option<String> {
 
 /// 列出该连接可见的数据库 / 模式。
 pub async fn list_databases(db: &Db, kind: DbKind) -> Result<Vec<(String, String)>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(h) = db {
         return h.containers().await;
     }
@@ -51,7 +81,7 @@ pub async fn list_databases(db: &Db, kind: DbKind) -> Result<Vec<(String, String
             out.push(("main".to_string(), "main".to_string()));
         }
         Db::Mysql(pool) => {
-            let rows = sqlx::query("SHOW DATABASES").fetch_all(pool).await?;
+            let rows = crate::sql_history::query("SHOW DATABASES").fetch_all(pool).await?;
             for r in &rows {
                 let name = mysql_get(r, "Database").unwrap_or_default();
                 if !name.is_empty() {
@@ -60,7 +90,7 @@ pub async fn list_databases(db: &Db, kind: DbKind) -> Result<Vec<(String, String
             }
         }
         Db::Postgres(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT nspname FROM pg_namespace \
                  WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' \
                  ORDER BY nspname",
@@ -78,6 +108,8 @@ pub async fn list_databases(db: &Db, kind: DbKind) -> Result<Vec<(String, String
     }
     let _ = kind;
     Ok(out)
+
+    }).await
 }
 
 /// 列出某个数据库 / 模式下的表与视图。
@@ -86,13 +118,11 @@ pub async fn list_tables(
     kind: DbKind,
     schema: &str,
 ) -> Result<Vec<(String, ObjectType)>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(h) = db {
-        return Ok(h
-            .objects(schema)
-            .await?
-            .into_iter()
-            .map(|n| (n, ObjectType::Table))
-            .collect());
+        // 支持 HTTP/JDBC 类关系源时按类型分类（H2 / JDBC 已实现），视图不再混入表。
+        return Ok(h.objects_with_types(schema).await?);
     }
     if let Db::Redis(r) = db {
         // 库节点形如 db0：扫描键作为「表」展示
@@ -113,7 +143,7 @@ pub async fn list_tables(
     let mut out = Vec::new();
     match db {
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT name, type FROM sqlite_master \
                  WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name",
             )
@@ -135,7 +165,7 @@ pub async fn list_tables(
                  WHERE TABLE_SCHEMA = {} ORDER BY TABLE_NAME",
                 crate::db::quote_literal(schema)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             for r in &rows {
                 let name = mysql_get(r, "TABLE_NAME").unwrap_or_default();
                 let ty = mysql_get(r, "TABLE_TYPE").unwrap_or_default();
@@ -157,7 +187,7 @@ pub async fn list_tables(
                  ORDER BY c.relname",
                 crate::db::quote_literal(schema)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             for r in &rows {
                 let name = pg_get(r, "relname").unwrap_or_default();
                 let kindc = pg_get(r, "relkind").unwrap_or_default();
@@ -175,6 +205,8 @@ pub async fn list_tables(
     }
     let _ = kind;
     Ok(out)
+
+    }).await
 }
 
 /// 列出某模式下的对象及其统计信息（对象标签页网格数据）。
@@ -183,6 +215,8 @@ pub async fn list_objects(
     kind: DbKind,
     schema: &str,
 ) -> Result<Vec<ObjectInfo>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(_) | Db::Redis(_) | Db::Mongo(_) = db {
         let tables = list_tables(db, kind, schema).await?;
         return Ok(tables
@@ -221,7 +255,7 @@ pub async fn list_objects(
     let mut out: Vec<ObjectInfo> = Vec::new();
     match db {
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT name, type FROM sqlite_master                  WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name",
             )
             .fetch_all(pool)
@@ -230,7 +264,7 @@ pub async fn list_objects(
                 let vals = crate::values::sqlite_row_values(r, 2);
                 let name = vals.first().cloned().flatten().unwrap_or_default();
                 let ty = vals.get(1).cloned().flatten().unwrap_or_default();
-                let n: i64 = sqlx::query_scalar(&format!(
+                let n: i64 = crate::sql_history::query_scalar(&format!(
                     "SELECT COUNT(*) FROM {}",
                     quote_ident(&kind, &name)
                 ))
@@ -254,7 +288,7 @@ pub async fn list_objects(
                 "SELECT TABLE_NAME, TABLE_TYPE, AUTO_INCREMENT, UPDATE_TIME, DATA_LENGTH,                  ENGINE, TABLE_ROWS, TABLE_COMMENT FROM information_schema.TABLES                  WHERE TABLE_SCHEMA = {} ORDER BY TABLE_NAME",
                 crate::db::quote_literal(schema)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             for r in &rows {
                 let name = mysql_get(r, "TABLE_NAME").unwrap_or_default();
                 let ty = mysql_get(r, "TABLE_TYPE").unwrap_or_default();
@@ -282,7 +316,7 @@ pub async fn list_objects(
                 "SELECT c.relname, c.relkind::text AS relkind, c.reltuples::bigint AS tab_rows,                  pg_total_relation_size(c.oid) AS total_bytes, obj_description(c.oid) AS descr                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace                  WHERE n.nspname = {} AND c.relkind IN ('r','v','m','p') ORDER BY c.relname",
                 crate::db::quote_literal(schema)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             for r in &rows {
                 let name = pg_get(r, "relname").unwrap_or_default();
                 let kindc = pg_get(r, "relkind").unwrap_or_default();
@@ -305,6 +339,8 @@ pub async fn list_objects(
     }
     let _ = kind;
     Ok(out)
+
+    }).await
 }
 
 /// 列出某个模式下的存储过程 / 函数 / 触发器 / 事件。
@@ -313,6 +349,8 @@ pub async fn list_routines(
     kind: DbKind,
     schema: &str,
 ) -> Result<Vec<(ObjectType, String)>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(_) | Db::Redis(_) | Db::Mongo(_) = db {
         return Ok(Vec::new());
     }
@@ -343,7 +381,7 @@ pub async fn list_routines(
     let mut out = Vec::new();
     match db {
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
             )
             .fetch_all(pool)
@@ -363,7 +401,7 @@ pub async fn list_routines(
                  WHERE ROUTINE_SCHEMA = {} ORDER BY ROUTINE_NAME",
                 crate::db::quote_literal(schema)
             );
-            if let Ok(rows) = sqlx::query(&sql).fetch_all(pool).await {
+            if let Ok(rows) = crate::sql_history::query(&sql).fetch_all(pool).await {
                 for r in &rows {
                     let name = mysql_get(r, "ROUTINE_NAME").unwrap_or_default();
                     let ty = mysql_get(r, "ROUTINE_TYPE").unwrap_or_default();
@@ -380,7 +418,7 @@ pub async fn list_routines(
                  WHERE TRIGGER_SCHEMA = {} ORDER BY TRIGGER_NAME",
                 crate::db::quote_literal(schema)
             );
-            if let Ok(rows) = sqlx::query(&tsql).fetch_all(pool).await {
+            if let Ok(rows) = crate::sql_history::query(&tsql).fetch_all(pool).await {
                 for r in &rows {
                     out.push((
                         ObjectType::Trigger,
@@ -396,7 +434,7 @@ pub async fn list_routines(
                  WHERE n.nspname = {} ORDER BY p.proname",
                 crate::db::quote_literal(schema)
             );
-            if let Ok(rows) = sqlx::query(&sql).fetch_all(pool).await {
+            if let Ok(rows) = crate::sql_history::query(&sql).fetch_all(pool).await {
                 for r in &rows {
                     let name = pg_get(r, "proname").unwrap_or_default();
                     let k = pg_get(r, "prokind").unwrap_or_default();
@@ -410,7 +448,7 @@ pub async fn list_routines(
                  WHERE n.nspname = {} AND NOT tgisinternal ORDER BY tgname",
                 crate::db::quote_literal(schema)
             );
-            if let Ok(rows) = sqlx::query(&tsql).fetch_all(pool).await {
+            if let Ok(rows) = crate::sql_history::query(&tsql).fetch_all(pool).await {
                 for r in &rows {
                     out.push((
                         ObjectType::Trigger,
@@ -423,6 +461,8 @@ pub async fn list_routines(
     }
     let _ = kind;
     Ok(out)
+
+    }).await
 }
 
 /// 构造对象树节点（供前端构建树时复用）。
@@ -453,6 +493,8 @@ pub async fn table_schema(
     schema: &str,
     table: &str,
 ) -> Result<TableSchema> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(h) = db {
         return http_table_schema(h, kind, schema, table).await;
     }
@@ -465,7 +507,6 @@ pub async fn table_schema(
     if matches!(db, Db::ClickHouse(_) | Db::Odbc(_) | Db::Mssql(_)) {
         return generic_table_schema(db, &kind, schema, table).await;
     }
-    let full = qualified(&kind, schema, table);
     let mut columns = Vec::new();
     let mut indexes = Vec::new();
     let mut foreign_keys = Vec::new();
@@ -475,7 +516,17 @@ pub async fn table_schema(
 
     match db {
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(&format!("PRAGMA table_info({})", full))
+            // SQLite 的 schema 只能是 main / temp / attached 名称。调用方（整库备份、导入等）
+            // 可能把「数据库文件名」当作 schema 传入；此时必须回退到 main，否则 PRAGMA 会报
+            // "no such table: <name>.sqlite_schema"（BUG-R1-028）。
+            let sqlite_namespace = {
+                let attached: Vec<String> = crate::sql_history::query("PRAGMA database_list")
+                    .fetch_all(pool).await?
+                    .iter().filter_map(|r| crate::values::sqlite_row_values(r, 3).get(1).cloned().flatten()).collect();
+                if schema.is_empty() || !attached.iter().any(|n| n == schema) { "main" } else { schema }
+            };
+            let table_pragma = format!("PRAGMA {}.table_info({})", quote_ident(&DbKind::of("sqlite"), sqlite_namespace), quote_ident(&DbKind::of("sqlite"), table));
+            let rows = crate::sql_history::query(&table_pragma)
                 .fetch_all(pool)
                 .await?;
             let mut pk_idx: Vec<(i64, String)> = Vec::new();
@@ -523,41 +574,8 @@ pub async fn table_schema(
                     method: None,
                 });
             }
-            // 外键
-            let fkrows = sqlx::query(&format!("PRAGMA foreign_key_list({})", full))
-                .fetch_all(pool)
-                .await?;
-            let mut fkmap: std::collections::HashMap<i64, (String, Vec<String>, Vec<String>)> =
-                std::collections::HashMap::new();
-            for r in &fkrows {
-                let vals = crate::values::sqlite_row_values(r, 8);
-                let id = vals
-                    .first()
-                    .cloned()
-                    .flatten()
-                    .and_then(|v| v.parse::<i64>().ok())
-                    .unwrap_or(0);
-                let ref_table = vals.get(2).cloned().flatten().unwrap_or_default();
-                let from = vals.get(3).cloned().flatten().unwrap_or_default();
-                let to = vals.get(4).cloned().flatten();
-                let entry = fkmap
-                    .entry(id)
-                    .or_insert_with(|| (ref_table.clone(), Vec::new(), Vec::new()));
-                entry.1.push(from);
-                if let Some(t) = to {
-                    entry.2.push(t);
-                }
-            }
-            for (id, (rt, from, to)) in fkmap {
-                foreign_keys.push(ForeignKeyInfo {
-                    name: format!("FK_{}_{}", table, id),
-                    columns: from,
-                    ref_table: rt,
-                    ref_columns: to,
-                    on_update: None,
-                    on_delete: None,
-                });
-            }
+            indexes.extend(relational_keys::sqlite_indexes(pool, sqlite_namespace, table).await?);
+            foreign_keys = relational_keys::sqlite_foreign_keys(pool, sqlite_namespace, table).await?;
         }
         Db::Mysql(pool) => {
             let sql = format!(
@@ -569,7 +587,7 @@ pub async fn table_schema(
                 crate::db::quote_literal(schema),
                 crate::db::quote_literal(table)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             for r in &rows {
                 let name = mysql_get(r, "COLUMN_NAME").unwrap_or_default();
                 let ctype = mysql_get(r, "COLUMN_TYPE").unwrap_or_default();
@@ -594,71 +612,22 @@ pub async fn table_schema(
                     scale,
                 });
             }
-            let isql = format!(
-                "SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX \
-                 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} \
-                 ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-                crate::db::quote_literal(schema),
-                crate::db::quote_literal(table)
-            );
-            if let Ok(rows) = sqlx::query(&isql).fetch_all(pool).await {
-                let mut map: std::collections::HashMap<String, IndexInfo> =
-                    std::collections::HashMap::new();
-                for r in &rows {
-                    let name = mysql_get(r, "INDEX_NAME").unwrap_or_default();
-                    let col = mysql_get(r, "COLUMN_NAME").unwrap_or_default();
-                    let nonuniq = mysql_get(r, "NON_UNIQUE").unwrap_or_default();
-                    let entry = map.entry(name.clone()).or_insert_with(|| IndexInfo {
-                        name: name.clone(),
-                        columns: Vec::new(),
-                        unique: nonuniq == "0",
-                        primary: name == "PRIMARY",
-                        method: None,
-                    });
-                    entry.columns.push(col);
-                }
-                indexes = map.into_values().collect();
-            }
-            let fsql = format!(
-                "SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, \
-                 REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE \
-                 WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} AND REFERENCED_TABLE_NAME IS NOT NULL",
-                crate::db::quote_literal(schema),
-                crate::db::quote_literal(table)
-            );
-            if let Ok(rows) = sqlx::query(&fsql).fetch_all(pool).await {
-                let mut map: std::collections::HashMap<String, ForeignKeyInfo> =
-                    std::collections::HashMap::new();
-                for r in &rows {
-                    let cname = mysql_get(r, "CONSTRAINT_NAME").unwrap_or_default();
-                    let col = mysql_get(r, "COLUMN_NAME").unwrap_or_default();
-                    let rt = mysql_get(r, "REFERENCED_TABLE_NAME").unwrap_or_default();
-                    let rc = mysql_get(r, "REFERENCED_COLUMN_NAME").unwrap_or_default();
-                    let e = map.entry(cname.clone()).or_insert_with(|| ForeignKeyInfo {
-                        name: cname.clone(),
-                        columns: Vec::new(),
-                        ref_table: rt.clone(),
-                        ref_columns: Vec::new(),
-                        on_update: None,
-                        on_delete: None,
-                    });
-                    e.columns.push(col);
-                    e.ref_columns.push(rc);
-                }
-                foreign_keys = map.into_values().collect();
-            }
+            let (actual_indexes, actual_foreign_keys) = relational_keys::mysql_keys(pool, schema, table).await?;
+            indexes = actual_indexes;
+            foreign_keys = actual_foreign_keys;
             let csql = format!(
                 "SELECT TABLE_COMMENT, ENGINE, TABLE_COLLATION FROM information_schema.TABLES \
                  WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {}",
                 crate::db::quote_literal(schema),
                 crate::db::quote_literal(table)
             );
-            if let Ok(rows) = sqlx::query(&csql).fetch_all(pool).await {
-                if let Some(r) = rows.first() {
-                    comment = mysql_get(r, "TABLE_COMMENT");
-                    engine = mysql_get(r, "ENGINE");
-                    collation = mysql_get(r, "TABLE_COLLATION");
-                }
+            let rows = crate::sql_history::query(&csql).fetch_all(pool).await?;
+            if let Some(r) = rows.first() {
+                comment = mysql_get(r, "TABLE_COMMENT");
+                engine = mysql_get(r, "ENGINE");
+                collation = mysql_get(r, "TABLE_COLLATION");
+            } else {
+                return Err(anyhow!("METADATA_OBJECT_UNKNOWN: 表选项目录未返回目标对象"));
             }
         }
         Db::Postgres(pool) => {
@@ -676,7 +645,7 @@ pub async fn table_schema(
                 crate::db::quote_literal(schema),
                 crate::db::quote_literal(table)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             for r in &rows {
                 let name = pg_get(r, "attname").unwrap_or_default();
                 let ctype = pg_get(r, "format_type").unwrap_or_default();
@@ -697,103 +666,11 @@ pub async fn table_schema(
                     scale: None,
                 });
             }
-            // 主键
-            let psql = format!(
-                "SELECT a.attname FROM pg_index i \
-                 JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) \
-                 JOIN pg_class c ON c.oid = i.indrelid \
-                 JOIN pg_namespace n ON n.oid = c.relnamespace \
-                 WHERE n.nspname = {} AND c.relname = {} AND i.indisprimary",
-                crate::db::quote_literal(schema),
-                crate::db::quote_literal(table)
-            );
-            if let Ok(rows) = sqlx::query(&psql).fetch_all(pool).await {
-                let names: Vec<String> = rows.iter().filter_map(|r| pg_get(r, "attname")).collect();
-                if !names.is_empty() {
-                    for c in columns.iter_mut() {
-                        if names.contains(&c.name) {
-                            c.primary_key = true;
-                        }
-                    }
-                    indexes.push(IndexInfo {
-                        name: "PRIMARY KEY".into(),
-                        columns: names,
-                        unique: true,
-                        primary: true,
-                        method: None,
-                    });
-                }
-            }
-            // 唯一索引
-            let usql = format!(
-                "SELECT i.relname, a.attname FROM pg_index x \
-                 JOIN pg_class i ON i.oid = x.indexrelid \
-                 JOIN pg_class c ON c.oid = x.indrelid \
-                 JOIN pg_namespace n ON n.oid = c.relnamespace \
-                 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(x.indkey) \
-                 WHERE n.nspname = {} AND c.relname = {} AND x.indisunique \
-                 AND NOT x.indisprimary",
-                crate::db::quote_literal(schema),
-                crate::db::quote_literal(table)
-            );
-            if let Ok(rows) = sqlx::query(&usql).fetch_all(pool).await {
-                let mut map: std::collections::HashMap<String, Vec<String>> =
-                    std::collections::HashMap::new();
-                for r in &rows {
-                    let iname = pg_get(r, "relname").unwrap_or_default();
-                    let col = pg_get(r, "attname").unwrap_or_default();
-                    map.entry(iname.clone()).or_default().push(col);
-                }
-                for (name, cols) in map {
-                    indexes.push(IndexInfo {
-                        name,
-                        columns: cols,
-                        unique: true,
-                        primary: false,
-                        method: None,
-                    });
-                }
-            }
-            // 外键
-            let fsql = format!(
-                "SELECT tc.conname, a.attname, c2.relname, af.attname, \
-                 pg_get_constraintdef(tc.oid) FROM pg_constraint tc \
-                 JOIN pg_class c ON c.oid = tc.conrelid \
-                 JOIN pg_namespace n ON n.oid = c.relnamespace \
-                 JOIN pg_class c2 ON c2.oid = tc.confrelid \
-                 JOIN pg_attribute a ON a.attrelid = tc.conrelid AND a.attnum = ANY(tc.conkey) \
-                 JOIN pg_attribute af ON af.attrelid = tc.confrelid AND af.attnum = ANY(tc.confkey) \
-                 WHERE tc.contype = 'f' AND n.nspname = {} AND c.relname = {}",
-                crate::db::quote_literal(schema),
-                crate::db::quote_literal(table)
-            );
-            if let Ok(rows) = sqlx::query(&fsql).fetch_all(pool).await {
-                let mut map: std::collections::HashMap<String, ForeignKeyInfo> =
-                    std::collections::HashMap::new();
-                for r in &rows {
-                    let cname = pg_get(r, "conname").unwrap_or_default();
-                    let col = pg_get(r, "attname").unwrap_or_default();
-                    let rt = pg_get(r, "relname").unwrap_or_default();
-                    let rc = pg_get(r, "attname").unwrap_or_default();
-                    let def = pg_get(r, "pg_get_constraintdef").unwrap_or_default();
-                    let e = map.entry(cname.clone()).or_insert_with(|| ForeignKeyInfo {
-                        name: cname.clone(),
-                        columns: Vec::new(),
-                        ref_table: rt.clone(),
-                        ref_columns: Vec::new(),
-                        on_update: None,
-                        on_delete: None,
-                    });
-                    e.columns.push(col);
-                    e.ref_columns.push(rc);
-                    if def.to_ascii_lowercase().contains("on update") {
-                        e.on_update = Some(def.clone());
-                    }
-                    if def.to_ascii_lowercase().contains("on delete") {
-                        e.on_delete = Some(def.clone());
-                    }
-                }
-                foreign_keys = map.into_values().collect();
+            let (actual_indexes, actual_foreign_keys) = relational_keys::pg_keys(pool, schema, table).await?;
+            indexes = actual_indexes;
+            foreign_keys = actual_foreign_keys;
+            for column in &mut columns {
+                column.primary_key = indexes.iter().filter(|index| index.primary).any(|index| index.columns.contains(&column.name));
             }
             let csql = format!(
                 "SELECT obj_description(c.oid) FROM pg_class c \
@@ -802,10 +679,11 @@ pub async fn table_schema(
                 crate::db::quote_literal(schema),
                 crate::db::quote_literal(table)
             );
-            if let Ok(rows) = sqlx::query(&csql).fetch_all(pool).await {
-                if let Some(r) = rows.first() {
-                    comment = pg_get(r, "obj_description");
-                }
+            let rows = crate::sql_history::query(&csql).fetch_all(pool).await?;
+            if let Some(r) = rows.first() {
+                comment = pg_get(r, "obj_description");
+            } else {
+                return Err(anyhow!("METADATA_OBJECT_UNKNOWN: 对象描述目录未返回目标对象"));
             }
         }
             _ => {}
@@ -822,97 +700,20 @@ pub async fn table_schema(
         collation,
         row_count: None,
     })
+
+    }).await
 }
 
-/// 单条筛选条件的 SQL 片段（不含与上一条的连接方式）。
-fn filter_condition_sql(
-    kind: &DbKind,
-    f: &crate::models::FilterCondition,
-) -> Result<String> {
-    let col = quote_ident(kind, &f.column);
-    let value = crate::db::quote_literal(&f.value);
-    let op = f.operator.trim().to_ascii_lowercase();
-    if op == "is null" || op == "is not null" {
-        return Ok(format!("{} {}", col, op.to_ascii_uppercase()));
-    }
-    let sql_op = match op.as_str() {
-        "=" => "=", "<>" | "!=" => "<>", ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=",
-        "like" => "LIKE", "not like" => "NOT LIKE",
-        _ => anyhow::bail!("不支持的筛选运算符：{}", f.operator),
-    };
-    let pattern = op == "like" || op == "not like";
-    let equality = op == "=" || op == "<>" || op == "!=";
-    // SQLite LIKE 默认忽略 ASCII 大小写，COLLATE BINARY 不能改变 LIKE。
-    // 敏感模式用等价 GLOB，并逐字符转义其额外元字符。
-    if kind.is_sqlite() && pattern && f.case_sensitive {
-        let glob: String = f.value.chars().map(|c| match c {
-            '%' => "*".to_string(), '_' => "?".to_string(),
-            '*' => "[*]".to_string(), '?' => "[?]".to_string(),
-            '[' => "[[]".to_string(), ']' => "[]]".to_string(),
-            _ => c.to_string(),
-        }).collect();
-        Ok(format!("{} {} {}", col, if op == "not like" { "NOT GLOB" } else { "GLOB" }, crate::db::quote_literal(&glob)))
-    } else if kind.is_pg_family() && pattern {
-        let pg_op = match (op.as_str(), f.case_sensitive) {
-            ("like", false) => "ILIKE", ("not like", false) => "NOT ILIKE",
-            ("not like", true) => "NOT LIKE", _ => "LIKE",
-        };
-        Ok(format!("CAST({} AS TEXT) {} {}", col, pg_op, value))
-    } else if kind.is_mysql_family() && f.case_sensitive && (pattern || equality) {
-        Ok(format!("BINARY {} {} {}", col, sql_op, value))
-    } else if kind.is_sqlite() && equality {
-        Ok(format!("{} COLLATE {} {} {}", col, if f.case_sensitive { "BINARY" } else { "NOCASE" }, sql_op, value))
-    } else if !f.case_sensitive && (pattern || (equality && f.value.parse::<f64>().is_err())) {
-        // 数字值保留列类型的隐式转换语义（整数 1 = '01'），不强转为文本。
-        let text_col = if kind.is_pg_family() { format!("CAST({} AS TEXT)", col) } else { col };
-        Ok(format!("LOWER({}) {} LOWER({})", text_col, sql_op, value))
-    } else if kind.protocol() == crate::models::Protocol::Mssql && f.case_sensitive && (pattern || equality) {
-        Ok(format!("{} COLLATE Latin1_General_100_BIN2 {} {}", col, sql_op, value))
-    } else {
-        Ok(format!("{} {} {}", col, sql_op, value))
-    }
-}
+#[path="table_workflows_filter.rs"]
+mod typed_table_filter;
+#[path="table_workflows_filter_comparisons.rs"]
+mod sensitive_table_filter;
 
-/// 生成整组 WHERE。行 = 括号组：行内多条条件按各条件的 logic 连接（首条
-/// 忽略、缺省 AND），行与行按行 logic 并列连接（缺省 AND），直接对应 SQL
-/// 书写形式 a = 1 AND (b = 2 OR c = 3) AND d = 4。
-/// 多行时行内多条件者加括号保住分组；单行时外层括号已足够，不再重复。
-/// 空行跳过；全部为空时不生成 WHERE。
+// 仅静态方言测试使用明确的文本 fixture；实际分页必须读取真实列目录。
+#[cfg(test)]
 fn filter_clause(kind: &DbKind, lines: &[crate::models::FilterLine]) -> Result<String> {
-    let mut items: Vec<(crate::models::FilterLogic, String, bool)> = Vec::new();
-    for line in lines {
-        if line.conds.is_empty() { continue; }
-        let mut inner = String::new();
-        for (j, c) in line.conds.iter().enumerate() {
-            if j > 0 {
-                inner.push_str(match c.logic.unwrap_or(crate::models::FilterLogic::And) {
-                    crate::models::FilterLogic::And => " AND ",
-                    crate::models::FilterLogic::Or => " OR ",
-                });
-            }
-            inner.push_str(&filter_condition_sql(kind, c)?);
-        }
-        items.push((line.logic, inner, line.conds.len() > 1));
-    }
-    if items.is_empty() { return Ok(String::new()); }
-    let multi = items.len() > 1;
-    let mut sql = String::new();
-    for (i, (logic, part, bracket)) in items.iter().enumerate() {
-        if i > 0 {
-            sql.push_str(match logic {
-                crate::models::FilterLogic::And => " AND ",
-                crate::models::FilterLogic::Or => " OR ",
-            });
-        }
-        if multi && *bracket {
-            sql.push('(');
-            sql.push_str(part);
-            sql.push(')');
-        } else {
-            sql.push_str(part);
-        }
-    }
-    Ok(format!(" WHERE ({})", sql))
+    let types = lines.iter().flat_map(|l| &l.conds).map(|c| (c.column.clone(), typed_table_filter::FilterType::Text)).collect();
+    sensitive_table_filter::clause(kind, lines, &types)
 }
 
 /// 兼容旧单列排序；显式空数组表示清除，绝不回退旧字段。
@@ -937,6 +738,9 @@ pub async fn page_table(
     kind: DbKind,
     req: &PageRequest,
 ) -> Result<PageResult> {
+    let mut __sql_history_context = crate::sql_history::db_context(db);
+    __sql_history_context.origin="page".into();
+    crate::sql_history::scope(__sql_history_context, async {
     let start = std::time::Instant::now();
     if let Db::Http(h) = db {
         let mut r = http_page_table(h, req).await?;
@@ -959,13 +763,13 @@ pub async fn page_table(
         return Ok(r);
     }
     let full = qualified(&kind, &req.schema, &req.table);
-    let where_sql = filter_clause(&kind, &req.filters)?;
+    let where_sql = sensitive_table_filter::typed_clause(db, &kind, req).await?;
     let order_sql = order_clause(&kind, req);
     let limit = req.limit.clamp(1, 100_000);
     let offset = req.offset;
 
     // 表元数据：列定义 + 主键（失败则退回按行推导）。
-    let meta = table_schema(db, kind, &req.schema, &req.table).await.ok();
+    let meta = table_schema(db, kind.clone(), &req.schema, &req.table).await.ok();
     let meta_cols: Vec<ResultColumn> = meta
         .as_ref()
         .map(|m| {
@@ -981,21 +785,18 @@ pub async fn page_table(
                 .collect()
         })
         .unwrap_or_default();
-    let meta_pks: Vec<String> = meta
-        .as_ref()
-        .map(|m| m.columns.iter().filter(|c| c.primary_key).map(|c| c.name.clone()).collect())
-        .unwrap_or_default();
+    let meta_pks: Vec<String> = meta.as_ref().map(crate::design::ordered_primary_key).transpose()?.unwrap_or_default();
     let col_count = meta_cols.len();
 
     let (rows, total, pks) = match db {
         Db::Sqlite(pool) => {
             let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
-            let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(pool).await?;
+            let total: i64 = crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?;
             let sql = format!(
                 "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
                 full, where_sql, order_sql, limit, offset
             );
-            let fetched = sqlx::query(&sql).fetch_all(pool).await?;
+            let fetched = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let out_rows = if let Some(first) = fetched.first() {
                 let n = first.columns().len();
                 let mut out = Vec::with_capacity(fetched.len());
@@ -1009,36 +810,28 @@ pub async fn page_table(
             // 主键（元数据缺失时退回 PRAGMA）
             let mut pks = meta_pks.clone();
             if pks.is_empty() {
-                if let Ok(pkrows) =
-                    sqlx::query(&format!("PRAGMA table_info({})", full))
-                        .fetch_all(pool)
-                        .await
-                {
-                    for r in &pkrows {
-                        let vals = crate::values::sqlite_row_values(r, 6);
-                        let name = vals.get(1).cloned().flatten().unwrap_or_default();
-                        let pk = vals
-                            .get(5)
-                            .cloned()
-                            .flatten()
-                            .and_then(|v| v.parse::<i64>().ok())
-                            .unwrap_or(0);
-                        if pk > 0 {
-                            pks.push(name);
-                        }
-                    }
+                let namespace = if req.schema.is_empty() { "main" } else { &req.schema };
+                let pk_sql = format!("PRAGMA {}.table_info({})", quote_ident(&kind, namespace), quote_ident(&kind, &req.table));
+                let pkrows = crate::sql_history::query(&pk_sql).fetch_all(pool).await?;
+                let mut ordered = Vec::new();
+                for row in pkrows {
+                    let ordinal: i64 = row.try_get("pk")?;
+                    if ordinal > 0 { ordered.push((ordinal, row.try_get::<String, _>("name")?)); }
                 }
+                ordered.sort_by_key(|part| part.0);
+                anyhow::ensure!(ordered.iter().enumerate().all(|(index, part)| part.0 == index as i64 + 1), "STRUCTURE_METADATA_KEY_ORDER_UNPROVEN");
+                pks = ordered.into_iter().map(|part| part.1).collect();
             }
             (out_rows, total as u64, pks)
         }
         Db::Mysql(pool) => {
             let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
-            let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(pool).await?;
+            let total: i64 = crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?;
             let sql = format!(
                 "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
                 full, where_sql, order_sql, limit, offset
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let out_rows = if let Some(first) = rows.first() {
                 let n = first.columns().len();
                 let mut out = Vec::with_capacity(rows.len());
@@ -1050,7 +843,7 @@ pub async fn page_table(
                 Vec::new()
             };
             let pks = if meta_pks.is_empty() {
-                primary_keys_mysql(pool, &req.schema, &req.table).await
+                primary_keys_mysql(pool, &req.schema, &req.table).await?
             } else {
                 meta_pks
             };
@@ -1058,12 +851,12 @@ pub async fn page_table(
         }
         Db::Postgres(pool) => {
             let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
-            let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(pool).await?;
+            let total: i64 = crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?;
             let sql = format!(
                 "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
                 full, where_sql, order_sql, limit, offset
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let out_rows = if let Some(first) = rows.first() {
                 let n = first.columns().len();
                 let mut out = Vec::with_capacity(rows.len());
@@ -1075,7 +868,7 @@ pub async fn page_table(
                 Vec::new()
             };
             let pks = if meta_pks.is_empty() {
-                primary_keys_pg(pool, &req.schema, &req.table).await
+                primary_keys_pg(pool, &req.schema, &req.table).await?
             } else {
                 meta_pks
             };
@@ -1121,6 +914,8 @@ pub async fn page_table(
         primary_keys: pks,
         elapsed_ms: start.elapsed().as_millis() as u64,
     })
+
+    }).await
 }
 
 /// MySQL 主键列。
@@ -1128,18 +923,10 @@ async fn primary_keys_mysql(
     pool: &sqlx::MySqlPool,
     schema: &str,
     table: &str,
-) -> Vec<String> {
-    let sql = format!(
-        "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE \
-         WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} AND CONSTRAINT_NAME = 'PRIMARY' \
-         ORDER BY ORDINAL_POSITION",
-        crate::db::quote_literal(schema),
-        crate::db::quote_literal(table)
-    );
-    match sqlx::query(&sql).fetch_all(pool).await {
-        Ok(rows) => rows.iter().filter_map(|r| mysql_get(r, "COLUMN_NAME")).collect(),
-        Err(_) => Vec::new(),
-    }
+) -> Result<Vec<String>> {
+    let rows = crate::sql_history::query("SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY' ORDER BY ORDINAL_POSITION")
+        .bind(schema).bind(table).fetch_all(pool).await?;
+    rows.iter().map(|row| mysql_get(row, "COLUMN_NAME").filter(|name| !name.is_empty()).ok_or_else(|| anyhow!("STRUCTURE_METADATA_FIELD_UNPROVEN"))).collect()
 }
 
 /// PostgreSQL 主键列。
@@ -1147,24 +934,14 @@ async fn primary_keys_pg(
     pool: &sqlx::PgPool,
     schema: &str,
     table: &str,
-) -> Vec<String> {
-    let sql = format!(
-        "SELECT a.attname FROM pg_index i \
-         JOIN pg_class c ON c.oid = i.indrelid \
-         JOIN pg_namespace n ON n.oid = c.relnamespace \
-         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
-         WHERE n.nspname = {} AND c.relname = {} AND i.indisprimary",
-        crate::db::quote_literal(schema),
-        crate::db::quote_literal(table)
-    );
-    match sqlx::query(&sql).fetch_all(pool).await {
-        Ok(rows) => rows.iter().filter_map(|r| pg_get(r, "attname")).collect(),
-        Err(_) => Vec::new(),
-    }
+) -> Result<Vec<String>> {
+    let rows = crate::sql_history::query("SELECT a.attname::text AS column_name FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN LATERAL unnest(i.indkey::smallint[]) WITH ORDINALITY k(attnum,ordinal) ON true JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary ORDER BY k.ordinal")
+        .bind(schema).bind(table).fetch_all(pool).await?;
+    rows.iter().map(|row| row.try_get::<String, _>("column_name").map_err(Into::into)).collect()
 }
 
 /// 生成 `col = value` / `col IS NULL` 的 WHERE 条件（NULL 用 IS NULL，否则永远不匹配）。
-fn where_condition(kind: &DbKind, col: &str, val: &Option<String>) -> String {
+pub(crate) fn where_condition(kind: &DbKind, col: &str, val: &Option<String>) -> String {
     let ident = quote_ident(&kind, col);
     match val {
         Some(s) => format!("{} = {}", ident, crate::db::quote_literal(s)),
@@ -1174,6 +951,8 @@ fn where_condition(kind: &DbKind, col: &str, val: &Option<String>) -> String {
 
 /// 更新一行。
 pub async fn update_row(db: &Db, kind: DbKind, req: &RowUpdate) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(_) | Db::Redis(_) | Db::Mongo(_) = db {
         return Err(anyhow::anyhow!(
             "该数据源类型不支持行编辑，请在查询标签页执行对应命令"
@@ -1211,10 +990,14 @@ pub async fn update_row(db: &Db, kind: DbKind, req: &RowUpdate) -> Result<u64> {
         conds.join(" AND ")
     );
     exec_affected(db, &kind, &sql).await
+
+    }).await
 }
 
 /// 插入一行。
 pub async fn insert_row(db: &Db, kind: DbKind, req: &RowInsert) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(_) | Db::Redis(_) | Db::Mongo(_) = db {
         return Err(anyhow::anyhow!(
             "该数据源类型不支持行编辑，请在查询标签页执行对应命令"
@@ -1240,6 +1023,8 @@ pub async fn insert_row(db: &Db, kind: DbKind, req: &RowInsert) -> Result<u64> {
         vals.join(", ")
     );
     exec_affected(db, &kind, &sql).await
+
+    }).await
 }
 
 /// 删除一行。
@@ -1250,6 +1035,8 @@ pub async fn delete_row(
     table: &str,
     primary_keys: &[(String, Option<String>)],
 ) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(_) | Db::Redis(_) | Db::Mongo(_) = db {
         return Err(anyhow::anyhow!(
             "该数据源类型不支持行编辑，请在查询标签页执行对应命令"
@@ -1265,11 +1052,15 @@ pub async fn delete_row(
     }
     let sql = format!("DELETE FROM {} WHERE {}", full, conds.join(" AND "));
     exec_affected(db, &kind, &sql).await
+
+    }).await
 }
 
 /// 执行 DDL / DML 并返回影响行数。
 /// 读取视图定义（完整的 CREATE VIEW 语句）。
 pub async fn view_definition(db: &Db, kind: DbKind, schema: &str, view: &str) -> Result<String> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(_) | Db::Redis(_) | Db::Mongo(_) = db {
         return Err(anyhow::anyhow!("该数据源类型不支持视图定义查看"));
     }
@@ -1278,7 +1069,7 @@ pub async fn view_definition(db: &Db, kind: DbKind, schema: &str, view: &str) ->
     }
     match db {
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = ?",
             )
             .bind(view)
@@ -1291,7 +1082,7 @@ pub async fn view_definition(db: &Db, kind: DbKind, schema: &str, view: &str) ->
         }
         Db::Mysql(pool) => {
             let full = crate::db::qualified(&kind, schema, view);
-            let rows = sqlx::query(&format!("SHOW CREATE VIEW {}", full)).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&format!("SHOW CREATE VIEW {}", full)).fetch_all(pool).await?;
             let r = rows.first().ok_or_else(|| anyhow::anyhow!("视图不存在"))?;
             let cols = r.columns();
             let vals = crate::values::my_row_values(r, cols.len());
@@ -1308,7 +1099,7 @@ pub async fn view_definition(db: &Db, kind: DbKind, schema: &str, view: &str) ->
                 "SELECT pg_get_viewdef('{}'::regclass, true) AS def",
                 full.replace('\'', "''")
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let def = rows
                 .first()
                 .and_then(|r| crate::values::pg_row_values(r, 1).first().cloned().flatten())
@@ -1324,6 +1115,8 @@ pub async fn view_definition(db: &Db, kind: DbKind, schema: &str, view: &str) ->
         }
             _ => Err(anyhow::anyhow!("不支持的连接类型")),
     }
+
+    }).await
 }
 
 fn mysql_table_status_sql(kind: &DbKind, schema: &str, table: &str) -> String {
@@ -1340,10 +1133,12 @@ pub async fn table_status(
     schema: &str,
     table: &str,
 ) -> Result<Vec<(String, String)>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     match db {
         Db::Mysql(pool) => {
             let sql = mysql_table_status_sql(&kind, schema, table);
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let r = rows.first().ok_or_else(|| anyhow::anyhow!("表不存在"))?;
             let cols = r.columns();
             let vals = crate::values::my_row_values(r, cols.len());
@@ -1376,7 +1171,7 @@ pub async fn table_status(
                 crate::db::quote_literal(schema),
                 crate::db::quote_literal(table)
             );
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let r = rows.first().ok_or_else(|| anyhow::anyhow!("表不存在"))?;
             let cols = r.columns();
             let vals = crate::values::pg_row_values(r, cols.len());
@@ -1403,9 +1198,9 @@ pub async fn table_status(
         }
         Db::Sqlite(pool) => {
             let page_count: i64 =
-                sqlx::query_scalar("PRAGMA page_count").fetch_one(pool).await?;
+                crate::sql_history::query_scalar("PRAGMA page_count").fetch_one(pool).await?;
             let page_size: i64 =
-                sqlx::query_scalar("PRAGMA page_size").fetch_one(pool).await?;
+                crate::sql_history::query_scalar("PRAGMA page_size").fetch_one(pool).await?;
             let bytes = page_count.saturating_mul(page_size);
             Ok(vec![
                 ("Data_length".into(), bytes.to_string()),
@@ -1421,6 +1216,8 @@ pub async fn table_status(
         }
         _ => Err(anyhow::anyhow!("该数据源类型不支持表信息查看")),
     }
+
+    }).await
 }
 
 /// 表的建表语句（信息面板「DDL」）。
@@ -1430,10 +1227,12 @@ pub async fn table_ddl(
     schema: &str,
     table: &str,
 ) -> Result<String> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     match db {
         Db::Mysql(pool) => {
             let full = crate::db::qualified(&kind, schema, table);
-            let rows = sqlx::query(&format!("SHOW CREATE TABLE {}", full))
+            let rows = crate::sql_history::query(&format!("SHOW CREATE TABLE {}", full))
                 .fetch_all(pool)
                 .await?;
             let r = rows.first().ok_or_else(|| anyhow::anyhow!("表不存在"))?;
@@ -1447,7 +1246,7 @@ pub async fn table_ddl(
                 .ok_or_else(|| anyhow::anyhow!("表定义获取失败"))
         }
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT sql FROM sqlite_master WHERE type IN ('table','view') AND name = ?",
             )
             .bind(table)
@@ -1496,27 +1295,34 @@ pub async fn table_ddl(
             ))
         }
     }
+
+    }).await
 }
 
 pub async fn exec_affected(db: &Db, _kind: &DbKind, sql: &str) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if matches!(db, Db::ClickHouse(_) | Db::Odbc(_)) {
         return db.generic_exec(sql).await;
     }
     match db {
         Db::Sqlite(pool) => {
-            let res = sqlx::query(sql).execute(pool).await?;
+            let res = crate::sql_history::query(sql).execute(pool).await?;
             Ok(res.rows_affected())
         }
         Db::Mysql(pool) => {
-            let res = sqlx::query(sql).execute(pool).await?;
+            let res = crate::sql_history::query(sql).execute(pool).await?;
             Ok(res.rows_affected())
         }
         Db::Postgres(pool) => {
-            let res = sqlx::query(sql).execute(pool).await?;
+            let res = crate::sql_history::query(sql).execute(pool).await?;
             Ok(res.rows_affected())
         }
-            _ => Ok(0),
+        Db::Mssql(_) | Db::Http(_) => db.generic_exec(sql).await,
+        _ => Err(anyhow!("当前适配器不支持此 SQL 写入操作，没有执行")),
     }
+
+    }).await
 }
 
 /// 读取表的原始行（导出用，不分页）。
@@ -1528,6 +1334,8 @@ pub async fn fetch_all_rows(
     where_clause: Option<&str>,
     limit: Option<u64>,
 ) -> Result<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if matches!(db, Db::ClickHouse(_) | Db::Odbc(_)) {
         let full = qualified(&kind, schema, table);
         let where_sql = match where_clause {
@@ -1554,7 +1362,7 @@ pub async fn fetch_all_rows(
     let sql = format!("SELECT * FROM {}{}{}", full, where_sql, limit_sql);
     match db {
         Db::Sqlite(pool) => {
-            let fetched = sqlx::query(&sql).fetch_all(pool).await?;
+            let fetched = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let mut names = Vec::new();
             let mut rows_out = Vec::new();
             if let Some(first) = fetched.first() {
@@ -1566,7 +1374,7 @@ pub async fn fetch_all_rows(
             Ok((names, rows_out))
         }
         Db::Mysql(pool) => {
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let mut out = Vec::new();
             let names: Vec<String> = rows
                 .first()
@@ -1578,7 +1386,7 @@ pub async fn fetch_all_rows(
             Ok((names, out))
         }
         Db::Postgres(pool) => {
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let mut out = Vec::new();
             let names: Vec<String> = rows
                 .first()
@@ -1591,68 +1399,24 @@ pub async fn fetch_all_rows(
         }
             _ => Ok((Vec::new(), Vec::new())),
     }
+
+    }).await
 }
 
 // ================================================================ 通用 SQL 实现（ClickHouse / ODBC / SQL Server 等）
 // 所有数据都经 db.generic_* 文本化取出，再按方言组织目录查询。
 
 
-/// 列出数据库：依次尝试方言候选 SQL，全部失败时退化为单库（默认库）。
+#[path = "schema_namespaces.rs"]
+mod namespaces;
+
+/// 列出真实可见目录：查询失败向上传播，成功的空目录仍为空。
 async fn generic_list_databases(db: &Db, kind: &DbKind) -> Result<Vec<(String, String)>> {
-    let candidates: Vec<&str> = match kind.id() {
-        "clickhouse" => vec!["SHOW DATABASES"],
-        "hive" | "inceptor" | "argodb" => vec!["SHOW DATABASES"],
-        "dameng" => vec!["SELECT NAME FROM V$DATABASE"],
-        "sqlserver" | "mssql" => vec![
-            "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name",
-        ],
-        "oracle" => vec!["SELECT username FROM all_users ORDER BY username"],
-        "db2" => vec![
-            "SELECT schemaname FROM syscat.schemata ORDER BY schemaname",
-        ],
-        "informix" => vec!["SELECT name FROM sysmaster:sysdatabases"],
-        "teradata" => vec![
-            "SELECT DatabaseName FROM dbc.Databases ORDER BY DatabaseName",
-        ],
-        "saphana" => vec!["SELECT SCHEMA_NAME FROM SYS.SCHEMAS ORDER BY SCHEMA_NAME"],
-        "snowflake" | "redshift" | "bigquery" | "dremio" | "trino" | "prestosql"
-        | "exasol" | "vertica" | "spark" | "impala" | "kyuubi" | "kylin" => {
-            vec![
-                "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
-                "SHOW DATABASES",
-                "SHOW SCHEMAS",
-            ]
-        }
-        _ => vec![
-            "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
-            "SHOW DATABASES",
-        ],
-    };
-    for sql in candidates {
-        if let Ok((cols, rows)) = db.generic_rows(sql).await {
-            let name_idx = cols
-                .iter()
-                .position(|c| {
-                    c.eq_ignore_ascii_case("name")
-                        || c.eq_ignore_ascii_case("database")
-                        || c.eq_ignore_ascii_case("schema_name")
-                        || c.eq_ignore_ascii_case("username")
-                })
-                .unwrap_or(0);
-            let out: Vec<(String, String)> = rows
-                .into_iter()
-                .filter_map(|r| {
-                    let name = r.get(name_idx).cloned().flatten()?;
-                    Some((name.clone(), name))
-                })
-                .collect();
-            if !out.is_empty() {
-                return Ok(out);
-            }
-        }
-    }
-    // 退化：文件型 / 无目录概念的数据源只有一个默认库
-    Ok(vec![("main".to_string(), "main（默认库）".to_string())])
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    namespaces::list_with(kind, |sql| db.generic_rows(sql)).await
+
+    }).await
 }
 
 /// 列出表与视图：方言优先，其余走 information_schema 兜底。
@@ -1661,6 +1425,8 @@ async fn generic_list_tables(
     kind: &DbKind,
     schema: &str,
 ) -> Result<Vec<(String, ObjectType)>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let mut out: Vec<(String, ObjectType)> = Vec::new();
     match kind.id() {
         "clickhouse" => {
@@ -1690,21 +1456,11 @@ async fn generic_list_tables(
             }
         }
         "sqlserver" | "mssql" => {
-            let (_, rows) = db
-                .generic_rows("SELECT name FROM sys.tables ORDER BY name")
-                .await?;
-            for r in rows {
-                if let Some(name) = r.first().cloned().flatten() {
-                    out.push((name, ObjectType::Table));
-                }
-            }
-            let (_, rows) = db
-                .generic_rows("SELECT name FROM sys.views ORDER BY name")
-                .await?;
-            for r in rows {
-                if let Some(name) = r.first().cloned().flatten() {
-                    out.push((name, ObjectType::View));
-                }
+            let query = crate::object_identity::sqlserver_list_query(kind, schema)?;
+            let (_, rows) = db.generic_rows(&query).await?;
+            for row in rows {
+                let (Some(namespace), Some(name), Some(ty)) = (row.first().cloned().flatten(), row.get(1).cloned().flatten(), row.get(2).cloned().flatten()) else { continue; };
+                out.push((crate::object_identity::sqlserver_object_label(kind, &namespace, &name), if ty == "V" { ObjectType::View } else { ObjectType::Table }));
             }
         }
         "oracle" | "dameng" => {
@@ -1810,6 +1566,8 @@ async fn generic_list_tables(
         }
     }
     Ok(out)
+
+    }).await
 }
 
 /// 读取表结构：方言优先，其余以 SELECT ... WHERE 1=0 取列名兜底。
@@ -1819,6 +1577,8 @@ async fn generic_table_schema(
     schema: &str,
     table: &str,
 ) -> Result<TableSchema> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let mut out = TableSchema {
         table: table.to_string(),
         database: schema.to_string(),
@@ -1881,15 +1641,8 @@ async fn generic_table_schema(
             out.row_count = cnt.and_then(|s| s.trim().parse().ok());
         }
         "sqlserver" | "mssql" => {
-            let upper = table.replace('\'', "''");
-            let (_cols, rows) = db
-                .generic_rows(&format!(
-                    "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT \
-                     FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{}' \
-                     ORDER BY ORDINAL_POSITION",
-                    upper
-                ))
-                .await?;
+            let identity = crate::object_identity::SqlServerObject::parse(schema, table)?;
+            let (_cols, rows) = db.generic_rows(&identity.columns_query(kind)).await?;
             for r in &rows {
                 let name = r.first().cloned().flatten().unwrap_or_default();
                 if name.is_empty() {
@@ -1919,15 +1672,8 @@ async fn generic_table_schema(
             }
             // 主键
             let (_, pk_rows) = db
-                .generic_rows(&format!(
-                    "SELECT ku.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
-                     JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku \
-                     ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME \
-                     WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND tc.TABLE_NAME = '{}'",
-                    upper
-                ))
-                .await
-                .unwrap_or((Vec::new(), Vec::new()));
+                .generic_rows(&identity.primary_key_query(kind))
+                .await?;
             let pk_names: Vec<String> = pk_rows
                 .iter()
                 .filter_map(|r| r.first().cloned().flatten())
@@ -2081,12 +1827,19 @@ async fn generic_table_schema(
         }
     }
     Ok(out)
+
+    }).await
 }
 
 /// 分页读取表数据。
 async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result<PageResult> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    if kind.protocol() == crate::models::Protocol::Mssql {
+        crate::object_identity::SqlServerObject::parse(&req.schema, &req.table)?;
+    }
     let full = crate::db::qualified(&kind, &req.schema, &req.table);
-    let where_sql = filter_clause(kind, &req.filters)?;
+    let where_sql = sensitive_table_filter::typed_clause(db, kind, req).await?;
     let order_sql = order_clause(kind, req);
     let total: u64 = db
         .generic_scalar(&format!("SELECT COUNT(*) FROM {}{}", full, where_sql))
@@ -2135,16 +1888,25 @@ async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result
     if (hive_family || top_family) && req.offset > 0 {
         rows = rows.into_iter().skip(req.offset as usize).collect();
     }
+    let mssql_columns = if kind.protocol() == crate::models::Protocol::Mssql {
+        let identity = crate::object_identity::SqlServerObject::parse(&req.schema, &req.table)?;
+        let (_, metadata) = db.generic_rows(&identity.columns_query(kind)).await?;
+        metadata.into_iter().map(|row| {
+            let name = row.first().cloned().flatten().ok_or_else(|| anyhow::anyhow!("SQL Server 列目录缺少名称"))?;
+            let data_type = row.get(1).cloned().flatten().filter(|ty| !ty.is_empty()).ok_or_else(|| anyhow::anyhow!("SQL Server 列目录缺少真实类型"))?;
+            let nullable = row.get(2).and_then(Option::as_deref).map(|value| value.eq_ignore_ascii_case("YES")).unwrap_or(true);
+            Ok(ResultColumn { name, data_type, nullable, primary_key: false, auto_increment: false })
+        }).collect::<Result<Vec<_>>>()?
+    } else { Vec::new() };
     let columns = cols
         .into_iter()
-        .map(|c| ResultColumn {
-            name: c,
-            data_type: String::new(),
-            nullable: true,
-            primary_key: false,
-            auto_increment: false,
+        .map(|c| {
+            if kind.protocol() == crate::models::Protocol::Mssql {
+                return mssql_columns.iter().find(|column| column.name == c).cloned().ok_or_else(|| anyhow::anyhow!("SQL Server 结果列与目录不一致：{}", c));
+            }
+            Ok(ResultColumn { name: c, data_type: String::new(), nullable: true, primary_key: false, auto_increment: false })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok(PageResult {
         columns,
         rows,
@@ -2152,6 +1914,8 @@ async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result
         primary_keys: Vec::new(),
         elapsed_ms: 0,
     })
+
+    }).await
 }
 
 /// 视图定义。
@@ -2161,6 +1925,8 @@ async fn generic_view_definition(
     schema: &str,
     view: &str,
 ) -> Result<String> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     match kind.id() {
         "clickhouse" => {
             let full = crate::db::qualified(&kind, schema, view);
@@ -2189,12 +1955,8 @@ async fn generic_view_definition(
             }
         }
         "sqlserver" | "mssql" => {
-            let (_, rows) = db
-                .generic_rows(&format!(
-                    "SELECT OBJECT_DEFINITION(OBJECT_ID('{}'))",
-                    view.replace('\'', "''")
-                ))
-                .await?;
+            let identity = crate::object_identity::SqlServerObject::parse(schema, view)?;
+            let (_, rows) = db.generic_rows(&identity.view_query(kind)).await?;
             rows.first()
                 .and_then(|r| r.first().cloned().flatten())
                 .filter(|s| !s.trim().is_empty())
@@ -2224,6 +1986,8 @@ async fn generic_view_definition(
         }
         _ => Err(anyhow::anyhow!("该数据源类型不支持视图定义查看")),
     }
+
+    }).await
 }
 
 // ================================================================ HTTP / Redis / MongoDB 树与数据页适配
@@ -2591,10 +2355,10 @@ mod filter_sort_tests {
             ],
         }];
         let sql = filter_clause(&pg, &conditions).unwrap();
-        assert!(sql.contains(" ILIKE 'Ab%' OR \"note\" IS NULL"), "{sql}");
+        assert!(sql.contains(" ILIKE 'Ab%' ESCAPE '\\' OR \"note\" IS NULL"), "{sql}");
         assert!(sql.starts_with(" WHERE (") && sql.ends_with(')'));
         let mysql = filter_clause(&DbKind::of("mysql"), &[one(filter("na`me", "=", "O'Reilly", true))]).unwrap();
-        assert_eq!(mysql, " WHERE (BINARY `na``me` = 'O''Reilly')");
+        assert_eq!(mysql, " WHERE (CONVERT(`na``me` USING utf8mb4) COLLATE utf8mb4_bin = 'O''Reilly')");
         assert!(filter_clause(&pg, &[one(filter("name", "= 1 OR", "x", false))]).is_err());
         let mut req = request();
         req.order_rules = Some(vec![SortRule { column: "group".into(), ascending: false }, SortRule { column: "id\"quoted".into(), ascending: true }]);
@@ -2609,8 +2373,8 @@ mod filter_sort_tests {
 
     async fn fixture() -> Db {
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, team TEXT, score INTEGER, name TEXT COLLATE NOCASE, note TEXT)").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO items VALUES (1,'a',1,'Abc',NULL),(2,'a',2,'abc','x'),(3,'b',1,'a*c','x'),(4,'a',2,'','x')").execute(&pool).await.unwrap();
+        crate::sql_history::query("CREATE TABLE items (id INTEGER PRIMARY KEY, team TEXT, score INTEGER, name TEXT COLLATE NOCASE, note TEXT)").execute(&pool).await.unwrap();
+        crate::sql_history::query("INSERT INTO items VALUES (1,'a',1,'Abc',NULL),(2,'a',2,'abc','x'),(3,'b',1,'a*c','x'),(4,'a',2,'','x')").execute(&pool).await.unwrap();
         Db::Sqlite(pool)
     }
 
@@ -2675,21 +2439,21 @@ mod filter_sort_tests {
         let schema = format!("navkit_catalog_test_{}", uuid::Uuid::new_v4().simple());
         let quoted = quote_ident(&kind, &schema);
         // Exactly one pool connection keeps isolated DDL and catalog reads in the same transaction.
-        sqlx::query("BEGIN").execute(&pool).await?;
+        crate::sql_history::query("BEGIN").execute(&pool).await?;
         let db = Db::Postgres(pool.clone());
         let result: Result<()> = async {
-            sqlx::query(&format!("CREATE SCHEMA {quoted}")).execute(&pool).await?;
-            sqlx::query(&format!("CREATE TABLE {quoted}.table_fixture (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, serial_id serial, required text NOT NULL, optional text, computed integer GENERATED ALWAYS AS (id + 1) STORED)"))
+            crate::sql_history::query(&format!("CREATE SCHEMA {quoted}")).execute(&pool).await?;
+            crate::sql_history::query(&format!("CREATE TABLE {quoted}.table_fixture (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, serial_id serial, required text NOT NULL, optional text, computed integer GENERATED ALWAYS AS (id + 1) STORED)"))
                 .execute(&pool).await?;
-            sqlx::query(&format!("CREATE TABLE {quoted}.partition_fixture (id integer) PARTITION BY RANGE (id)"))
+            crate::sql_history::query(&format!("CREATE TABLE {quoted}.partition_fixture (id integer) PARTITION BY RANGE (id)"))
                 .execute(&pool).await?;
-            sqlx::query(&format!("CREATE VIEW {quoted}.view_fixture AS SELECT id FROM {quoted}.table_fixture"))
+            crate::sql_history::query(&format!("CREATE VIEW {quoted}.view_fixture AS SELECT id FROM {quoted}.table_fixture"))
                 .execute(&pool).await?;
-            sqlx::query(&format!("CREATE MATERIALIZED VIEW {quoted}.materialized_fixture AS SELECT id FROM {quoted}.table_fixture"))
+            crate::sql_history::query(&format!("CREATE MATERIALIZED VIEW {quoted}.materialized_fixture AS SELECT id FROM {quoted}.table_fixture"))
                 .execute(&pool).await?;
-            sqlx::query(&format!("CREATE FUNCTION {quoted}.function_fixture() RETURNS integer LANGUAGE sql AS 'SELECT 1'"))
+            crate::sql_history::query(&format!("CREATE FUNCTION {quoted}.function_fixture() RETURNS integer LANGUAGE sql AS 'SELECT 1'"))
                 .execute(&pool).await?;
-            sqlx::query(&format!("CREATE PROCEDURE {quoted}.procedure_fixture() LANGUAGE sql AS 'SELECT 1'"))
+            crate::sql_history::query(&format!("CREATE PROCEDURE {quoted}.procedure_fixture() LANGUAGE sql AS 'SELECT 1'"))
                 .execute(&pool).await?;
             let tables = list_tables(&db, kind.clone(), &schema).await?;
             for (name, expected) in [("table_fixture", ObjectType::Table), ("partition_fixture", ObjectType::Table),
@@ -2712,8 +2476,8 @@ mod filter_sort_tests {
             Ok(())
         }.await;
         // Cleanup runs on both success and assertion/query error; verify the UUID schema vanished.
-        sqlx::query("ROLLBACK").execute(&pool).await?;
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+        crate::sql_history::query("ROLLBACK").execute(&pool).await?;
+        let exists: bool = crate::sql_history::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
             .bind(&schema).fetch_one(&pool).await?;
         anyhow::ensure!(!exists, "temporary test schema leaked after rollback: {schema}");
         pool.close().await;
@@ -2723,9 +2487,9 @@ mod filter_sort_tests {
     #[tokio::test]
     async fn sqlite_text_and_numeric_affinity_survive_case_collation_and_mixed_logic() -> Result<()> {
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await?;
-        sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, amount INTEGER, code TEXT, label TEXT COLLATE NOCASE)")
+        crate::sql_history::query("CREATE TABLE items (id INTEGER PRIMARY KEY, amount INTEGER, code TEXT, label TEXT COLLATE NOCASE)")
             .execute(&pool).await?;
-        sqlx::query("INSERT INTO items VALUES (1,1,'01','Abc'),(2,2,'1','abc'),(3,10,'10','Other')")
+        crate::sql_history::query("INSERT INTO items VALUES (1,1,'01','Abc'),(2,2,'1','abc'),(3,10,'10','Other')")
             .execute(&pool).await?;
         let db = Db::Sqlite(pool);
         let mut req = request();

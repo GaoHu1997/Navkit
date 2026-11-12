@@ -1,29 +1,30 @@
 /** 数据生成对话框：设置 → 生成预览 → 用户明确写入，参数化事务由后端执行。 */
 import { api } from "../core/api";
+import { batchExecutionServiceFor, type BatchExecutionTransport } from "../core/batchExecution";
+import { BatchExecutionPanel, openBatchExecutionDialog } from "../ui/BatchExecutionPanel";
 import { toolConnectionError } from "../core/toolCapabilities";
+import { namespaceLabel } from "../core/namespace-label";
 import { defaultGeneratorFields, generateDataPreview, generatorValueKind, MAX_GENERATED_ROWS } from "../core/dataGenerator";
-import type { GeneratedRowsRequest, GeneratorField, GeneratorMode, GeneratorPlan } from "../core/dataGenerator";
+import type { GeneratorField, GeneratorMode, GeneratorPlan } from "../core/dataGenerator";
 import type { ConnectionConfig, TableSchema } from "../core/types";
 import { Dialog, field, numberInput, select, textInput } from "../ui/Dialog";
 import { accessibleToolDialog, toolButton, toolTable } from "./toolDialog";
 import { Wizard } from "../ui/Wizard";
+import { taskCenter } from "../core/backgroundTasks";
 
-export interface DataGeneratorApi extends Pick<typeof api, "ensureConnection" | "listDatabases" | "listTables" | "getTableSchema"> {
-  insertGeneratedRows(req: GeneratedRowsRequest): Promise<number>;
-}
-const defaultApi: DataGeneratorApi = {
-  ensureConnection: api.ensureConnection,
-  listDatabases: api.listDatabases,
-  listTables: api.listTables,
-  getTableSchema: api.getTableSchema,
-  insertGeneratedRows: api.insertGeneratedRows,
-};
+export interface DataGeneratorApi extends Pick<typeof api, "ensureConnection" | "listDatabases" | "listTables" | "getTableSchema">, BatchExecutionTransport {}
+const defaultApi: DataGeneratorApi = api;
 export function openDataGeneratorDialog(
   connection: ConnectionConfig, schema: string, initialTable = "",
   onDone?: (rows: number, table: string) => void, source: DataGeneratorApi = defaultApi,
   /** 提供时在对话框内给出「连接」下拉（只列可写的原生协议连接），可换数据源。 */
   connections: ConnectionConfig[] = [],
 ): Dialog {
+  const service = batchExecutionServiceFor(source);
+  const ownerId = crypto.randomUUID();
+  let taskId: string | null = null;
+  let unknown = false;
+  const recordHost = document.createElement("div"); recordHost.className = "batch-generator-record"; recordHost.hidden = true;
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   // 连接可切换：App 原样传入当前选中的连接；它不受支持时下拉保持空选，
   // 由用户在可写的原生协议连接中自行挑选，绝不默认选中第一个。
@@ -32,19 +33,21 @@ export function openDataGeneratorDialog(
   const connReady = () => !connSelect || pickable.some((c) => c.id === conn.id);
   const connOptions = pickable.map((c) => ({ value: c.id, label: `${c.name} (${c.kind})` }));
   const connSelect = pickable.length
-    ? select(pickable.some((c) => c.id === conn.id) ? connOptions : [{ value: "", label: "请选择连接" }, ...connOptions], pickable.some((c) => c.id === conn.id) ? conn.id : "", 260)
+    ? select(pickable.some((c) => c.id === conn.id) ? connOptions : [{ value: "", label: "请选择连接" }, ...connOptions], pickable.some((c) => c.id === conn.id) ? conn.id : "")
     : null;
   if (connSelect) connSelect.setAttribute("aria-label", "连接");
   // 第一步标题：随所选连接变化（换连后原地更新）。
   const targetTitle = document.createElement("div");
   targetTitle.className = "wizard-panel-title";
   targetTitle.textContent = conn.name;
-  const databases = select([], undefined, 260); databases.setAttribute("aria-label", "目标数据库 / 模式"); databases.disabled = true;
-  const tables = select([], undefined, 260); tables.setAttribute("aria-label", "目标表"); tables.disabled = true;
-  const count = numberInput(10, 90); count.min = "1"; count.max = String(MAX_GENERATED_ROWS); count.step = "1"; count.setAttribute("aria-label", "生成条数");
-  const seed = textInput("sample", 180); seed.maxLength = 80; seed.setAttribute("aria-label", "文本种子");
-  const previewButton = toolButton("生成预览"), executeButton = toolButton("执行写入", true), stop = toolButton("停止后续操作");
-  executeButton.disabled = true; previewButton.disabled = true; stop.disabled = true;
+  const databases = select([], undefined); databases.setAttribute("aria-label", `目标${namespaceLabel(conn)}`); databases.disabled = true;
+  const namespaceField = field(namespaceLabel(conn), databases);
+  const tables = select([], undefined); tables.setAttribute("aria-label", "目标表"); tables.disabled = true;
+  const count = numberInput(10); count.min = "1"; count.max = String(MAX_GENERATED_ROWS); count.step = "1"; count.setAttribute("aria-label", "生成条数");
+  const seed = textInput("sample"); seed.maxLength = 80; seed.setAttribute("aria-label", "文本种子");
+  // 内容区只保留预览；真实写入只有 Wizard 页脚一个入口，停止由共享记录面板处理。
+  const previewButton = toolButton("生成预览", true);
+  previewButton.disabled = true;
   const status = document.createElement("div"); status.id = `generator-status-${crypto.randomUUID()}`;
   status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite"); status.style.cssText = "margin:8px 0;min-height:24px;white-space:pre-wrap;";
   count.setAttribute("aria-describedby", status.id);
@@ -57,12 +60,22 @@ export function openDataGeneratorDialog(
   const fieldControls: (HTMLSelectElement | HTMLInputElement)[] = [];
   let capabilityError = toolConnectionError(conn, true);
   let writable = capabilityError === null;
-  const invalidate = () => { plan = null; confirm.checked = false; executeButton.disabled = true; previewWrap.replaceChildren(); };
+  const finishEligible = () => !closed && writable && toolConnectionError(conn, true) === null && connReady() && !!plan && confirm.checked && !writing && !unknown;
+  const invalidate = () => { plan = null; confirm.checked = false; previewWrap.replaceChildren(); wizard.refreshControls(); };
+  /** 预览所依赖的配置（条数/种子/字段规则）在已有预览后发生变化：状态行提示重新生成，不自动刷新，保持「手动生成预览」交互。 */
+  const noteStale = () => {
+    if (closed || writing || unknown || !plan) return;
+    status.setAttribute("role", "status");
+    status.textContent = "配置已变化，请重新生成预览。";
+  };
   const setBusy = (busy: boolean) => {
-    if (connSelect) connSelect.disabled = busy;
-    databases.disabled = busy; tables.disabled = busy; count.disabled = busy; seed.disabled = busy; previewButton.disabled = busy || !structure || !writable; confirm.disabled = busy;
-    for (const control of fieldControls) control.disabled = busy;
-    stop.disabled = !busy; fieldsWrap.setAttribute("aria-busy", String(busy));
+    const locked = busy || unknown;
+    if (connSelect) connSelect.disabled = locked;
+    databases.disabled = locked || !databases.options.length; tables.disabled = locked || !tables.options.length;
+    count.disabled = locked; seed.disabled = locked; previewButton.disabled = locked || !structure || !writable; confirm.disabled = locked;
+    for (const control of fieldControls) control.disabled = locked;
+    fieldsWrap.setAttribute("aria-busy", String(locked));
+    wizard.setBusy(busy || unknown); wizard.refreshControls();
   };
   const renderFields = () => {
     fieldsWrap.replaceChildren(); fieldControls.length = 0;
@@ -79,7 +92,7 @@ export function openDataGeneratorDialog(
       if (c.auto_increment || c.default !== null || (c.nullable && !c.primary_key)) modes.push({ value: "omit", label: "省略（数据库默认）" });
       const mode = select(c.auto_increment ? [{ value: "omit", label: "由数据库生成" }] : modes, config.mode, 150); mode.setAttribute("aria-label", `${c.name} 生成方式`);
       const value = textInput(config.value, 160); value.setAttribute("aria-label", `${c.name} 固定值或顺序起始值`); value.maxLength = 4096;
-      const sync = () => { config.mode = mode.value as GeneratorMode; config.value = value.value; value.readOnly = !["constant", "sequence"].includes(mode.value); invalidate(); };
+      const sync = () => { config.mode = mode.value as GeneratorMode; config.value = value.value; value.readOnly = !["constant", "sequence"].includes(mode.value); noteStale(); invalidate(); };
       value.readOnly = !["constant", "sequence"].includes(mode.value);
       mode.addEventListener("change", sync); value.addEventListener("input", sync);
       row.insertCell().appendChild(mode); row.insertCell().appendChild(value); fieldControls.push(mode, value);
@@ -88,6 +101,7 @@ export function openDataGeneratorDialog(
     fieldsWrap.appendChild(table);
   };
   const loadTable = async () => {
+    if (writing || unknown) return;
     const request = ++version; invalidate(); structure = null; fieldsWrap.replaceChildren(); previewButton.disabled = true;
     if (!tables.value) return;
     status.textContent = "正在读取真实表结构…"; fieldsWrap.setAttribute("aria-busy", "true");
@@ -95,7 +109,9 @@ export function openDataGeneratorDialog(
       const info = await source.getTableSchema(conn.id, schema, tables.value);
       if (closed || request !== version) return;
       structure = info; settings = defaultGeneratorFields(info); renderFields(); previewButton.disabled = !writable;
-      status.textContent = writable ? "先设置字段与条数，再生成预览。外键请填写已有引用；主键起始值须避开已存在的键。" : conn.read_only ? "此连接只读，禁止生成写入。" : "此协议尚不支持安全事务批量写入（仅 SQLite / MySQL / PostgreSQL）。";
+      status.textContent = writable ? "先设置字段与条数，再生成预览。外键请填写已有引用；主键起始值须避开已存在的键。" : capabilityError ?? "当前连接不可写入数据。";
+      // 状态行只挂在第 3 步；只读/协议不支持导致按钮禁用时，用向导错误行把原因亮在任何一步
+      if (!writable) showError(status.textContent);
     } catch (e) { if (!closed && request === version) { status.textContent = `读取表结构失败：${String(e)}`; status.setAttribute("role", "alert"); } }
     finally { if (!closed && request === version) fieldsWrap.setAttribute("aria-busy", "false"); }
   };
@@ -105,14 +121,20 @@ export function openDataGeneratorDialog(
           label: "目标与行数",
           hint: "选择要写入的表、生成条数与随机种子。相同种子会得到相同的随机数据。",
           render: (host) => {
-            host.append(
-              targetTitle,
-              ...(connSelect ? [field("连接:", connSelect)] : []),
-              field("数据库 / 模式", databases),
+            const grid = document.createElement("div");
+            grid.className = "form-grid";
+            if (connSelect) {
+              const connectionField = field("连接:", connSelect);
+              connectionField.classList.add("form-span-all");
+              grid.appendChild(connectionField);
+            }
+            grid.append(
+              namespaceField,
               field("目标表", tables),
               field(`条数（1–${MAX_GENERATED_ROWS}）`, count),
               field("文本种子", seed),
             );
+            host.append(targetTitle, grid);
             const note = document.createElement("div");
             note.className = "wizard-panel-note";
             note.textContent = "文本种子用于让生成的随机数据可复现；相同种子 + 相同表结构会得到相同结果。";
@@ -151,7 +173,7 @@ export function openDataGeneratorDialog(
             previewWrap.style.minHeight = "0";
             const actions = document.createElement("div");
             actions.style.cssText = "display:flex;gap:8px;margin-bottom:8px;";
-            actions.append(previewButton, executeButton, stop);
+            actions.append(previewButton);
             host.append(head, actions, status, previewWrap, confirmation);
             const note = document.createElement("div");
             note.className = "wizard-panel-note";
@@ -170,51 +192,42 @@ export function openDataGeneratorDialog(
         if (index === 1 && !structure && tables.value) void loadTable();
       },
       finishLabel: "执行写入",
-      onFinish: async () => {
-        if (!writable || writing || !plan || !confirm.checked) return;
+      finishEligible,
+      onFinish: () => {
+        if (!finishEligible() || !plan) return;
         const submitted = plan;
         const table = tables.value;
-        writing = true;
-        executeButton.disabled = true;
-        setBusy(true);
-        wizard.setBusy(true);
-        status.textContent = `正在向 ${schema}.${table} 写入 ${submitted.rows.length} 行…`;
-        try {
-          const rows = await source.insertGeneratedRows({
-            connection_id: conn.id,
-            schema,
-            table,
-            columns: submitted.columns,
-            rows: submitted.rows,
-          });
-          if (onDone) {
-            try {
-              onDone(rows, table);
-            } catch (e) {
-              console.error("数据生成完成回调失败", e);
-            }
+        const targetConnection = conn;
+        const targetSchema = schema;
+        writing = true; unknown = false; version++;
+        invalidate(); setBusy(true); wizard.clearError();
+        // 点击即切执行记录；登记和启动期间也在同一页显示真实阶段。
+        showRecords();
+        const record = service.start({ connection_id: targetConnection.id, namespace: targetSchema, owner_id: ownerId,
+          task: { kind: "generated_rows", request: { connection_id: targetConnection.id, schema: targetSchema, table,
+            columns: submitted.columns, rows: submitted.rows } } }, targetConnection.name, targetConnection.kind);
+        taskId = record.id; recordPanel.setTask(record.id); syncTask();
+        // 后台任务中心登记：转后台后仍可在任务面板查看
+        const genHandle = taskCenter.register("datagen", `数据生成 · ${table}（${submitted.rows} 行）`);
+        // 后台任务点击后重新打开这次执行的任务框（批执行记录），不再另弹通用任务详情。
+        genHandle.setOpener(() => { void openBatchExecutionDialog(service, record.id); });
+        // 完成回调不属于视图；关闭后仍在确认提交/排空时通知调用方。
+        const releaseReceipt = service.subscribe(() => {
+          const result = service.get(record.id);
+          if (!result || result.busy) {
+            genHandle.update({ message: `已提交 ${submitted.rows} 行` });
+            return;
           }
-          if (!closed) {
-            invalidate();
-            status.setAttribute("role", "status");
-            status.textContent = `写入完成：实际影响 ${rows} 行。再次写入必须重新生成预览。`;
-            wizard.clearError();
+          releaseReceipt();
+          if (!result.unknown && result.state === "succeeded" && result.snapshot?.transaction_state === "committed") {
+            genHandle.finish(`写入 ${result.snapshot.affected_rows} 行`);
+            try { onDone?.(result.snapshot.affected_rows, table); } catch (error) { console.error("数据生成完成回调失败", error); }
+          } else if (result.unknown) {
+            genHandle.cancel("结果未知：请在执行记录中确认");
+          } else {
+            genHandle.fail(result.notice || "数据生成失败");
           }
-        } catch (e) {
-          if (!closed) {
-            invalidate();
-            status.setAttribute("role", "alert");
-            const msg = `写入失败或未收到提交确认：${e instanceof Error ? e.message : String(e)}。数据库约束错误会整批回滚；通信异常时请先刷新表确认结果，勿直接重复提交。`;
-            status.textContent = msg;
-            wizard.showError(msg);
-          }
-        } finally {
-          writing = false;
-          if (!closed) {
-            setBusy(false);
-            wizard.setBusy(false);
-          }
-        }
+        });
       },
   });
   const showError = (message: string) => wizard.showError(message);
@@ -225,8 +238,24 @@ export function openDataGeneratorDialog(
     body.style.overflow = "hidden";
     body.appendChild(wizard.stepsEl);
     body.appendChild(wizard.bodyEl);
+    body.appendChild(recordHost);
   }, buttons: [] });
-  dlg.footer.append(...wizard.buttons(), (() => {
+  dlg.el.classList.add("form-stacked");
+  const wizardButtons = wizard.buttons();
+  const showRecords = () => { wizard.stepsEl.hidden = true; wizard.bodyEl.hidden = true; recordHost.hidden = false; for (const button of wizardButtons) button.hidden = true; };
+  const recordPanel = new BatchExecutionPanel(service, null, { onDetach: () => dlg.close(), onConfigure: () => {
+    if (writing || unknown) return;
+    recordHost.hidden = true; wizard.stepsEl.hidden = false; wizard.bodyEl.hidden = false;
+    for (const button of wizardButtons) button.hidden = false;
+    wizard.go(2); wizard.refreshControls();
+  } });
+  recordHost.append(recordPanel.el);
+  const syncTask = () => { const task = taskId ? service.get(taskId) : null; if (!task) return;
+    writing = task.busy; unknown = task.unknown; if (!closed) setBusy(writing);
+  };
+  const releaseView = service.subscribe(syncTask);
+  const review = toolButton("批执行记录"); review.addEventListener("click", () => openBatchExecutionDialog(service, taskId));
+  dlg.footer.append(...wizardButtons, review, (() => {
     const close = document.createElement("button");
     close.type = "button";
     close.className = "btn";
@@ -234,21 +263,54 @@ export function openDataGeneratorDialog(
     close.addEventListener("click", () => dlg.close());
     return close;
   })());
-  accessibleToolDialog(dlg, "数据生成", () => { closed = true; version++; }, returnFocus);
-  tables.addEventListener("change", () => void loadTable()); count.addEventListener("input", invalidate); seed.addEventListener("input", invalidate);
-  confirm.addEventListener("change", () => { executeButton.disabled = !confirm.checked || !plan || writing || !writable; });
+  accessibleToolDialog(dlg, "数据生成", () => { closed = true; version++; releaseView(); recordPanel.dispose(); }, returnFocus);
+  tables.addEventListener("change", () => void loadTable());
+  count.addEventListener("input", () => { noteStale(); invalidate(); });
+  seed.addEventListener("input", () => { noteStale(); invalidate(); });
+  confirm.addEventListener("change", () => wizard.refreshControls());
   previewButton.addEventListener("click", () => {
-    invalidate(); if (!structure) return;
+    if (previewButton.disabled) return;
+    // 前置校验逐条给可见提示，绝不静默返回（状态行挂在第 3 步内，此处点击必然发生在第 3 步）
+    if (!writable) {
+      status.setAttribute("role", "alert");
+      status.textContent = capabilityError ?? "当前连接不可写入数据，无法生成预览。";
+      showError(status.textContent);
+      return;
+    }
+    if (!tables.value || !schema) {
+      status.setAttribute("role", "alert");
+      status.textContent = "请先选择目标数据表，再生成预览。";
+      return;
+    }
+    if (!structure) {
+      status.setAttribute("role", "alert");
+      status.textContent = "表结构尚未加载完成，请先选择表并等待字段加载。";
+      return;
+    }
+    const rows = count.valueAsNumber;
+    if (!Number.isInteger(rows) || rows < 1 || rows > MAX_GENERATED_ROWS) {
+      status.setAttribute("role", "alert");
+      status.textContent = `生成条数必须为 1–${MAX_GENERATED_ROWS} 的整数，请修正后再生成预览。`;
+      count.setAttribute("aria-invalid", "true");
+      return;
+    }
+    count.removeAttribute("aria-invalid");
+    const ready = structure; // 已通过判空，闭包内用局部常量保持类型收窄
+    invalidate();
+    previewButton.disabled = true; // 短暂禁用防重复点击，完成/失败后按现状条件恢复
     try {
-      plan = generateDataPreview(structure, settings, count.valueAsNumber, seed.value);
-      previewWrap.appendChild(toolTable(plan.columns.length ? plan.columns : ["数据库默认值"], plan.columns.length ? plan.rows.slice(0, 20) : plan.rows.slice(0, 20).map(() => ["整行使用数据库默认"] )));
+      plan = generateDataPreview(ready, settings, rows, seed.value);
+      // 单行省略 + 横向滚动：预览表保持紧凑行高，不在单元格里逐字符折行
+      previewWrap.appendChild(toolTable(plan.columns.length ? plan.columns : ["数据库默认值"], plan.columns.length ? plan.rows.slice(0, 20) : plan.rows.slice(0, 20).map(() => ["整行使用数据库默认"] ), { nowrap: true }));
       status.setAttribute("role", "status"); status.textContent = `预览已生成 ${plan.rows.length} 行（显示前 ${Math.min(20, plan.rows.length)} 行）。尚未写入；请勾选确认后点击“执行写入”。`;
-      count.removeAttribute("aria-invalid");
-    } catch (e) { status.setAttribute("role", "alert"); status.textContent = e instanceof Error ? e.message : String(e); count.setAttribute("aria-invalid", String(!count.checkValidity())); }
+    } catch (e) {
+      status.setAttribute("role", "alert"); status.textContent = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (!closed) { previewButton.disabled = !structure || !writable || writing || unknown; wizard.refreshControls(); }
+    }
   });
-  stop.addEventListener("click", () => { invalidate(); status.textContent = "已禁止再次提交。当前事务若已发送，将继续完成或回滚；关闭窗口也不会取消该事务。"; });
-  executeButton.addEventListener("click", () => { void wizard.next(); });
   const loadTables = async () => {
+    if (writing || unknown) return;
     const request = ++version;
     invalidate(); structure = null; fieldsWrap.replaceChildren(); tables.replaceChildren(); tables.disabled = true; previewButton.disabled = true;
     schema = databases.value;
@@ -264,7 +326,7 @@ export function openDataGeneratorDialog(
       tables.disabled = false; wizard.clearError(); await loadTable();
     } catch (e) { if (!closed && request === version) { status.textContent = `加载表列表失败：${String(e)}`; status.setAttribute("role", "alert"); showError(status.textContent); } }
   };
-  databases.addEventListener("change", () => { if (!writing) void loadTables(); });
+  databases.addEventListener("change", () => { if (!writing && !unknown) void loadTables(); });
   /** 连接就绪后加载库/表；run 计号让换连后仍在途的旧请求作废。 */
   const initConnection = async () => {
     if (capabilityError) { status.textContent = capabilityError; showError(capabilityError); return; }
@@ -290,12 +352,16 @@ export function openDataGeneratorDialog(
   else status.textContent = "当前连接不支持数据生成，请先在「连接」中选择可写入的连接。";
   connSelect?.addEventListener("change", () => {
     const next = pickable.find((c) => c.id === connSelect.value);
-    if (writing || !next || next.id === conn.id) return;
+    if (writing || unknown || !next || next.id === conn.id) return;
     conn = next;
+    const nextNamespaceLabel = namespaceLabel(conn);
+    databases.setAttribute("aria-label", `目标${nextNamespaceLabel}`);
+    const namespaceCaption = namespaceField.querySelector<HTMLElement>(".field-label");
+    if (namespaceCaption) namespaceCaption.textContent = nextNamespaceLabel;
     capabilityError = toolConnectionError(conn, true);
     writable = capabilityError === null;
     schema = ""; structure = null; plan = null; settings = [];
-    confirm.checked = false; executeButton.disabled = true; previewButton.disabled = true;
+    confirm.checked = false; previewButton.disabled = true; wizard.refreshControls();
     previewWrap.replaceChildren(); fieldsWrap.replaceChildren();
     databases.replaceChildren(); databases.disabled = true;
     tables.replaceChildren(); tables.disabled = true;

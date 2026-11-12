@@ -1,0 +1,23 @@
+// Product SQL-history IO benchmark. Only creates UUID-named resources below target.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+const root = fileURLToPath(new URL('../../', import.meta.url));
+const target = path.join(root, 'src-tauri/target/history-performance');
+fs.mkdirSync(path.join(target, 'src'), { recursive: true });
+const storage = fs.readFileSync(path.join(root, 'src-tauri/src/storage.rs'), 'utf8');
+const history = fs.readFileSync(path.join(root, 'src-tauri/src/sql_history.rs'), 'utf8');
+const models = fs.readFileSync(path.join(root, 'src-tauri/src/models.rs'), 'utf8');
+const section = (text, start, end) => { const a=text.indexOf(start), b=text.indexOf(end,a); if(a<0||b<a)throw new Error('Product source contract changed: '+start); return text.slice(a,b); };
+const types = '#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n' + section(models, 'pub struct SqlLogParameter {', '/// 一条数据库会话 / 正在执行的查询');
+const sink = section(storage, 'pub const SQL_LOG_MAX_ENTRIES:', '/// 追加一条 SQL 执行日志（便携 data 目录）。');
+const worker = section(history, 'fn persist_direct(', '#[cfg(not(test))]\nfn writer()');
+const header = 'use std::{fs,path::{Path,PathBuf},io::Write};\nfn log_dir()->PathBuf{unreachable!()}\n';
+fs.writeFileSync(path.join(target,'src/sink.rs'), header + sink + '\npub fn compact_for_benchmark(path:&Path){compact_sql_log_at(path)}\n' + storage.slice(storage.indexOf('#[cfg(test)]\nmod sql_log_tests')));
+fs.writeFileSync(path.join(target,'src/worker.rs'), 'use crate::models::SqlLogEntry; use std::path::PathBuf; use parking_lot::Mutex;\n' + worker.replace('enum WriteEvent {','pub enum WriteEvent {') + '\npub fn run(r:std::sync::mpsc::Receiver<WriteEvent>){run_writer(r)}\n');
+fs.writeFileSync(path.join(target,'src/models.rs'), 'use serde::{Serialize,Deserialize};\n'+types);
+fs.writeFileSync(path.join(target,'Cargo.toml'), '[package]\nname="navkit-history-performance"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nserde={version="1",features=["derive"]}\nserde_json="1"\nchrono="0.4"\nuuid={version="1",features=["v4"]}\nparking_lot="0.12"\ntokio={version="1",features=["full"]}\nsqlx={version="0.8",default-features=false,features=["runtime-tokio","sqlite"]}\n');
+fs.writeFileSync(path.join(target,'src/main.rs'), fs.readFileSync(path.join(root,'tools/performance/history-workload.rs'),'utf8'));
+const args = process.argv.includes('--test') ? ['test','--offline','--manifest-path',path.join(target,'Cargo.toml')] : ['run','--release','--offline','--manifest-path',path.join(target,'Cargo.toml')];
+const result=spawnSync('cargo',args,{cwd:root,stdio:'inherit',env:process.env});process.exit(result.status??1);

@@ -13,7 +13,13 @@ export const {
   manualTransactionUnavailableReason,
   manualTransactionStatusText,
 } = module;
+const namespaceBundle = await build({
+  entryPoints: [fileURLToPath(new URL('../../src/core/namespace-label.ts', import.meta.url))],
+  bundle: true, write: false, platform: 'node', format: 'esm', logLevel: 'silent',
+});
+const namespaceModule = await import(`data:text/javascript;base64,${Buffer.from(namespaceBundle.outputFiles[0].text).toString('base64')}`);
 export const transactionFixtureBindings = {
+  ...namespaceModule,
   MANUAL_TRANSACTION_WRITE_COMMANDS,
   manualTransactionUnavailableReason,
   manualTransactionStatusText,

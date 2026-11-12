@@ -100,7 +100,8 @@ test("IPC and dialog are separate from SQL/backup synchronization and never pref
   assert(!tab.includes("测试连接"));
   assert(!tab.includes("不同步"));
   assert.match(app, /if \(!tab\.datasourceStale\) view\.activate\(\)/);
-  assert.match(app, /async execute\(sql: string, _selectionOnly: boolean\): Promise<void> \{\s*if \(this\.tab\.datasourceStale\)/);
+  // execute 在执行前必须检查 datasourceStale（新版本先经过结果替换守卫，语义不变）
+  assert.match(app, /async execute\(sql: string, _selectionOnly: boolean\): Promise<void> \{[\s\S]{0,300}?if \(this\.tab\.datasourceStale\)/);
   // 菜单栏独立入口已移除：WebDAV 同步配置只在「设置」对话框的对应选项卡内。
   assert.ok(!app.includes('"datasource-sync"'));
 });
@@ -156,7 +157,7 @@ test("real App invalidates only changed/deleted runtime state, preserves SQL and
 });
 test("actual stale Query execute and completion entry points never reconnect or read metadata", async () => {
   const notices = [], context = vm.createContext({});
-  vm.runInContext(ts.transpileModule(`class PausedQuery { ${methods("QueryTabView", ["execute", "refreshCompletionData", "loadCompletionData"])} } globalThis.PausedQuery = PausedQuery;`, { compilerOptions: { target: ts.ScriptTarget.ES2021 } }).outputText, context);
+  vm.runInContext(ts.transpileModule(`class PausedQuery { ${methods("QueryTabView", ["execute", "refreshCompletionData", "loadCompletionData", "allowResultReplacement", "disposeControlledResult"])} } globalThis.PausedQuery = PausedQuery;`, { compilerOptions: { target: ts.ScriptTarget.ES2021 } }).outputText, context);
   const query = new context.PausedQuery(); query.tab = { datasourceStale: "旧连接已暂停", connectionId: "a", schema: "db" }; query.app = { toast: (...args) => notices.push(args) };
   query.completionRequest = 0; query.editor = { setCompletionData() {} };
   await query.execute("DELETE FROM important", false); await query.refreshCompletionData(); await query.loadCompletionData();

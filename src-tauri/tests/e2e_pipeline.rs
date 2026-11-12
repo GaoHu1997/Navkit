@@ -249,14 +249,15 @@ async fn sqlite_pagination_and_sort() {
 
     // 筛选
     let mut pr3 = page_req("", "p");
-    pr3.filters = vec![FilterCondition {
-        column: "n".into(),
-        operator: ">=".into(),
-        value: "118".into(),
-        case_sensitive: false,
-        logic: None,
-        open: 0,
-        close: 0,
+    pr3.filters = vec![navkit_lib::models::FilterLine {
+        logic: navkit_lib::models::FilterLogic::And,
+        conds: vec![FilterCondition {
+            column: "n".into(),
+            operator: ">=".into(),
+            value: "118".into(),
+            case_sensitive: false,
+            logic: None,
+        }],
     }];
     let page3 = navkit_lib::schema::page_table(pool.as_ref(), DbKind::of("sqlite"), &pr3)
         .await
@@ -335,17 +336,18 @@ fn password_encrypt_decrypt_roundtrip() {
     for plain in ["s3cret!", "", "中文密码123", "with 'quote' and \"double\""] {
         let enc = navkit_lib::storage::encrypt_password(plain);
         if plain.is_empty() {
-            assert_eq!(enc, "", "空密码按约定返回空串");
+            assert_eq!(enc.unwrap(), "", "空密码按约定返回空串");
             continue;
         }
+        let enc = enc.unwrap();
         assert!(!enc.contains(plain), "密文不得包含明文");
-        let dec = navkit_lib::storage::decrypt_password(&enc);
+        let dec = navkit_lib::storage::decrypt_password(&enc).unwrap();
         assert_eq!(dec, plain, "往返必须还原明文: {}", plain);
     }
 
-    // 坏输入：返回空串而不是 panic
-    assert_eq!(navkit_lib::storage::decrypt_password("not-base64!!"), "");
-    assert_eq!(navkit_lib::storage::decrypt_password("QUJD"), "");
+    // 坏输入：fail-closed 返回明确错误而不是 panic 或伪明文。
+    assert!(navkit_lib::storage::decrypt_password("not-base64!!").is_err(), "坏 base64 必须报错");
+    assert!(navkit_lib::storage::decrypt_password("QUJD").is_err(), "密文长度不足必须报错");
 
     // 测试首次创建的 key.bin 清理；已存在的保留
     if saved.is_none() {

@@ -2,7 +2,7 @@ import type { ConnectionConfig } from "./types";
 
 export interface DatasourceSyncConfig {
   url: string; user: string; auto_every: number; remember_password: boolean;
-  password_set: boolean; passphrase_set: boolean; headers_set: boolean; last_sync: string | null;
+  password_set: boolean; passphrase_set: boolean; headers_set: boolean; headers: string; last_sync: string | null;
 }
 export interface DatasourceSyncInput {
   url: string; user: string; auto_every: number; remember_password: boolean;
@@ -41,7 +41,7 @@ const browserClock: SyncClock = {
   clear: id => clearTimeout(id as ReturnType<typeof setTimeout>),
 };
 
-/** 单实例调度器；手动预览、配置与自动同步共享互斥，秘密不在控制器中保存。 */
+/** 单实例调度器；手动预览、配置与自动同步共享互斥，密码与口令不在控制器中保存。 */
 export class DatasourceSync {
   config: DatasourceSyncConfig | null = null;
   busy = false;

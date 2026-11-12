@@ -1,0 +1,112 @@
+/* ==========================================================================
+   标题栏「更新」徽标 —— 纯文字徽标，边框即进度条
+   状态：available（绿色「更新」）→ downloading（边框加粗、进度沿边框生长）
+        → ready（橘黄「重启」，点击换版重启）；无新版本时不占位。
+   ========================================================================== */
+
+/* 徽标是文字胶囊，不受 28px 工具位宽度约束；悬停底色交给胶囊本身。 */
+.titlebar-tools .tb-icon.update-badge {
+  width: auto;
+  padding: 0 2px;
+  border-radius: var(--r-2);
+}
+
+.titlebar-tools .tb-icon.update-badge:hover {
+  background: transparent;
+}
+
+.update-badge[hidden] {
+  display: none;
+}
+
+.update-badge .ub {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 54px;
+  height: 22px;
+  border-radius: 6px;
+  box-sizing: border-box;
+  transition: background-color 0.18s ease;
+}
+
+.update-badge .ub-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.update-badge .ub-track,
+.update-badge .ub-bar {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+/* 下载以外状态不显示进度段 */
+.update-badge .ub-bar {
+  display: none;
+}
+
+.update-badge .ub-lb {
+  position: relative;
+  z-index: 1;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.25px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 更新可用：绿色文字 + 细描边 ---------- */
+.update-badge[data-phase="available"] .ub {
+  background: rgba(31, 146, 84, 0.1);
+}
+.update-badge[data-phase="available"] .ub-track {
+  stroke: rgba(31, 146, 84, 0.34);
+  stroke-width: 1;
+}
+.update-badge[data-phase="available"] .ub-lb {
+  color: #1f9254;
+}
+
+/* ---------- 下载中：边框加粗，进度沿边框顺时针生长 ---------- */
+.update-badge[data-phase="downloading"] .ub {
+  background: rgba(31, 146, 84, 0.055);
+}
+.update-badge[data-phase="downloading"] .ub-track {
+  stroke: rgba(31, 146, 84, 0.16);
+  stroke-width: 2.5;
+}
+.update-badge[data-phase="downloading"] .ub-bar {
+  display: block;
+  stroke: #1f9254;
+  stroke-linecap: round;
+}
+.update-badge[data-phase="downloading"] .ub-lb {
+  color: #1f9254;
+}
+
+/* ---------- 就绪：橘黄色「重启」 ---------- */
+.update-badge[data-phase="ready"] .ub {
+  background: rgba(224, 122, 0, 0.11);
+}
+.update-badge[data-phase="ready"] .ub-track {
+  stroke: rgba(224, 122, 0, 0.46);
+  stroke-width: 1.2;
+}
+.update-badge[data-phase="ready"] .ub-lb {
+  color: #b45f00;
+}
+
+.update-badge:active .ub {
+  transform: translateY(0.5px);
+}
+
+.update-badge:disabled {
+  cursor: default;
+  opacity: 0.75;
+}

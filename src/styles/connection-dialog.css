@@ -1,0 +1,11 @@
+/* 连接对话框：多 Tab 通道页（TLS / SSH / HTTP） */
+.conn-switch { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font-size: var(--fs-12); color: var(--text); }
+.conn-switch input { flex: 0 0 14px; width: 14px; height: 14px; margin: 0; accent-color: var(--accent-500); }
+.conn-hint { margin: 4px 0 0; }
+.conn-hint-line { font-size: var(--fs-12); color: var(--text-tertiary); line-height: var(--lh-normal); }
+.conn-hint-detail { margin-top: 2px; font-size: var(--fs-12); color: var(--text-tertiary); }
+.conn-hint-detail > summary { color: var(--text-accent); cursor: default; list-style: none; }
+.conn-hint-detail > summary::-webkit-details-marker { display: none; }
+.conn-hint-detail > summary::before { content: "\25B8  "; }
+.conn-hint-detail[open] > summary::before { content: "\25BE  "; }
+.conn-hint-detail > p { margin: 6px 0 0; line-height: var(--lh-normal); }

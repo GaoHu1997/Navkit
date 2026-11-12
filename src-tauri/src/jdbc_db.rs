@@ -12,13 +12,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::BufReader,
     process::{Child, ChildStdin, ChildStdout},
     sync::Mutex,
 };
 
 use crate::{
-    http_db::{HttpAdapter, HttpColumn, HttpRows},
+    http_db::{relational, HttpAdapter, HttpColumn, HttpRows},
     models::ConnectionRequest,
 };
 
@@ -28,6 +28,10 @@ mod runtime_options;
 pub fn java_path() -> PathBuf {
     if let Some(java) = std::env::var_os("NAVKIT_JAVA") {
         return java.into();
+    }
+    // 一键安装的托管 JDK 优先于系统 Java：版本已知可满足 source launcher。
+    if let Some(java) = crate::java_runtime::managed_java() {
+        return java;
     }
     if let Some(home) = std::env::var_os("JAVA_HOME") {
         return PathBuf::from(home).join("bin").join(if cfg!(windows) {
@@ -41,6 +45,7 @@ pub fn java_path() -> PathBuf {
 
 fn bounded_java(java: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output> {
     let mut child = crate::background_process::command(java)
+        .arg("-Dfile.encoding=UTF-8")
         .args(args)
         .env_remove("BIGQUERY_JDBC_LOG_LEVEL")
         .env_remove("BIGQUERY_JDBC_LOG_PATH")
@@ -126,7 +131,7 @@ fn driver_runtime_probe(jar: &Path, driver_class: &str, probe_url: &str, classpa
         SourceDir(std::env::temp_dir().join(format!("navkit-jdbc-probe-{}", uuid::Uuid::new_v4())));
     std::fs::create_dir(&dir.0)?;
     let source = dir.0.join("NavkitJdbc.java");
-    std::fs::write(&source, include_str!("NavkitJdbc.java"))?;
+    std::fs::write(&source, relational::source_with_support(include_str!("NavkitJdbc.java")))?;
     let mut args: Vec<&std::ffi::OsStr> = options.iter().map(std::ffi::OsStr::new).collect();
     args.extend([
         std::ffi::OsStr::new("--class-path"), classpath, source.as_os_str(),
@@ -184,6 +189,7 @@ pub struct JdbcDb {
     process: Mutex<Process>,
     timeout: Duration,
     version: String,
+    session_id: String,
 }
 
 fn enc(s: &str) -> String {
@@ -231,7 +237,7 @@ impl JdbcDb {
             .join(uuid::Uuid::new_v4().to_string());
         tokio::fs::create_dir_all(&dir).await?;
         let source = dir.join("NavkitJdbc.java");
-        tokio::fs::write(&source, include_str!("NavkitJdbc.java")).await?;
+        tokio::fs::write(&source, relational::source_with_support(include_str!("NavkitJdbc.java"))).await?;
         let classpath = crate::driver_manager::downloads::managed_jdbc::classpath_for(&jar)?;
         let mut command = crate::background_process::tokio_command(java_path());
         if driver_class.trim() == "com.google.cloud.spanner.jdbc.JdbcDriver" {
@@ -244,6 +250,7 @@ impl JdbcDb {
         }
         let mut child = command
             .args(options)
+            .arg("-Dfile.encoding=UTF-8")
             .arg("--class-path")
             .arg(classpath)
             .arg(&source)
@@ -274,6 +281,7 @@ impl JdbcDb {
             }),
             timeout: Duration::from_secs(req.timeout_secs.clamp(1, 300)),
             version: String::new(),
+            session_id: String::new(),
         };
         let response = db
             .request(format!(
@@ -296,27 +304,43 @@ impl JdbcDb {
                     .and_then(|row| row.first().cloned().flatten())
             })
             .unwrap_or_default();
+        let capabilities: relational::JdbcCapabilities = db.request_v2("capabilities", serde_json::json!({})).await?;
+        db.session_id = capabilities.session_id;
         Ok(db)
     }
 
     async fn request(&self, line: String) -> Result<HttpRows> {
         let mut process = self.process.lock().await;
-        let result = tokio::time::timeout(self.timeout, async {
-            let input = process.input.as_mut().ok_or_else(|| anyhow!("JDBC sidecar 已关闭"))?;
-            input.write_all(line.as_bytes()).await?;
-            input.flush().await?;
-            let mut response = String::new();
-            if process.output.read_line(&mut response).await? == 0 {
-                bail!("JDBC sidecar 已退出");
-            }
-            decode_response(&response)
-        })
-        .await;
-        match result {
-            Ok(r) => r,
-            Err(_) => {
-                let _ = process.child.kill().await;
-                bail!("JDBC 请求超时；sidecar 已终止，请重新连接");
+        let Process { child, input, output, .. } = &mut *process;
+        let response = relational::exchange_line(child, input, output, &line, self.timeout).await?;
+        if let Err(error) = relational::validate_scalar(&response) {
+            process.input.take();
+            let _ = process.child.start_kill();
+            return Err(error.context("JDBC scalar contract failed; physical session discarded; do not replay"));
+        }
+        decode_response(&response)
+    }
+
+    async fn request_v2<T: serde::de::DeserializeOwned>(&self, action: &str, payload: serde_json::Value) -> Result<T> {
+        let (request_id, line) = relational::request(action, &self.session_id, payload.clone())?;
+        let mut process = self.process.lock().await;
+        let Process { child, input, output, .. } = &mut *process;
+        let response = relational::exchange_line(child, input, output, &line, self.timeout).await?;
+        let envelope = match relational::decode_envelope(&response, &request_id, &self.session_id) {
+            Ok(value) => value,
+            Err(error) => { process.input.take(); let _ = process.child.start_kill(); return Err(error); }
+        };
+        if let Err(error) = relational::validate_result(action, &payload, &envelope) {
+            process.input.take(); let _ = process.child.start_kill();
+            return Err(error.context("JDBC evidence contract failed; physical session discarded; outcome unknown, do not replay"));
+        }
+        let driver_error = envelope.get("error").is_some();
+        if relational::poisoned(&envelope) { process.input.take(); let _ = process.child.start_kill(); }
+        match relational::decode_result(envelope) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                if !driver_error { process.input.take(); let _ = process.child.start_kill(); }
+                Err(error)
             }
         }
     }
@@ -326,7 +350,12 @@ impl JdbcDb {
     }
 
     async fn query_scoped(&self, namespace: &str, sql: &str) -> Result<HttpRows> {
-        self.request(format!("query\t{}\t{}\t{}\n", enc(sql), self.timeout.as_secs(), enc(namespace))).await
+        let mut context=crate::sql_history::current_context();
+        if !namespace.is_empty(){context.namespace=namespace.into();}
+        let mut history=crate::sql_history::Guard::in_context(sql,Vec::new(),context);
+        let result=self.request(format!("query\t{}\t{}\t{}\n", enc(sql), self.timeout.as_secs(), enc(namespace))).await;
+        history.result(&result,|r|r.rows.len() as i64);
+        result
     }
 
     async fn command(&self, line: String) -> Result<HttpRows> {
@@ -337,6 +366,17 @@ impl JdbcDb {
 #[async_trait]
 impl HttpAdapter for JdbcDb {
     fn shares_session_namespace(&self) -> bool { true }
+    async fn relational_capabilities(&self) -> Result<relational::JdbcCapabilities> {
+        self.request_v2("capabilities", serde_json::json!({})).await
+    }
+    async fn relational_metadata(&self, object: &relational::JdbcObjectId) -> Result<relational::JdbcMetadataSnapshot> {
+        self.request_v2("metadata", serde_json::json!({"object": object})).await
+    }
+    async fn apply_row_plan(&self, plan: &relational::JdbcRowPlan) -> Result<relational::JdbcMutationOutcome> {
+        if plan.read_only { bail!("READ_ONLY_VIOLATION: effective JDBC connection is read-only"); }
+        if plan.session_id != self.session_id { bail!("STALE_CONTEXT: row plan belongs to another physical JDBC session"); }
+        self.request_v2("row_plan", serde_json::to_value(plan)?).await
+    }
     async fn ping(&self) -> Result<String> {
         self.command(format!("ping\t{}\n", self.timeout.as_secs())).await?;
         Ok(format!("JDBC {}", self.version))
@@ -363,6 +403,21 @@ impl HttpAdapter for JdbcDb {
             .into_iter()
             .filter_map(|row| row.into_iter().next().flatten())
             .collect())
+    }
+    async fn object_types(&self, container: &str) -> Result<Option<Vec<(String, String)>>> {
+        // sidecar tables 命令返回 [name, type]（旧版仅 name → 全部按表）。
+        Ok(Some(self
+            .command(format!("tables\t{}\n", enc(container)))
+            .await?
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut it = row.into_iter();
+                let name = it.next().flatten()?;
+                let ty = it.next().flatten().unwrap_or_else(|| "table".into());
+                Some((name, if ty.eq_ignore_ascii_case("view") { "view".into() } else { "table".into() }))
+            })
+            .collect()))
     }
     async fn rows(
         &self,

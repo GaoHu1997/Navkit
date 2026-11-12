@@ -1,7 +1,7 @@
 //! Fixed, product-specific original JDBC packages with explicit provenance. No JAR is bundled in NavKit.
 //!
-//! 参考 dbx（https://github.com/t8y2/dbx）的分层支持策略：协议兼容数据库走原生驱动、
-//! 其余数据库走具体产品 JDBC。每个产品只允许固定的 Maven/厂商或明确标源的 dbx 原始制品
+//! 分层支持策略：协议兼容数据库走原生驱动、
+//! 其余数据库走具体产品 JDBC。每个产品只允许固定的 Maven/厂商或明确标源的第三方原始制品
 //! （现经由自有镜像仓库 GaoHu1997/Navkit-drivers 字节级托管；jar/zip/pom 的
 //! 大小/SHA-256/条目数/展开大小全部固定），所有 URL 拼写均经真实驱动 `acceptsURL`/
 //! `getPropertyInfo`/死端口连接验证；不会被验证支持的 TLS 形态一律显式拒绝而不是静默明文。
@@ -15,8 +15,8 @@ mod dependencies;
 mod vendor_assets;
 #[path = "managed_spanner.rs"]
 mod spanner;
-#[path = "managed_dbx.rs"]
-mod dbx;
+#[path = "managed_mirror.rs"]
+mod mirror;
 use crate::{
     driver_manager::{DriverResolution, OdbcInventory, PARAMS_PREFIX},
     models::ConnectionRequest,
@@ -243,7 +243,7 @@ fn vendor(kind: &str) -> Option<Vendor> {
             limits: "官方 Google BigQuery JDBC 1.9.0 完整 all JAR（原包包含运行依赖与许可），需 Java 11+。数据库填 project 或 project/dataset，用户名 token、密码填写预生成 OAuth 访问令牌，令牌只走 stdin Properties，不进入 URL。默认固定 Google HTTPS；OAuth 刷新、服务账户、ADC、任意端点扩展请用自定义 JDBC。离线加载/真实闭回环查询失败已验证，Google 账户权限、云端查询与 TLS 握手仍 UNVERIFIED。",
         }),
         "spanner" => Some(spanner::vendor()),
-        _ => vendor_assets::vendor(kind).or_else(|| dbx::vendor(kind)),
+        _ => vendor_assets::vendor(kind).or_else(|| mirror::vendor(kind)),
     }
 }
 pub fn supports(kind: &str) -> bool {
@@ -823,7 +823,7 @@ fn connection_url(
         "bigquery" => bigquery_url(req, pairs),
         "spanner" => spanner::connection_url(req, pairs),
         "gbase" | "inceptor" | "argodb" => vendor_assets::connection_url(req, v.kind, pairs),
-        "cache" | "sundb" | "oscar" => dbx::connection_url(req, v.kind, pairs),
+        "cache" | "sundb" | "oscar" => mirror::connection_url(req, v.kind, pairs),
         _ => trino_presto_url(req, v, pairs),
     }
 }
@@ -1288,8 +1288,8 @@ mod gbase_inceptor_tests;
 #[path = "managed_spanner_tests.rs"]
 mod spanner_tests;
 #[cfg(test)]
-#[path = "managed_dbx_tests.rs"]
-mod dbx_tests;
+#[path = "managed_mirror_tests.rs"]
+mod mirror_tests;
 #[cfg(test)]
 #[path = "managed_argodb_tests.rs"]
 mod argodb_tests;

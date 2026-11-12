@@ -1,0 +1,514 @@
+{
+  "schema_version": 1,
+  "protocol": "clickhouse",
+  "tag": "http_sql_subset",
+  "executed_binary": {
+    "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+    "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+  },
+  "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",
+  "status": "SIMULATED_SYNC_PASS",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "limitations": [
+    "Not a vendor server or certification",
+    "Finite documented SQL/wire subset with actual mutable backend state",
+    "No user connection secrets or data/ files are used",
+    "SQLite storage does not certify ClickHouse engine/ordering/async-mutation/decimal precision/backslash-literal semantics; non-NULL baseline separated from Nullable regression"
+  ],
+  "cases": [
+    {
+      "name": "sqlite_to_clickhouse_full_diff_nonnull",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 410,
+      "evidence": {
+        "source_kind": "sqlite",
+        "target_kind": "clickhouse",
+        "source_table": "TE389C40163904EB59493F8D6B5C987E5",
+        "target_table": "T577FD2FF12D14FA88792A546A6548440",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "2b0249e0-1d82-4e10-a769-88fa31090a6d:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "2b0249e0-1d82-4e10-a769-88fa31090a6d:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": false
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "clickhouse_to_sqlite_full_diff_nonnull",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 361,
+      "evidence": {
+        "source_kind": "clickhouse",
+        "target_kind": "sqlite",
+        "source_table": "TB5324865FA6F42178ED69AB61F8C1C8B",
+        "target_table": "TCCB515BE20D9499F98A4632D8B9E9AD9",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback",
+          "data/replace"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "fbb3f881-7f89-4731-9a0b-3ff71e8c74e0:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "fbb3f881-7f89-4731-9a0b-3ff71e8c74e0:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": false
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "clickhouse_to_clickhouse_full_diff_nonnull",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 550,
+      "evidence": {
+        "source_kind": "clickhouse",
+        "target_kind": "clickhouse",
+        "source_table": "TC7656CAAE56042A5881189CC737EB6CE",
+        "target_table": "TFAC5773F12E549D6AE0DCC0ED85A924C",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "8cc987bb-3628-4097-8994-d54a078fea80:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "8cc987bb-3628-4097-8994-d54a078fea80:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": false
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "sqlite_to_clickhouse_nullable_lossless",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 338,
+      "evidence": {
+        "source_kind": "sqlite",
+        "target_kind": "clickhouse",
+        "source_table": "T6681FADB15C34D049D3D74667202145D",
+        "target_table": "TB53EB1D5C4904785A850AEEA3B6E34A4",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "b8456d9c-41a4-496d-a7f5-6fcc9be727c1:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "b8456d9c-41a4-496d-a7f5-6fcc9be727c1:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": true
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "clickhouse_to_sqlite_nullable_lossless",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 302,
+      "evidence": {
+        "source_kind": "clickhouse",
+        "target_kind": "sqlite",
+        "source_table": "T9156BBCD3A5248CA982BEF7AC0CF513D",
+        "target_table": "TC4B40BE2FB504D93A3EEEE2869911C7A",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback",
+          "data/replace"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "b71b5f7b-6dc3-421e-849b-2ee6eb340ffd:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "b71b5f7b-6dc3-421e-849b-2ee6eb340ffd:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": true
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "clickhouse_incremental_insert_and_mixed_batch_prewrite_rejection",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 284,
+      "evidence": {
+        "incremental_insert": {
+          "rows": 1,
+          "created": false,
+          "warnings": [
+            "该目标通道不支持事务：语句逐条自动提交，中途失败时已写入的部分不会自动回滚"
+          ]
+        },
+        "insert_readback": [
+          [
+            "1",
+            "df27cf30-1c90-40b1-a0a9-571bae9a5b72:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            "present"
+          ]
+        ],
+        "rejected_mixed_batch": {
+          "missing_rows": 1,
+          "changed_rows": 1
+        },
+        "before_rejection_diff": {
+          "source_rows": 4,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 0,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "incremental_update_status": "EXPLICIT_REJECTION_NO_TARGET_CHANGE",
+        "update_error": "ClickHouse 目标不支持普通 UPDATE 增量更新；请关闭更新，仅插入缺失行，或使用全量重建",
+        "readback_after_rejection": [
+          [
+            "1",
+            "df27cf30-1c90-40b1-a0a9-571bae9a5b72:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            "present"
+          ]
+        ],
+        "after_rejection_diff": {
+          "source_rows": 4,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 0,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "task": {
+          "task_id": "5d3b9ba5-eceb-4531-b7c1-78137b0ad9ba",
+          "status": "failed",
+          "phase": "validate",
+          "processed": 0,
+          "total": 0,
+          "message": "ClickHouse 目标不支持普通 UPDATE 增量更新；请关闭更新，仅插入缺失行，或使用全量重建"
+        }
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "clickhouse_missing_pk_metadata_incremental_safely_rejected",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 176,
+      "evidence": {
+        "source_metadata_keyed": false,
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "incremental_status": "EXPLICIT_REJECTION_NO_TARGET_CHANGE",
+        "error": "增量同步需要源表有主键；无主键请改用全量同步",
+        "target_rows": [
+          [
+            "1",
+            "9873eb16-c4f1-4dbb-b218-ff26f4b76b12:中文;O'Reilly\\尾🙂",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ]
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "clickhouse_replace_requires_valid_delete_where",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 181,
+      "evidence": {
+        "sync": {
+          "rows": 2,
+          "created": false,
+          "warnings": [
+            "该目标通道不支持事务：语句逐条自动提交，中途失败时已写入的部分不会自动回滚",
+            "ClickHouse 的 DELETE 依赖轻量删除特性（22.8+）；老版本请改用「重建目标表」"
+          ]
+        },
+        "target_rows": [
+          [
+            "1",
+            "replaced",
+            "present"
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ]
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    }
+  ],
+  "cleanup": {
+    "success": true,
+    "root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-e6f5a0640ed34051875240494c3c81bd",
+    "errors": [],
+    "scope": "explicit pool close; owned child kill/reap; only UUID fixture directory"
+  },
+  "fixture_root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-e6f5a0640ed34051875240494c3c81bd",
+  "wire": [
+    {
+      "protocol": "clickhouse",
+      "wire": "{\"sql\": \"SELECT 1\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (`ID`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', '2b0249e0-1d82-4e10-a769-88fa31090a6d:中文;O''Reilly\\\\尾🙂', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DROP TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (`ID`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', '2b0249e0-1d82-4e10-a769-88fa31090a6d:中文;O''Reilly\\\\尾🙂', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T577FD2FF12D14FA88792A546A6548440`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T4FACAEFC656F4DD79E8580064B0F8AFA` (`KEY` Int64 NOT NULL, `TITLE` String NOT NULL) ENGINE = MergeTree ORDER BY (`KEY`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T4FACAEFC656F4DD79E8580064B0F8AFA` (`KEY`, `TITLE`) VALUES ('2', 'second')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T4FACAEFC656F4DD79E8580064B0F8AFA`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T4FACAEFC656F4DD79E8580064B0F8AFA`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T4FACAEFC656F4DD79E8580064B0F8AFA`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B` (`ID` Int64 NOT NULL,`PAYLOAD` String,`OPTIONAL` String) ENGINE = MergeTree ORDER BY (ID)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B` VALUES (1,'fbb3f881-7f89-4731-9a0b-3ff71e8c74e0:中文;O''Reilly\\\\尾🙂','present'),(2,'second','present')\", \"status\": 200, \"written_rows\": 2, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB5324865FA6F42178ED69AB61F8C1C8B` WHERE `ID` >= 2\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE` (`ID` Int64 NOT NULL,`PAYLOAD` String,`OPTIONAL` String) ENGINE = MergeTree ORDER BY (ID)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE` VALUES (1,'8cc987bb-3628-4097-8994-d54a078fea80:中文;O''Reilly\\\\尾🙂','present'),(2,'second','present')\", \"status\": 200, \"written_rows\": 2, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` String NOT NULL) ENGINE = MergeTree ORDER BY tuple()\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', '8cc987bb-3628-4097-8994-d54a078fea80:中文;O''Reilly\\\\尾🙂', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DROP TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` String NOT NULL) ENGINE = MergeTree ORDER BY tuple()\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', '8cc987bb-3628-4097-8994-d54a078fea80:中文;O''Reilly\\\\尾🙂', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TFAC5773F12E549D6AE0DCC0ED85A924C`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TC7656CAAE56042A5881189CC737EB6CE` WHERE `ID` >= 2\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T3B13DD5E5EC64EFE82FE68D135B3FEA6` (`KEY` Int64 NOT NULL, `TITLE` String NOT NULL) ENGINE = MergeTree ORDER BY tuple()\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T3B13DD5E5EC64EFE82FE68D135B3FEA6` (`KEY`, `TITLE`) VALUES ('2', 'second')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T3B13DD5E5EC64EFE82FE68D135B3FEA6`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T3B13DD5E5EC64EFE82FE68D135B3FEA6`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T3B13DD5E5EC64EFE82FE68D135B3FEA6`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (`ID`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', 'b8456d9c-41a4-496d-a7f5-6fcc9be727c1:中文;O''Reilly\\\\尾🙂', NULL)\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DROP TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (`ID`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', 'b8456d9c-41a4-496d-a7f5-6fcc9be727c1:中文;O''Reilly\\\\尾🙂', NULL)\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TB53EB1D5C4904785A850AEEA3B6E34A4`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T908E7E10BCAF41C6A347C8E747F2FC8F` (`KEY` Int64 NOT NULL, `TITLE` String NOT NULL) ENGINE = MergeTree ORDER BY (`KEY`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T908E7E10BCAF41C6A347C8E747F2FC8F` (`KEY`, `TITLE`) VALUES ('2', 'second')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T908E7E10BCAF41C6A347C8E747F2FC8F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T908E7E10BCAF41C6A347C8E747F2FC8F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T908E7E10BCAF41C6A347C8E747F2FC8F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D` (`ID` Int64 NOT NULL,`PAYLOAD` String,`OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (ID)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D` VALUES (1,'b71b5f7b-6dc3-421e-849b-2ee6eb340ffd:中文;O''Reilly\\\\尾🙂',NULL),(2,'second','present')\", \"status\": 200, \"written_rows\": 2, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T9156BBCD3A5248CA982BEF7AC0CF513D` WHERE `ID` >= 2\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (`ID`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', 'df27cf30-1c90-40b1-a0a9-571bae9a5b72:中文;O''Reilly\\\\尾🙂', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('3', 'third', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`TD0F13F604050421DAFFB166623E6976F`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1` (`ID` Int64 NOT NULL,`PAYLOAD` String,`OPTIONAL` String) ENGINE = MergeTree ORDER BY (ID)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1` VALUES (1,'9873eb16-c4f1-4dbb-b218-ff26f4b76b12:中文;O''Reilly\\\\尾🙂','present'),(2,'second','present')\", \"status\": 200, \"written_rows\": 2, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T8E571CDFC6AA427FA73245CE0B934CD1`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"CREATE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39` (`ID` Int64 NOT NULL, `PAYLOAD` String NOT NULL, `OPTIONAL` Nullable(String)) ENGINE = MergeTree ORDER BY (`ID`)\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', '9c8eb584-ddb5-4c9a-9ce7-f159df6c5db6:中文;O''Reilly\\\\尾🙂', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"SHOW TABLES FROM `DB40461f726ec4443c9dadf1d23c713cb8`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"DELETE FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39` WHERE 1\", \"status\": 200, \"written_rows\": 2, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('1', 'replaced', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"INSERT INTO `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39` (`ID`, `PAYLOAD`, `OPTIONAL`) VALUES ('2', 'second', 'present')\", \"status\": 200, \"written_rows\": 1, \"error\": null}\r\n{\"sql\": \"DESCRIBE TABLE `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT count() FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n{\"sql\": \"SELECT * FROM `DB40461f726ec4443c9dadf1d23c713cb8`.`T88C114FD51C440319DDAA030E8B95F39`\", \"status\": 200, \"written_rows\": 0, \"error\": null}\r\n",
+      "stderr": ""
+    }
+  ],
+  "counts": {
+    "pass": 8,
+    "fail": 0,
+    "vendor_real_pass": 0
+  }
+}

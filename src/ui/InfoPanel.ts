@@ -1,10 +1,14 @@
 /**
- * 右侧信息面板（v2 · 三段式分组）。
+ * 右侧信息面板（v2 · 身份块 + 指标带 + 分组键值）。
  *
- * 设计规范（docs/design/DESIGN.md §5.5）：
- *  1. 对象头：56px 圆角图标块（--accent-50 底 + 强调色图标）+ 15px 600 标题 + 11px 副标题
- *  2. 连接引用：图标 + 文本，12px
- *  3. 分组信息：11px 分组标题（字距 0.04em），96px | 1fr 两列键值，空值统一 `—` 且降级
+ * 设计规范（docs/design/DESIGN.md §5.5，表页按
+ * docs/design/info-panel-redesign/ 的方案 A 落地）：
+ *  1. 顶栏 30px：ⓘ + 连接 chip（品牌图标 + 连接名，替代原来的独立「引用行」）
+ *  2. 身份块：40px 圆角图标块（--accent-50 底 + 强调色图标）+ 15px 600 标题
+ *     + 类型 chip（表 / 列）+ 11px 副行（库名 · 引擎）
+ *  3. 指标带：列 / 索引 / 外键 / 行 四格，从键值表提到顶部（表页才有）
+ *  4. 整宽三视图分段：带文字标签的表信息 / DDL / 列信息（替代纯图标切换）
+ *  5. 分组信息：11px 分组标题（字距 0.05em），96px | 1fr 两列键值，空值统一 `—` 且降级
  *
  * 分组为纯展示层：按字段标签把 objectDetails 产出的扁平字段归类为
  * 概要 / 属性 / 服务器 / 连接 / 定义（定义渲染为 DDL 代码块）。
@@ -28,11 +32,11 @@ const LINEAR_KEY_BY_RES: Record<string, string> = {
   columns: "columns",
 };
 
-/** 对象头 56px 图标块内容：连接类用官方品牌 logo，其余用线性强调色图标。 */
-function headerGlyph(iconRes: string): string {
+/** 对象头图标块内容：连接类用官方品牌 logo，其余用线性强调色图标。 */
+function headerGlyph(iconRes: string, size = 22): string {
   if (iconRes.startsWith("info_pane_conn_")) return iconSvgLarge(iconRes);
   const key = LINEAR_KEY_BY_RES[iconRes];
-  if (key) return linearIcon(key, 28);
+  if (key) return linearIcon(key, size);
   return iconSvgLarge(iconRes);
 }
 
@@ -53,6 +57,8 @@ export interface TableColumnInfo {
 
 /** 表页信息面板三视图数据。 */
 export interface InfoTableState {
+  /** 连接/库/表的稳定身份，区分跨库同名表。 */
+  identity?: string;
   /** 表名（标题）。 */
   title: string;
   /** 连接引用行。 */
@@ -102,8 +108,10 @@ function groupOf(label: string): string {
   if (isNoteField(label)) return "";
   if (label === "定义") return "定义";
   if (label.startsWith("服务器") || label === "version") return "服务器";
+  // 概要 = 「是什么 / 有多大 / 用什么字符集」这类整体字段（表页指标带之外剩下的部分）
   if (
-    /数量|行数|大小|总数|主键列$|源码行数/.test(label)
+    label === "主键" ||
+    /数量|行数|大小|总数|长度$|排序规则|字符集|主键列$|源码行数/.test(label)
   ) {
     return "概要";
   }
@@ -117,6 +125,60 @@ function groupOf(label: string): string {
     return "连接";
   }
   return "属性";
+}
+
+/* ------------------------------------------------------- 指标带（表页顶部） */
+
+/** 提升为顶部指标带四格的字段（提升后不再出现在键值表里）。 */
+const KPI_FIELDS: { label: string; short: string }[] = [
+  { label: "列数量", short: "列" },
+  { label: "索引数量", short: "索引" },
+  { label: "外键数量", short: "外键" },
+  { label: "行", short: "行" },
+];
+
+/** 指标带数字紧凑化（292px 面板四格均分放不下 1,252,059）：1252059 → 125万。 */
+function compactNumber(value: string): string {
+  const n = Number(value.replace(/[,\s]/g, ""));
+  if (!Number.isFinite(n) || n < 10000) return value;
+  if (n < 1e8) {
+    const wan = n / 10000;
+    return `${wan >= 100 ? Math.round(wan) : Math.round(wan * 10) / 10}万`;
+  }
+  return `${Math.round((n / 1e8) * 10) / 10}亿`;
+}
+
+/** 取出指标带条目，并返回剔除它们之后的字段（精确值留在 title 里）。 */
+function splitKpis(
+  fields: InfoField[],
+): [{ short: string; value: string; title: string }[], InfoField[]] {
+  const kpis: { short: string; value: string; title: string }[] = [];
+  const used = new Set<string>();
+  for (const k of KPI_FIELDS) {
+    const hit = fields.find((f) => f.label === k.label && !used.has(f.label));
+    if (!hit) continue;
+    used.add(k.label);
+    const raw = (hit.value ?? "").trim();
+    // 空值 / — 不进指标带（宁可少一格，也不显示 0 或空白）
+    if (raw === "" || raw === "--" || raw === "—") continue;
+    kpis.push({ short: k.short, value: compactNumber(raw), title: `${k.label}：${raw}` });
+  }
+  return [kpis, fields.filter((f) => !used.has(f.label))];
+}
+
+/** 取字段值（用于身份块副行）。 */
+function fieldValue(fields: InfoField[], label: string): string {
+  const v = fields.find((f) => f.label === label)?.value?.trim();
+  return v && v !== "--" ? v : "";
+}
+
+/** 副行已展示的字段（从键值表剔除，避免同一信息出现两次）。 */
+const META_FIELDS = ["数据库", "引擎"];
+
+/** 身份块副行（库名 · 引擎）+ 剔除后的字段。 */
+function splitMeta(fields: InfoField[]): [string[], InfoField[]] {
+  const meta = META_FIELDS.map((label) => fieldValue(fields, label)).filter(Boolean);
+  return [meta, fields.filter((f) => !META_FIELDS.includes(f.label))];
 }
 
 /** 把扁平字段整理为 [分组, 字段[]] 序列（保持组内原顺序）。 */
@@ -147,6 +209,9 @@ export class InfoPanel {
   /** 表页三视图当前模式。 */
   private tableMode: "info" | "ddl" | "column" = "info";
   private tableState: InfoTableState | null = null;
+  /** 最近一次 setState 的内容签名：内容相同就不重建，避免树操作导致右侧闪动。 */
+  private lastStateKey = "";
+  private lastTableKey = "";
 
   constructor() {
     this.el = document.createElement("div");
@@ -158,9 +223,12 @@ export class InfoPanel {
 
   /** 设置表页三视图内容（表信息 / DDL / 列信息）。 */
   setTableState(state: InfoTableState | null): void {
+    this.lastStateKey = "";
     // 切换对象时重置到「表信息」，避免沿用上一张表的 DDL/列信息模式
     // （同一张表刷新时 state.mode 会显式带上当前模式）
-    const sameObject = !!state && this.tableState?.title === state.title;
+    const sameObject = !!state && this.tableState?.title === state.title
+      && this.tableState?.identity === state.identity
+      && JSON.stringify(this.tableState?.refs ?? []) === JSON.stringify(state.refs ?? []);
     this.tableState = state;
     if (state?.mode) this.tableMode = state.mode;
     else if (!sameObject) this.tableMode = "info";
@@ -183,86 +251,122 @@ export class InfoPanel {
     this.body.appendChild(empty);
   }
 
-  /** 顶部工具行：ⓘ + （表页）三视图模式切换。 */
-  private appendTopbar(withModes: boolean): void {
+  /** 顶部工具行：ⓘ + 连接 chip（方案 A：连接不再单独占一行）。 */
+  private appendTopbar(refs: { icon: string; text: string }[] | undefined): void {
     const top = document.createElement("div");
     top.className = "info-topbar";
     const info = document.createElement("div");
     info.innerHTML = svg(ICON_INFO_CIRCLE);
     info.className = "info-top-icon-sm";
     top.appendChild(info);
-    const spacer = document.createElement("div");
-    spacer.style.flex = "1";
-    top.appendChild(spacer);
-    if (withModes) {
-      // 三段式切换用单色线性图标：颜色完全由 active 状态决定，
-      // 避免彩色双色图标（蓝表）让「表信息」看起来永远是高亮的。
-      const modes: { key: "info" | "ddl" | "column"; icon: string; title: string }[] = [
-        { key: "info", icon: "table", title: "表信息" },
-        { key: "ddl", icon: "editor", title: "DDL" },
-        { key: "column", icon: "columns", title: "列信息" },
-      ];
-      const group = document.createElement("div");
-      group.className = "info-mode-group";
-      group.setAttribute("role", "tablist");
-      for (const m of modes) {
-        const btn = document.createElement("div");
-        const active = this.tableMode === m.key;
-        btn.className = `info-mode-btn${active ? " active" : ""}`;
-        btn.title = m.title;
-        btn.setAttribute("role", "tab");
-        btn.setAttribute("aria-selected", String(active));
-        btn.setAttribute("aria-label", m.title);
-        btn.innerHTML = linearIcon(m.icon, 15);
-        btn.addEventListener("click", () => {
-          this.tableMode = m.key;
-          this.renderTable();
-        });
-        group.appendChild(btn);
-      }
-      top.appendChild(group);
+    for (const ref of refs ?? []) {
+      const chip = document.createElement("div");
+      chip.className = "info-conn-chip";
+      chip.title = ref.text;
+      const ic = document.createElement("span");
+      ic.className = "info-conn-chip-icon";
+      ic.innerHTML = iconSvgByName(ref.icon);
+      const t = document.createElement("span");
+      t.textContent = ref.text;
+      chip.append(ic, t);
+      top.appendChild(chip);
     }
     this.body.appendChild(top);
   }
 
-  /** 对象头：56px 图标块 + 标题 + 副标题（居中）。 */
-  private appendHeader(iconRes: string, title: string, subtitle?: string): void {
-    const head = document.createElement("div");
-    head.className = "info-head";
+  /** 身份块：40px 图标块 + 标题 + 类型 chip + 副行（库名 · 引擎）。 */
+  private appendIdentity(
+    iconRes: string,
+    title: string,
+    kind?: string,
+    meta: string[] = [],
+  ): void {
+    const box = document.createElement("div");
+    box.className = "info-identity";
     const glyph = document.createElement("div");
     glyph.className = "info-glyph";
     glyph.innerHTML = headerGlyph(iconRes);
+    const text = document.createElement("div");
+    text.className = "info-idtext";
     const t = document.createElement("div");
     t.className = "info-title";
     t.textContent = title;
-    head.appendChild(glyph);
-    head.appendChild(t);
-    if (subtitle) {
-      const sub = document.createElement("div");
-      sub.className = "info-sub";
-      sub.textContent = subtitle;
-      head.appendChild(sub);
+    t.title = title;
+    text.appendChild(t);
+    const sub = document.createElement("div");
+    sub.className = "info-meta";
+    if (kind) {
+      const chip = document.createElement("span");
+      chip.className = "info-kind";
+      chip.textContent = kind;
+      sub.appendChild(chip);
     }
-    this.body.appendChild(head);
+    meta.filter(Boolean).forEach((item, i) => {
+      if (i > 0 || kind) {
+        const dot = document.createElement("span");
+        dot.className = "info-meta-dot";
+        sub.appendChild(dot);
+      }
+      const s = document.createElement("span");
+      s.textContent = item;
+      s.title = item;
+      sub.appendChild(s);
+    });
+    if (sub.childElementCount > 0) text.appendChild(sub);
+    box.append(glyph, text);
+    this.body.appendChild(box);
   }
 
-  /** 连接引用行。 */
-  private appendRefs(refs: { icon: string; text: string }[] | undefined): void {
-    if (!refs?.length) return;
-    const box = document.createElement("div");
-    box.className = "info-refs";
-    for (const ref of refs) {
-      const row = document.createElement("div");
-      row.className = "info-ref";
-      const ic = document.createElement("span");
-      ic.innerHTML = iconSvgByName(ref.icon);
-      row.appendChild(ic);
-      const t = document.createElement("span");
-      t.textContent = ref.text;
-      row.appendChild(t);
-      box.appendChild(row);
+  /** 指标带：列 / 索引 / 外键 / 行（完整精确值放 title）。 */
+  private appendKpiBand(kpis: { short: string; value: string; title: string }[]): void {
+    if (!kpis.length) return;
+    const band = document.createElement("div");
+    band.className = "info-kpis";
+    band.style.gridTemplateColumns = `repeat(${kpis.length}, 1fr)`;
+    for (const k of kpis) {
+      const cell = document.createElement("div");
+      cell.className = "info-kpi";
+      cell.title = k.title;
+      const b = document.createElement("b");
+      b.textContent = k.value;
+      const s = document.createElement("span");
+      s.textContent = k.short;
+      cell.append(b, s);
+      band.appendChild(cell);
     }
-    this.body.appendChild(box);
+    this.body.appendChild(band);
+  }
+
+  /** 整宽三视图分段（带文字标签）。 */
+  private appendModes(): void {
+    const modes: { key: "info" | "ddl" | "column"; icon: string; title: string }[] = [
+      { key: "info", icon: "table", title: "表信息" },
+      { key: "ddl", icon: "editor", title: "DDL" },
+      { key: "column", icon: "columns", title: "列信息" },
+    ];
+    const group = document.createElement("div");
+    group.className = "info-modes";
+    group.setAttribute("role", "tablist");
+    for (const m of modes) {
+      const btn = document.createElement("div");
+      const active = this.tableMode === m.key;
+      btn.className = `info-mode-tab${active ? " active" : ""}`;
+      btn.title = m.title;
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", String(active));
+      const ic = document.createElement("span");
+      ic.innerHTML = linearIcon(m.icon, 12);
+      const label = document.createElement("span");
+      label.textContent = m.title;
+      btn.append(ic, label);
+      btn.addEventListener("click", () => {
+        if (this.tableMode === m.key) return;
+        this.tableMode = m.key;
+        this.renderTable();
+      });
+      group.appendChild(btn);
+    }
+    this.body.appendChild(group);
   }
 
   /** 分组键值表。note 类字段整行降级；「定义」渲染为 DDL 块。 */
@@ -310,15 +414,25 @@ export class InfoPanel {
 
   private renderTable(): void {
     const s = this.tableState;
+    const key = JSON.stringify([s, this.tableMode]);
+    if (key === this.lastTableKey) return;
+    this.lastTableKey = key;
+    const scrollTop = this.body.scrollTop;
     this.body.innerHTML = "";
+    queueMicrotask(() => { if (this.body.isConnected) this.body.scrollTop = scrollTop; });
     if (!s) {
       this.renderEmpty();
       return;
     }
 
-    this.appendTopbar(true);
+    this.appendTopbar(s.refs);
+
+    const [kpis, rest] = splitKpis(s.info);
+    const [meta, groups] = splitMeta(rest);
 
     if (this.tableMode === "ddl") {
+      this.appendIdentity("info_pane_table", s.title, "表", meta);
+      this.appendModes();
       const pre = document.createElement("pre");
       pre.className = "ddl-code";
       pre.innerHTML = highlightSql(s.ddl || "-- 无定义");
@@ -329,13 +443,16 @@ export class InfoPanel {
     if (this.tableMode === "column") {
       const c = s.column;
       if (!c) {
+        this.appendIdentity("info_pane_table", s.title, "表", meta);
+        this.appendModes();
         const hint = document.createElement("div");
         hint.className = "info-note";
         hint.textContent = "点击表头选择列，查看列信息。";
         this.body.appendChild(hint);
         return;
       }
-      this.appendHeader("columns", c.name, "列");
+      this.appendIdentity("columns", c.name, "列", [s.title, c.type].filter(Boolean));
+      this.appendModes();
       this.appendGroups([
         { label: "类型", value: c.type },
         { label: "不是 null", value: c.nullable },
@@ -345,24 +462,33 @@ export class InfoPanel {
       return;
     }
 
-    // 表信息（默认）
-    this.appendHeader("info_pane_table", s.title, "表");
-    this.appendRefs(s.refs);
-    this.appendGroups(s.info);
+    // 表信息（默认）：指标带放在视图分段之下，切换 DDL / 列信息时分段位置不动
+    this.appendIdentity("info_pane_table", s.title, "表", meta);
+    this.appendModes();
+    this.appendKpiBand(kpis);
+    this.appendGroups(groups);
   }
 
   /** 设置内容。 */
   setState(state: InfoPanelState | null): void {
+    // 同一内容重复下发（树刷新、标签切换、工具栏重建）不再重建 DOM：
+    // 重建会打断阅读位置并造成可见闪动。
+    const key = state === null
+      ? "null"
+      : JSON.stringify([state.icon, state.title, state.subtitle ?? "", state.refs ?? [], state.fields, (state.list ?? []).map(item => item.text)]);
+    if (key === this.lastStateKey) return;
+    this.lastStateKey = key;
+    const scrollTop = this.body.scrollTop;
     this.tableState = null;
+    this.lastTableKey = "";
     this.body.innerHTML = "";
     if (!state) {
       this.renderEmpty();
       return;
     }
 
-    this.appendTopbar(false);
-    this.appendHeader(state.icon, state.title, state.subtitle);
-    this.appendRefs(state.refs);
+    this.appendTopbar(state.refs);
+    this.appendIdentity(state.icon, state.title, state.subtitle);
     this.appendGroups(state.fields);
 
     // 对象列表（查询页：当前库的表清单）
@@ -381,12 +507,19 @@ export class InfoPanel {
       }
       this.body.appendChild(row);
     }
+    // 重建后保持原阅读位置，避免内容相同的刷新把视图弹回顶部。
+    this.body.scrollTop = scrollTop;
   }
 
-  /** 代码段面板（查询页右侧，参考截图 5）。 */
-  setSnippets(items: { name: string; tag?: string; desc?: string; sql?: string }[],
-    onInsert?: (item: { name: string; tag?: string; desc?: string; sql?: string }) => void): void {
+  /** 代码段面板（查询页右侧）。与「代码段」对话框共用数据源；支持新增 / 删除自定义代码段。 */
+  setSnippets(
+    items: { name: string; tag?: string; desc?: string; sql?: string; custom?: boolean }[],
+    onInsert?: (item: { name: string; tag?: string; desc?: string; sql?: string }) => void,
+    manage?: { onAdd?: () => void; onDelete?: (name: string) => void },
+  ): void {
+    this.lastStateKey = "";
     this.tableState = null;
+    this.lastTableKey = "";
     this.body.innerHTML = "";
     const top = document.createElement("div");
     top.className = "snippet-top";
@@ -403,7 +536,14 @@ export class InfoPanel {
     sync.type = "button";
     sync.className = "snippet-sync";
     sync.textContent = "重置";
-    top.append(combo, sync);
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "snippet-sync";
+    add.textContent = "＋";
+    add.title = "新增自定义代码段";
+    add.setAttribute("aria-label", "新增自定义代码段");
+    add.addEventListener("click", () => manage?.onAdd?.());
+    top.append(combo, sync, add);
     this.body.appendChild(top);
     const search = document.createElement("input");
     search.type = "search";
@@ -442,6 +582,19 @@ export class InfoPanel {
         desc.textContent = item.desc ?? "";
         main.append(title, desc);
         row.append(icon, main);
+        if (item.custom && manage?.onDelete) {
+          const del = document.createElement("span");
+          del.className = "snippet-del";
+          del.textContent = "×";
+          del.title = "删除此自定义代码段";
+          del.setAttribute("role", "button");
+          del.setAttribute("aria-label", `删除代码段 ${item.name}`);
+          del.addEventListener("click", (e) => {
+            e.stopPropagation();
+            manage.onDelete?.(item.name);
+          });
+          row.appendChild(del);
+        }
         row.addEventListener("click", () => onInsert?.(item));
         list.appendChild(row);
       }

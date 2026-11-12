@@ -1,0 +1,21 @@
+.data-grid-controls .data-grid-body, .qr-column-body { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.data-grid-body > .grid-wrap, .qr-column-body > .qr-body { flex: 1; min-width: 0; }
+.column-sidebar { box-sizing: border-box; width: 260px; max-width: 45%; flex: 0 0 260px; min-height: 0; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2); border-left: 1px solid var(--border); background: var(--bg-surface); color: var(--text); font-size: var(--fs-11); }
+.column-sidebar[hidden] { display: none; }
+.column-sidebar-heading { display: flex; align-items: center; justify-content: space-between; }
+.column-sidebar button, .column-sidebar input[type=search] { min-height: 26px; font: inherit; color: inherit; border: 1px solid var(--border); border-radius: var(--r-1); background: var(--bg-surface); }
+.column-sidebar input[type=search] { width: 100%; min-width: 0; padding: 0 var(--sp-2); }
+.column-sidebar .column-sidebar-list { display: flex; flex: 1; flex-direction: column; flex-wrap: nowrap; align-items: stretch; min-height: 0; max-height: none; overflow: auto; padding: 0; gap: 0; }
+.column-sidebar-row { display: flex; align-items: center; gap: var(--sp-2); min-height: 26px; flex-shrink: 0; cursor: pointer; }
+.column-sidebar-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-sidebar-row input { flex-shrink: 0; accent-color: var(--accent-500); }
+.column-sidebar button:focus-visible, .column-sidebar input:focus-visible, .data-grid-controls button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
+.qr-tools > .qr-column-trigger { margin-left: auto; align-self: flex-start; height: 26px; }
+.qr-column-trigger svg { width: 16px; height: 16px; }
+.data-grid-controls .fb-act, .data-grid-controls .fb-txt, .data-grid-controls .fb-join-text { min-height: 26px; font: inherit; color: inherit; }
+.data-grid-controls select.fb-txt, .data-grid-controls button.fb-txt, .data-grid-controls button.fb-join-text { border: 1px solid transparent; background: transparent; text-align: left; }
+.data-grid-controls .fb-val { min-width: 72px; }
+.data-grid-controls .fb-edit { min-width: 110px; height: 26px; }
+.data-grid-controls .filter-placeholder { display: block; line-height: 1.5; }
+.data-grid-controls .sort-line { flex-wrap: nowrap; }
+.data-grid-controls .fb-act svg { width: 14px; height: 14px; }

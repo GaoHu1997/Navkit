@@ -6,19 +6,36 @@ preview.html
 
 # Rust / Tauri 构建产物
 src-tauri/target/
+target/
 src-tauri/gen/schemas/
 
-# 测试与验收的大型数据产物
+# 测试与验收的大型数据产物（可再生，不入库）
 artifacts/
-tools/acceptance/datasources/
-tools/acceptance/pg/
-tools/acceptance/reference-transfer-*/
-tools/acceptance/desktop14-*/
-tools/acceptance/simulation/
 tools/artifacts/
 tools/fulltest-*/
 tools/driver-mirror/
 tools/db_art/
+
+# 验收夹具与运行产物：放行脚本，只忽略数据
+tools/acceptance/*
+!tools/acceptance/*.mjs
+!tools/acceptance/*.py
+!tools/acceptance/*.ps1
+!tools/acceptance/*.sql
+!tools/acceptance/*.md
+!tools/acceptance/e2e/
+!tools/acceptance/sync/
+tools/acceptance/datasources/
+tools/acceptance/pg/
+tools/acceptance/reference-transfer-*/
+tools/acceptance/desktop14-*/
+tools/acceptance/production-smoke-*/
+tools/acceptance/driver-download-*/
+tools/acceptance/driver-ranges-*/
+tools/acceptance/sandbox/
+tools/acceptance/fulltest/
+tools/acceptance/simulation/
+tools/usertest-ipc-20261107/
 
 # 本地数据与临时文件
 data/
@@ -31,20 +48,37 @@ testdata/import_rows.json
 *.db-wal
 *.log
 
-# 本地工作目录
+# 文档：生命周期目录照常入库，只忽略证据日志之外的可再生产物
+!docs/active/evidence/*.log
+!docs/active/release-test-20261110/证据/**/*.json
+docs/design/shots/*.png
+.tmp/
+.acl-recovery/
+
+# 本地工作目录与工作记录（不进入 GitHub）
 .zcode/
-.agents/
 .dist-portable-data-preserve/
 dynamodb-local-metadata.json
+ui-design-drafts/
+design-plans/
 
-# 大体积二进制与证据归档
-docs/验收证据/
-docs/ui-align/*.png
-docs/design/shots/
+# 技能目录：放行自研 skill，其余外部 UI skill 仍忽略
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/docs-lifecycle/
 
-# 系统文件
+# 系统文件与本地编辑器
 Thumbs.db
 .DS_Store
-tools/acceptance/
-tools/usertest-ipc-20261107/
-design-plans/
+.vscode/
+.idea/
+
+# 测试运行产物
+tools/test-artifacts/
+
+# 本地临时目录与草稿截图（不入库）
+tmp/
+.tmp/
+.tmp-*
+dist-release/

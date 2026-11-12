@@ -84,7 +84,7 @@ fn options(sync_mode: &str, incremental_update: bool) -> SyncOptions {
         incremental_update,
         create_target: false,
         columns: vec![],
-        where_clause: None,
+        key_columns: Vec::new(), delete_missing: false, where_clause: None,
     }
 }
 

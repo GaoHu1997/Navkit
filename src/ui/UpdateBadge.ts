@@ -1,0 +1,282 @@
+/**
+ * 标题栏「更新」徽标：检测到新版本时以绿色「更新」出现；点击下载时边框加粗并沿边框生长为进度条；
+ * 下载校验完成变为橘黄色「重启」，点击换名替换程序并重启。
+ *
+ * 复用「软件更新」对话框的后端通道：update_check / update_download / update_status / update_apply，
+ * 下载进度优先取 update-progress 事件，事件不可用时轮询 update_status 兜底。
+ */
+
+import "../styles/update-badge.css";
+import { api } from "../core/api";
+import type { UpdateManifest, UpdateProgressEvent } from "../core/types";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const BADGE_W = 54;
+const BADGE_H = 22;
+const PAD = 1.45;
+const RADIUS = 5;
+/** 圆角矩形边框周长（与 ringPath 一致），用于把进度映射成 stroke-dashoffset。 */
+const PERIMETER =
+  2 * (BADGE_W - 2 * PAD - 2 * RADIUS) + 2 * (BADGE_H - 2 * PAD - 2 * RADIUS) + 2 * Math.PI * RADIUS;
+
+const FIRST_CHECK_DELAY_MS = 2000;
+const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const POLL_INTERVAL_MS = 700;
+
+export type UpdateBadgeNotify = (kind: "success" | "error" | "info", text: string) => void;
+
+type BadgePhase = "hidden" | "available" | "downloading" | "ready";
+
+/** 圆角矩形路径：起点在顶部中点、顺时针，进度自顶部向右生长。 */
+function ringPath(w: number, h: number, pad: number, r: number): string {
+  const x0 = pad;
+  const y0 = pad;
+  const x1 = w - pad;
+  const y1 = h - pad;
+  const mid = (x0 + x1) / 2;
+  return (
+    "M " + mid + " " + y0 +
+    " H " + (x1 - r) + " A " + r + " " + r + " 0 0 1 " + x1 + " " + (y0 + r) +
+    " V " + (y1 - r) + " A " + r + " " + r + " 0 0 1 " + (x1 - r) + " " + y1 +
+    " H " + (x0 + r) + " A " + r + " " + r + " 0 0 1 " + x0 + " " + (y1 - r) +
+    " V " + (y0 + r) + " A " + r + " " + r + " 0 0 1 " + (x0 + r) + " " + y0 +
+    " H " + mid
+  );
+}
+
+export class UpdateBadge {
+  readonly el: HTMLButtonElement;
+  private readonly labelEl: HTMLElement;
+  private readonly barEl: SVGPathElement;
+  private readonly trackEl: SVGPathElement;
+  private phase: BadgePhase = "hidden";
+  private manifest: UpdateManifest | null = null;
+  private started = false;
+  private checkTimer: number | null = null;
+  private pollTimer: number | null = null;
+  private stopEventListener: (() => void) | null = null;
+  private readonly notify?: UpdateBadgeNotify;
+
+  constructor(notify?: UpdateBadgeNotify) {
+    this.notify = notify;
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "tb-icon update-badge";
+    el.hidden = true;
+    el.dataset.phase = "hidden";
+    el.title = "检查更新";
+    el.setAttribute("aria-label", "更新");
+    el.addEventListener("mousedown", (e) => e.stopPropagation());
+
+    const ub = document.createElement("span");
+    ub.className = "ub";
+
+    const frame = document.createElementNS(SVG_NS, "svg") as SVGSVGElement;
+    frame.setAttribute("class", "ub-frame");
+    frame.setAttribute("viewBox", "0 0 " + BADGE_W + " " + BADGE_H);
+    frame.setAttribute("aria-hidden", "true");
+
+    const d = ringPath(BADGE_W, BADGE_H, PAD, RADIUS);
+    this.trackEl = document.createElementNS(SVG_NS, "path") as SVGPathElement;
+    this.trackEl.setAttribute("class", "ub-track");
+    this.trackEl.setAttribute("d", d);
+    this.barEl = document.createElementNS(SVG_NS, "path") as SVGPathElement;
+    this.barEl.setAttribute("class", "ub-bar");
+    this.barEl.setAttribute("d", d);
+    frame.append(this.trackEl, this.barEl);
+
+    this.labelEl = document.createElement("span");
+    this.labelEl.className = "ub-lb";
+    this.labelEl.textContent = "更新";
+
+    ub.append(frame, this.labelEl);
+    el.append(ub);
+    el.addEventListener("click", () => void this.onClick());
+
+    this.el = el;
+    this.renderProgress(0);
+  }
+
+  /** 应用启动后调用：先看是否有已就绪的安装包，再延迟检查新版本并定时复查。 */
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    void this.restoreStatus();
+    window.setTimeout(() => void this.check(), FIRST_CHECK_DELAY_MS);
+    this.checkTimer = window.setInterval(() => void this.check(), CHECK_INTERVAL_MS);
+  }
+
+  stop(): void {
+    this.started = false;
+    if (this.checkTimer !== null) {
+      window.clearInterval(this.checkTimer);
+      this.checkTimer = null;
+    }
+    this.stopPolling();
+    this.stopProgressListener();
+  }
+
+  /** 静默检查新版本；网络/未配置更新源时保持原状，不打扰用户。 */
+  private async check(): Promise<void> {
+    if (this.phase === "downloading" || this.phase === "ready") return;
+    try {
+      const result = await api.updateCheck();
+      if (result.update_available && result.manifest) this.setAvailable(result.manifest);
+      else this.hide();
+    } catch {
+      /* 静默失败 */
+    }
+  }
+
+  private async restoreStatus(): Promise<void> {
+    try {
+      const status = await api.updateStatus();
+      if (status.phase === "ready") this.setReady();
+      else if (status.phase === "downloading") this.enterDownloading(status.done, status.total);
+    } catch {
+      /* 非桌面 / 预览环境没有该状态 */
+    }
+  }
+
+  private setPhase(phase: BadgePhase): void {
+    this.phase = phase;
+    this.el.dataset.phase = phase;
+    this.el.hidden = phase === "hidden";
+  }
+
+  /** 发现新版本：显示绿色「更新」。 */
+  setAvailable(manifest: UpdateManifest | null): void {
+    this.manifest = manifest;
+    this.setPhase("available");
+    this.labelEl.textContent = "更新";
+    const what = manifest && manifest.version ? "新版本 " + manifest.version : "有可用更新";
+    this.el.title = what + "，点击下载";
+    this.el.setAttribute("aria-label", what + "，点击下载更新");
+  }
+
+  private hide(): void {
+    this.setPhase("hidden");
+    this.labelEl.textContent = "更新";
+    this.el.title = "已是最新版本";
+  }
+
+  private enterDownloading(done: number, total: number): void {
+    this.setPhase("downloading");
+    this.labelEl.textContent = "更新";
+    const pct = total > 0 ? (done / total) * 100 : 0;
+    this.renderProgress(pct);
+    this.el.title = total > 0 ? "正在下载更新 " + Math.round(pct) + "%" : "正在下载更新…";
+    this.el.setAttribute("aria-label", "正在下载更新");
+  }
+
+  private setReady(): void {
+    this.stopPolling();
+    this.stopProgressListener();
+    this.setPhase("ready");
+    this.renderProgress(100);
+    this.labelEl.textContent = "重启";
+    this.el.title = "更新已下载，点击重启并安装";
+    this.el.setAttribute("aria-label", "重启并安装更新");
+  }
+
+  private renderProgress(pct: number): void {
+    const clamped = Math.max(0, Math.min(100, pct));
+    this.barEl.style.strokeDasharray = String(PERIMETER);
+    this.barEl.style.strokeDashoffset = String(PERIMETER * (1 - clamped / 100));
+  }
+
+  private async onClick(): Promise<void> {
+    if (this.phase === "available") {
+      await this.download();
+      return;
+    }
+    if (this.phase === "ready") await this.apply();
+  }
+
+  private async download(): Promise<void> {
+    if (this.phase !== "available") return;
+    this.enterDownloading(0, 0);
+    this.listenProgress();
+    this.startPolling();
+    try {
+      await api.updateDownload();
+      this.setReady();
+    } catch (e) {
+      this.stopPolling();
+      this.stopProgressListener();
+      this.setAvailable(this.manifest);
+      this.notify?.("error", "更新下载失败：" + String(e));
+    }
+  }
+
+  private async apply(): Promise<void> {
+    this.el.disabled = true;
+    this.el.title = "正在重启并安装更新…";
+    try {
+      await api.updateApply();
+    } catch (e) {
+      this.el.disabled = false;
+      this.el.title = "点击重启并安装更新";
+      this.notify?.("error", "重启安装失败：" + String(e));
+    }
+  }
+
+  private listenProgress(): void {
+    this.stopProgressListener();
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        if (cancelled) return;
+        unlisten = await listen<UpdateProgressEvent>("update-progress", (event) => {
+          const p = event.payload;
+          if (p.phase === "downloading") this.enterDownloading(p.done, p.total);
+          else if (p.phase === "verifying") {
+            this.renderProgress(100);
+            this.el.title = "正在校验更新包…";
+          } else if (p.phase === "ready") {
+            this.setReady();
+          } else if (p.phase === "error") {
+            this.el.title = p.message ? "更新下载出错：" + p.message : "更新下载出错";
+          }
+        });
+      } catch {
+        /* 无事件 API 时靠 update_status 轮询兜底 */
+      }
+    })();
+    this.stopEventListener = () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }
+
+  private startPolling(): void {
+    this.stopPolling();
+    this.pollTimer = window.setInterval(() => {
+      void api
+        .updateStatus()
+        .then((status) => {
+          if (status.phase === "ready") this.setReady();
+          else if (status.phase === "downloading") this.enterDownloading(status.done, status.total);
+        })
+        .catch(() => {
+          /* 忽略轮询失败，等下一次 */
+        });
+    }, POLL_INTERVAL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer !== null) {
+      window.clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  private stopProgressListener(): void {
+    if (this.stopEventListener) {
+      this.stopEventListener();
+      this.stopEventListener = null;
+    }
+  }
+}

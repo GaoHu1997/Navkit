@@ -32,9 +32,7 @@ export class TreePanel {
   private draggedConnectionId: string | null = null;
   private keyboardConnectionId: string | null = null;
   private moving = false;
-  private rootDrop: HTMLButtonElement;
-  private moveStatus: HTMLElement;
-  private readonly moveHelp = "连接可拖入文件夹分组，或拖到连接上半部/下半部排在前/后。键盘：Alt+↑/↓ 同组排序；Ctrl+X 选取连接，Ctrl+V 放到分组或连接前，Ctrl+Shift+V 放到连接后；在未分组按钮按 Enter 移到根层，Esc 取消。";
+  private readonly moveHelp = "连接可拖入文件夹分组，或拖到连接上半部/下半部排在前/后。键盘：Alt+↑/↓ 同组排序；Ctrl+X 选取连接，Ctrl+V 放到分组或连接前，Ctrl+Shift+V 放到连接后，Esc 取消。";
 
   constructor(cb: TreeCallbacks = {}) {
     this.cb = cb;
@@ -74,29 +72,10 @@ export class TreePanel {
     this.scroll.addEventListener("dragleave", (e) => {
       if (!this.scroll.contains(e.relatedTarget as Node | null)) this.clearDropIndicator();
     });
-    // 永远可见的根层落点，也是不依赖拖放的键盘入口。
-    this.rootDrop = document.createElement("button");
-    this.rootDrop.type = "button";
-    this.rootDrop.className = "tree-root-drop";
-    this.rootDrop.textContent = "未分组 · 拖放连接到此处";
-    this.rootDrop.title = this.moveHelp;
-    this.rootDrop.setAttribute("aria-label", "移到未分组：选取连接后按 Enter");
-    this.rootDrop.addEventListener("dragover", (e) => this.handleDragOver(e, true));
-    this.rootDrop.addEventListener("drop", (e) => this.handleDrop(e, true));
-    this.rootDrop.addEventListener("dragleave", () => this.clearDropIndicator());
-    this.rootDrop.addEventListener("click", () => {
-      if (this.keyboardConnectionId) void this.requestMove(this.keyboardConnectionId, "");
-      else this.moveStatus.textContent = this.moveHelp;
-    });
-    this.moveStatus = document.createElement("div");
-    this.moveStatus.className = "tree-move-status";
-    this.moveStatus.textContent = "Alt+↑/↓ 排序 · Ctrl+X/V 跨组移动";
-    this.moveStatus.setAttribute("role", "status");
-    this.moveStatus.setAttribute("aria-live", "polite");
+    // Esc 取消键盘选取的连接（不显示常驻操作提示）。
     this.el.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && this.keyboardConnectionId) {
         this.keyboardConnectionId = null;
-        this.moveStatus.textContent = "已取消移动连接";
         this.updateSelection();
         e.preventDefault();
         e.stopPropagation();
@@ -115,8 +94,6 @@ export class TreePanel {
 
     this.el.appendChild(search);
     this.el.appendChild(this.scroll);
-    this.el.appendChild(this.rootDrop);
-    this.el.appendChild(this.moveStatus);
   }
 
   /** 设置树数据。 */
@@ -312,8 +289,11 @@ export class TreePanel {
 
     row.addEventListener("mousedown", (e) => {
       if (e.button === 2) return;
+      // 双击的第二次按下只负责打开/收起，不再重复请求右侧详情。
+      // 从工作区回到树时仍下发选择，恢复此节点的信息。
+      const changed = this.selectedId !== node.id || !this.scroll.contains(document.activeElement);
       this.selectedId = node.id;
-      this.cb.onSelect?.(node);
+      if (changed) this.cb.onSelect?.(node);
       // 只更新高亮，不重建 DOM —— 否则双击时元素会被替换，
       // dblclick 事件将永远无法送达。
       this.updateSelection();
@@ -345,9 +325,9 @@ export class TreePanel {
     return null;
   }
 
-  private dropLocation(e: DragEvent, root: boolean): { group: string; targetId?: string; position?: ConnectionMovePosition; row: HTMLElement | null } | null {
+  private dropLocation(e: DragEvent): { group: string; targetId?: string; position?: ConnectionMovePosition; row: HTMLElement | null } | null {
     const element = e.target instanceof Element ? e.target : null;
-    const row = root ? null : element?.closest<HTMLElement>(".tree-node") ?? null;
+    const row = element?.closest<HTMLElement>(".tree-node") ?? null;
     if (!row) return { group: "", row: null };
     const node = this.find(row.dataset.id ?? "");
     if (node?.id.startsWith("group:")) return { group: node.id.slice(6), row };
@@ -361,28 +341,27 @@ export class TreePanel {
 
   private clearDropIndicator(): void {
     this.scroll.querySelectorAll<HTMLElement>(".tree-node").forEach((row) => row.classList.remove("drop-target", "drop-before", "drop-after"));
-    this.rootDrop?.classList.remove("drop-target");
     this.scroll.classList.remove("drop-root");
   }
 
-  private handleDragOver(e: DragEvent, root = false): void {
+  private handleDragOver(e: DragEvent): void {
     this.clearDropIndicator();
     // 即使是外部文件也取消默认行为，不能让 WebView 导航离开应用。
     e.preventDefault();
     e.stopPropagation();
     if (!this.dragId(e)) { if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; return; }
-    const location = this.dropLocation(e, root);
+    const location = this.dropLocation(e);
     if (!location) { if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; return; }
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     if (location.row) location.row.classList.add(location.position ? `drop-${location.position}` : "drop-target");
-    else { this.rootDrop.classList.add("drop-target"); this.scroll.classList.add("drop-root"); }
+    else this.scroll.classList.add("drop-root");
   }
 
-  private handleDrop(e: DragEvent, root = false): void {
+  private handleDrop(e: DragEvent): void {
     const id = this.dragId(e);
-    const location = id ? this.dropLocation(e, root) : null;
+    const location = id ? this.dropLocation(e) : null;
     this.clearDropIndicator();
     e.preventDefault();
     e.stopPropagation();
@@ -396,22 +375,18 @@ export class TreePanel {
     if (group && !this.nodes.some((n) => n.id === `group:${group}`)) return;
     if (targetId && this.connectionGroup(targetId) !== group) return;
     this.moving = true;
-    this.rootDrop.disabled = true;
     this.scroll.setAttribute("aria-busy", "true");
-    this.moveStatus.textContent = "正在保存连接顺序…";
     try {
       await this.cb.onMoveConnection(id, group, targetId, position);
       this.keyboardConnectionId = null;
       this.select(`conn:${id}`);
-      this.moveStatus.textContent = targetId ? "连接顺序已保存" : group ? `已移入分组「${group}」` : "已移到未分组";
       // App 重绘后再聚焦新行，避免焦点留在已卸载节点。
       const row = [...this.scroll.querySelectorAll<HTMLElement>(".tree-node")].find((el) => el.dataset.id === `conn:${id}`);
       row?.focus({ preventScroll: true });
-    } catch (e) {
-      this.moveStatus.textContent = `移动失败：${String(e)}`;
+    } catch {
+      // 失败信息由 App 的 toast 呈现，这里只恢复可重试状态。
     } finally {
       this.moving = false;
-      this.rootDrop.disabled = false;
       this.scroll.removeAttribute("aria-busy");
       this.updateSelection();
     }
@@ -424,7 +399,6 @@ export class TreePanel {
       e.preventDefault(); e.stopPropagation();
       if (this.moving || !this.cb.onMoveConnection) return;
       this.keyboardConnectionId = node.id.slice(5);
-      this.moveStatus.textContent = `已选取「${node.label}」。到目标分组按 Ctrl+V；连接前按 Ctrl+V、后按 Ctrl+Shift+V；未分组按钮按 Enter；Esc 取消。`;
       this.updateSelection();
       return;
     }
@@ -440,7 +414,7 @@ export class TreePanel {
     }
     if (e.altKey && !modifier && (e.key === "ArrowUp" || e.key === "ArrowDown") && node.type === "connection") {
       e.preventDefault(); e.stopPropagation();
-      if (this.filterText) { this.moveStatus.textContent = "请清除搜索后再用 Alt+方向键排序，或选取连接后粘贴到指定落点。"; return; }
+      if (this.filterText) return;
       const id = node.id.slice(5);
       const group = this.connectionGroup(id);
       const siblings = group ? this.find(`group:${group}`)?.children ?? [] : this.nodes.filter((n) => n.type === "connection");

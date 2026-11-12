@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NavKit · 执行日志台 · 设计稿</title>
+<style>
+:root{
+  --n-0:#fff;--n-25:#fbfcfd;--n-50:#f7f8fa;--n-100:#f1f3f6;--n-150:#e8ebef;--n-200:#e4e7ec;
+  --n-300:#d3d8e0;--n-400:#a8b3c1;--n-500:#7d8794;--n-600:#5c6673;--n-700:#3c434e;--n-800:#23272f;
+  --accent-50:#f2f7fe;--accent-100:#e3edfd;--accent-200:#c4d9fa;--accent-300:#9abef6;--accent-400:#6396f3;--accent-500:#3574f0;--accent-600:#2b62d9;--accent-700:#2450b4;
+  --ok-50:#e9f7ef;--ok-100:#d3eedd;--ok-500:#1f9254;--ok-600:#177346;
+  --warn-50:#fdf1e5;--warn-100:#f9e0c3;--warn-500:#b54708;--warn-600:#8f3a08;
+  --danger-50:#fdeceb;--danger-100:#fad8d5;--danger-500:#d92d20;--danger-600:#b42318;
+  --bg-surface:var(--n-0);--bg-subtle:var(--n-50);--bg-sunken:var(--n-100);--bg-hover:var(--n-100);--bg-pressed:var(--n-150);--bg-selected:var(--accent-100);
+  --border:var(--n-200);--border-subtle:var(--n-150);--border-strong:var(--n-300);
+  --text:var(--n-800);--text-secondary:var(--n-600);--text-tertiary:var(--n-500);--text-disabled:var(--n-400);--text-accent:var(--accent-600);
+  --font-ui:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+  --fs-11:11px;--fs-12:12px;--fs-13:13px;--fs-15:15px;--fs-18:18px;
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;
+  --r-1:3px;--r-2:4px;--r-3:6px;--r-4:8px;--r-full:999px;
+  --shadow-1:0 1px 2px rgba(16,24,40,.05);
+  --shadow-2:0 2px 6px rgba(16,24,40,.07),0 1px 2px rgba(16,24,40,.04);
+  --shadow-3:0 12px 32px rgba(16,24,40,.14),0 2px 8px rgba(16,24,40,.06);
+  --h-titlebar:36px;--h-control:26px;--h-control-sm:22px;
+  --ease-out:cubic-bezier(.2,.8,.2,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--n-100);padding:24px 28px 40px}
+.caption{font-size:var(--fs-11);color:var(--text-tertiary);letter-spacing:.02em;margin:0 0 10px}
+.caption b{color:var(--text-secondary);font-weight:600}
+
+/* ── 对话框 ───────────────────────────────────────────── */
+.dialog{width:1080px;background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:var(--r-4);box-shadow:var(--shadow-3);overflow:hidden}
+.dialog-title{height:var(--h-titlebar);display:flex;align-items:center;justify-content:space-between;padding:0 var(--sp-3) 0 var(--sp-4);border-bottom:1px solid var(--border-subtle)}
+.dialog-title span{font-size:var(--fs-13);font-weight:600}
+.dialog-title .x{width:26px;height:26px;display:grid;place-items:center;color:var(--text-secondary);font-size:15px;border-radius:var(--r-2)}
+.dialog-title .x:hover{background:var(--n-150)}
+
+/* ── ① 任务条 ─────────────────────────────────────────── */
+.task-bar{height:34px;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4);border-bottom:1px solid var(--border-subtle);background:var(--bg-surface)}
+.kind-badge{height:20px;display:inline-flex;align-items:center;padding:0 7px;border-radius:var(--r-1);background:var(--accent-100);color:var(--accent-600);font-size:var(--fs-11);font-weight:600}
+.task-target{font-size:var(--fs-12);font-weight:600;color:var(--text)}
+.task-meta{font-size:var(--fs-11);color:var(--text-tertiary);font-variant-numeric:tabular-nums}
+.task-bar .grow{flex:1}
+.link-btn{height:var(--h-control-sm);padding:0 var(--sp-2);border:1px solid var(--border-strong);border-radius:var(--r-1);background:var(--bg-surface);color:var(--text);font:var(--fs-11) var(--font-ui);cursor:pointer}
+.link-btn:hover{background:var(--bg-hover)}
+
+/* ── ② 进度区 ─────────────────────────────────────────── */
+.progress{padding:10px var(--sp-4) 12px;border-bottom:1px solid var(--border-subtle)}
+.progress-head{display:flex;align-items:baseline;gap:var(--sp-3);margin-bottom:7px}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-12);font-weight:600}
+.state i{width:7px;height:7px;border-radius:var(--r-full);background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 14%,transparent)}
+.state.running{color:var(--accent-600)}
+.state.running i{animation:pulse 1.6s var(--ease-out) infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.state.ok{color:var(--ok-600)}.state.fail{color:var(--danger-600)}.state.warn{color:var(--warn-600)}.state.idle{color:var(--text-secondary)}
+.progress-count{font-size:var(--fs-12);color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.progress-count b{font-size:var(--fs-13);font-weight:600;color:var(--text)}
+.progress-eta{margin-left:auto;font-size:var(--fs-11);color:var(--text-tertiary);font-variant-numeric:tabular-nums}
+.bar{position:relative;height:6px;border-radius:var(--r-full);background:var(--bg-sunken);overflow:hidden}
+.bar>div{position:absolute;inset:0 auto 0 0;border-radius:var(--r-full);transition:width 180ms var(--ease-out)}
+.bar-scan{background:var(--accent-200)}
+.bar-run{background:var(--accent-500)}
+.bar.ok .bar-run{background:var(--ok-500)}
+.bar.fail .bar-run{background:var(--danger-500)}
+.bar.idle .bar-run{background:var(--n-400)}
+.bar.indet>div{width:34%!important;background:repeating-linear-gradient(115deg,var(--accent-400) 0 8px,var(--accent-300) 8px 16px);animation:slide 1.4s linear infinite}
+@keyframes slide{from{transform:translateX(-34%)}to{transform:translateX(300%)}}
+.progress-foot{margin-top:6px;display:flex;gap:var(--sp-3);font-size:var(--fs-11);color:var(--text-tertiary)}
+.progress-foot .dotsep{color:var(--border-strong)}
+
+/* ── ③ 指标条 ─────────────────────────────────────────── */
+.metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin:0;padding:8px var(--sp-4);border-bottom:1px solid var(--border-subtle);background:var(--bg-subtle)}
+.metrics>div{padding-left:var(--sp-3);border-left:1px solid var(--border-subtle)}
+.metrics>div:first-child{padding-left:0;border-left:0}
+.metrics dt{font-size:var(--fs-11);color:var(--text-tertiary)}
+.metrics dd{margin:2px 0 0;font-size:var(--fs-15);font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2}
+.metrics dd.danger{color:var(--danger-600)}
+.metrics dd small{font-size:var(--fs-11);font-weight:400;color:var(--text-tertiary);margin-left:3px}
+
+/* ── ④ 列表工具栏 ─────────────────────────────────────── */
+.list-toolbar{height:38px;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4);border-bottom:1px solid var(--border-subtle)}
+.seg{display:flex;gap:2px;padding:2px;background:var(--bg-sunken);border-radius:var(--r-2)}
+.seg button{height:22px;display:inline-flex;align-items:center;gap:5px;padding:0 9px;border:0;border-radius:var(--r-1);background:transparent;color:var(--text-secondary);font:var(--fs-11) var(--font-ui);cursor:pointer}
+.seg button[aria-selected=true]{background:var(--bg-surface);color:var(--text);box-shadow:var(--shadow-1);font-weight:600}
+.seg .n{font-variant-numeric:tabular-nums;color:var(--text-tertiary)}
+.seg .n.danger{color:var(--danger-600);font-weight:600}
+.seg .n.warn{color:var(--warn-600);font-weight:600}
+.search{flex:1;min-width:120px;display:flex;align-items:center;gap:6px;height:var(--h-control);padding:0 var(--sp-2);border:1px solid var(--border-strong);border-radius:var(--r-2);background:var(--bg-surface);color:var(--text-tertiary)}
+.search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:var(--fs-11) var(--font-ui);color:var(--text)}
+.check{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-11);color:var(--text-secondary);cursor:pointer;user-select:none}
+.check input{width:13px;height:13px;margin:0;accent-color:var(--accent-500)}
+.btn{height:var(--h-control);padding:0 var(--sp-3);border:1px solid var(--border-strong);border-radius:var(--r-2);background:var(--bg-surface);color:var(--text);font:var(--fs-11) var(--font-ui);cursor:pointer}
+.btn:hover{background:var(--bg-hover)}
+.btn.primary{background:var(--accent-500);border-color:var(--accent-500);color:#fff}
+.btn.ghost-danger{color:var(--danger-600);border-color:var(--danger-100)}
+.btn.ghost-danger:hover{background:var(--danger-50)}
+
+/* ── ⑤ 日志列表 ───────────────────────────────────────── */
+.log-list{height:468px;overflow:auto;background:var(--bg-surface);padding:4px 0;position:relative}
+.log-list::after{content:"";position:sticky;bottom:0;display:block;height:18px;margin-top:-18px;
+  background:linear-gradient(to bottom,rgba(255,255,255,0),var(--bg-surface));pointer-events:none}
+.log-omitted{position:sticky;top:0;z-index:1;display:flex;align-items:center;height:24px;
+  padding:0 var(--sp-4) 0 22px;font-size:var(--fs-11);color:var(--text-tertiary);
+  background:var(--bg-subtle);border-bottom:1px solid var(--border-subtle)}
+.log-row{display:grid;grid-template-columns:88px 12px 58px minmax(0,1fr) 74px;align-items:center;gap:10px;
+  height:26px;padding:0 var(--sp-4) 0 22px;cursor:default;position:relative}
+.log-row::before{content:"";position:absolute;left:9px;top:50%;width:0;height:0;transform:translateY(-50%);
+  border-left:4px solid var(--n-400);border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;
+  opacity:0;transition:opacity 120ms var(--ease-out)}
+.log-row:hover::before{opacity:.7}
+.log-row.expanded::before{opacity:1;border-left-color:var(--accent-600);transform:translateY(-50%) rotate(90deg)}
+.log-row:hover{background:var(--bg-hover)}
+.log-row.expanded{background:var(--bg-selected)}
+.log-row.expanded:hover{background:var(--accent-200)}
+.log-row .t{font:var(--fs-11)/1 var(--font-mono);color:var(--text-tertiary);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.log-row .d{width:7px;height:7px;border-radius:var(--r-full);background:var(--n-300)}
+.log-row.ok .d{background:var(--ok-500)}
+.log-row.err .d{background:var(--danger-500)}
+.log-row.err{box-shadow:inset 2px 0 0 var(--danger-500)}
+.log-row.info .d{background:transparent;border:1px solid var(--n-400)}
+.log-row .ms{font:var(--fs-11)/1 var(--font-mono);color:var(--text-secondary);font-variant-numeric:tabular-nums;text-align:right}
+.log-row .ms.warn{color:var(--warn-600);font-weight:600}
+.log-row .ms.fail{color:var(--danger-600);font-weight:600}
+.log-row .sql{font:var(--fs-12)/1.4 var(--font-mono);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log-row.info .sql{color:var(--text-secondary);font-family:var(--font-ui);font-size:var(--fs-11)}
+.log-row .res{font:var(--fs-11)/1 var(--font-ui);color:var(--text-tertiary);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.log-row .res.bad{color:var(--danger-600);font-weight:600}
+
+/* 展开态：与历史日志窗口同一格式 */
+.log-detail{margin:0 var(--sp-4) 6px;padding:9px 12px 10px;background:var(--n-25);border:1px solid var(--border-subtle);border-left:2px solid var(--accent-400);border-radius:var(--r-2)}
+.log-detail.err{border-left-color:var(--danger-500);background:var(--danger-50);border-color:var(--danger-100)}
+.detail-meta{font:var(--fs-11)/1.6 var(--font-mono);color:var(--text-tertiary);word-break:break-all}
+.detail-sql{margin:4px 0 0;font:var(--fs-12)/1.65 var(--font-mono);color:var(--text);white-space:pre-wrap;word-break:normal;overflow-wrap:break-word;max-height:88px;overflow:auto}
+.detail-foot{display:flex;align-items:center;gap:var(--sp-3);margin-top:6px;font:var(--fs-11)/1.6 var(--font-mono)}
+.detail-time{color:var(--text-secondary)}
+.detail-attr{margin-left:auto;color:var(--text-tertiary);font-family:var(--font-ui)}
+.detail-error{margin-top:3px;font:var(--fs-11)/1.6 var(--font-mono);color:var(--danger-600)}
+
+/* ── 页脚 ─────────────────────────────────────────────── */
+.dialog-footer{height:48px;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4);border-top:1px solid var(--border);background:var(--bg-subtle)}
+.dialog-footer .grow{flex:1}
+.foot-note{font-size:var(--fs-11);color:var(--text-tertiary);font-variant-numeric:tabular-nums}
+
+/* ── 状态变体带 ───────────────────────────────────────── */
+.band{margin-top:26px;width:1080px}
+.band h2{font-size:var(--fs-11);font-weight:600;color:var(--text-secondary);letter-spacing:.04em;text-transform:uppercase;margin:0 0 10px}
+.grid6{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r-3);padding:11px 12px}
+.card .k{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;font-size:var(--fs-11)}
+.card .k b{font-weight:600;color:var(--text)}
+.card .k span{color:var(--text-tertiary);font-variant-numeric:tabular-nums}
+.card .foot{margin-top:7px;font-size:var(--fs-11);color:var(--text-tertiary);line-height:1.5}
+.card .foot code{font-family:var(--font-mono);color:var(--text-secondary)}
+.mini-rows{display:flex;flex-direction:column;gap:1px;margin-top:2px}
+.mini{display:grid;grid-template-columns:12px 58px minmax(0,1fr);align-items:center;gap:9px;height:24px;padding:0 6px;border-radius:var(--r-1)}
+.mini:hover{background:var(--bg-hover)}
+.mini .d{width:7px;height:7px;border-radius:var(--r-full);background:var(--n-300)}
+.mini.ok .d{background:var(--ok-500)}.mini.err .d{background:var(--danger-500)}.mini.info .d{background:transparent;border:1px solid var(--n-400)}
+.mini .ms{font:var(--fs-11) var(--font-mono);color:var(--text-secondary);text-align:right;font-variant-numeric:tabular-nums}
+.mini .ms.warn{color:var(--warn-600);font-weight:600}
+.mini .ms.fail{color:var(--danger-600);font-weight:600}
+.mini .sql{font:var(--fs-11) var(--font-mono);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini.info .sql{font-family:var(--font-ui);color:var(--text-secondary)}
+</style>
+</head>
+<body>
+
+<p class="caption"><b>NavKit · 执行日志台</b> — 导入 / 数据同步 / 运行 SQL 文件 共用同一视图</p>
+
+<div class="dialog" role="dialog" aria-label="执行日志">
+  <div class="dialog-title"><span>执行日志</span><span class="x">✕</span></div>
+
+  <!-- ① 任务条 -->
+  <div class="task-bar">
+    <span class="kind-badge">运行 SQL 文件</span>
+    <span class="task-target">t_big.sql</span>
+    <span class="task-meta">navkit_accept · localhost · 会话 000032 · MySQL</span>
+    <span class="grow"></span>
+    <button class="link-btn">切换任务 ▾</button>
+  </div>
+
+  <!-- ② 进度区 -->
+  <section class="progress" aria-label="任务进度">
+    <div class="progress-head">
+      <span class="state running"><i></i>执行中</span>
+      <span class="progress-count"><b>1,284</b> / 2,000 条语句</span>
+      <span class="progress-eta">已用 00:42 · 剩余约 00:23</span>
+    </div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="2000" aria-valuenow="1284"
+         aria-valuetext="已完成 1284 / 2000 条语句">
+      <div class="bar-scan" style="width:100%"></div>
+      <div class="bar-run" style="width:64.2%"></div>
+    </div>
+    <div class="progress-foot">
+      <span>扫描已完成 2,000 条</span><span class="dotsep">·</span>
+      <span>事务进行中，提交前不释放连接</span><span class="dotsep">·</span>
+      <span>2 条错误已跳过</span>
+    </div>
+  </section>
+
+  <!-- ③ 指标条 -->
+  <dl class="metrics">
+    <div><dt>扫描</dt><dd>2,000</dd></div>
+    <div><dt>执行</dt><dd>1,284<small>次</small></dd></div>
+    <div><dt>错误</dt><dd class="danger">2</dd></div>
+    <div><dt>影响行</dt><dd>48,210</dd></div>
+    <div><dt>已用时</dt><dd>42.8<small>s</small></dd></div>
+  </dl>
+
+  <!-- ④ 列表工具栏 -->
+  <div class="list-toolbar">
+    <div class="seg" role="tablist">
+      <button role="tab" aria-selected="true">全部 <span class="n">1,286</span></button>
+      <button role="tab">错误 <span class="n danger">2</span></button>
+      <button role="tab">慢查询 <span class="n warn">7</span></button>
+    </div>
+    <label class="search">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="4.4"/><path d="M10.4 10.4 14 14"/></svg>
+      <input placeholder="过滤 SQL、序号或耗时">
+    </label>
+    <label class="check"><input type="checkbox" checked><span>跟随最新</span></label>
+    <button class="btn">暂停</button>
+    <button class="btn">导出</button>
+  </div>
+
+  <!-- ⑤ 日志列表 -->
+  <div class="log-list" role="log" aria-label="逐条执行记录">
+    <div class="log-omitted">已省略 214 条早期记录 · 单任务保留最近 300 条</div>
+
+    <div class="log-row info"><span class="t">17:41:13.502</span><span class="d"></span><span class="ms">—</span><span class="sql">扫描文件：共 2,000 条完整语句，UTF-8，2.4 MB</span><span class="res"></span></div>
+
+    <div class="log-row ok"><span class="t">17:34:26.718</span><span class="d"></span><span class="ms">1.2ms</span><span class="sql">SHOW FULL COLUMNS FROM `t_big`</span><span class="res">12 行</span></div>
+
+    <div class="log-row expanded"><span class="t">17:41:13.566</span><span class="d"></span><span class="ms">7.4ms</span><span class="sql">SELECT ACTION_ORDER, EVENT_OBJECT_TABLE, TRIGGER_NAME, EVENT_MANIPULATION, …</span><span class="res">1 行</span></div>
+    <div class="log-detail">
+      <div class="detail-meta">[2026-11-11 17:41:13.566][localhost][navkit_accept][MYSQL]</div>
+      <pre class="detail-sql">SELECT ACTION_ORDER, EVENT_OBJECT_TABLE, TRIGGER_NAME, EVENT_MANIPULATION, EVENT_OBJECT_TABLE, DEFINER, ACTION_STATEMENT, ACTION_TIMING FROM information_schema.triggers WHERE event_object_schema = BINARY 'navkit_accept' AND event_object_table = BINARY 't_comment' ORDER BY event_object_table</pre>
+      <div class="detail-foot"><span class="detail-time">Time: 0.007s</span><span class="detail-attr">语句 #1,284 · 返回 1 行 · 会话 000032 · 驱动 MySQL</span></div>
+    </div>
+
+    <div class="log-row err"><span class="t">17:41:13.571</span><span class="d"></span><span class="ms fail">0.3ms</span><span class="sql">ALTER TABLE `t_comment` ADD INDEX `idx_created` (`created_at`)</span><span class="res bad">ERROR 1061</span></div>
+    <div class="log-detail err">
+      <div class="detail-meta">[2026-11-11 17:41:13.571][localhost][navkit_accept][MYSQL]</div>
+      <pre class="detail-sql">ALTER TABLE `t_comment` ADD INDEX `idx_created` (`created_at`)</pre>
+      <div class="detail-foot"><span class="detail-time">Time: 0.000s</span><span class="detail-attr">语句 #1,285 · 已按「遇错继续」跳过 · 事务未回滚</span></div>
+      <div class="detail-error">Error: 1061 (42000): Duplicate key name 'idx_created'</div>
+    </div>
+
+    <div class="log-row ok"><span class="t">17:41:13.580</span><span class="d"></span><span class="ms warn">248ms</span><span class="sql">UPDATE `t_comment` SET `status` = ? WHERE `id` &lt; ?</span><span class="res">4,000 行</span></div>
+
+    <div class="log-row ok"><span class="t">17:41:13.828</span><span class="d"></span><span class="ms">12.6ms</span><span class="sql">INSERT INTO `t_comment_archive` (`id`, `comment_id`, `created_at`) VALUES (?, ?, ?)</span><span class="res">4,000 行</span></div>
+
+    <div class="log-row ok"><span class="t">17:41:13.841</span><span class="d"></span><span class="ms">2.1ms</span><span class="sql">CREATE TABLE IF NOT EXISTS `t_comment_archive` (…)</span><span class="res">0 行</span></div>
+
+    <div class="log-row ok"><span class="t">17:34:26.718</span><span class="d"></span><span class="ms">0.9ms</span><span class="sql">SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ?</span><span class="res">1 行</span></div>
+
+    <div class="log-row ok"><span class="t">17:41:13.852</span><span class="d"></span><span class="ms">1.4ms</span><span class="sql">SHOW INDEX FROM `t_comment`</span><span class="res">6 行</span></div>
+
+    <div class="log-row ok"><span class="t">17:41:13.860</span><span class="d"></span><span class="ms">0.6ms</span><span class="sql">SET FOREIGN_KEY_CHECKS = 0</span><span class="res">0 行</span></div>
+
+    <div class="log-row ok"><span class="t">17:41:13.862</span><span class="d"></span><span class="ms warn">132ms</span><span class="sql">DELETE FROM `t_comment` WHERE `created_at` &lt; ?</span><span class="res">1,208 行</span></div>
+  </div>
+
+  <div class="dialog-footer">
+    <button class="btn ghost-danger">停止任务</button>
+    <span class="foot-note">停止只在当前语句结束后生效</span>
+    <span class="grow"></span>
+    <button class="btn">复制筛选结果</button>
+    <button class="btn">在编辑器中打开</button>
+    <button class="btn">关闭</button>
+  </div>
+</div>
+
+<!-- 状态变体带 -->
+<div class="band">
+  <h2>进度状态与条目变体</h2>
+  <div class="grid6">
+    <div class="card">
+      <div class="k"><b>扫描中 · 总数未知</b><span>indeterminate</span></div>
+      <div class="bar indet" role="progressbar" aria-valuetext="正在扫描 SQL 文件"><div></div></div>
+      <div class="foot">无 <code>aria-valuenow</code>；条纹动画；主文案「扫描中」，计数位显示 <code>已扫描 N 条</code>，不出百分比。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>执行中 · 已知总数</b><span>64%</span></div>
+      <div class="bar"><div class="bar-scan" style="width:100%"></div><div class="bar-run" style="width:64%"></div></div>
+      <div class="foot">浅段 = 已扫描，深段 = 已执行。SQL 文件边扫边执行时两段不同步，正是要看见的差异。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>停止请求中</b><span>warn</span></div>
+      <div class="bar"><div class="bar-scan" style="width:100%"></div><div class="bar-run" style="width:64%;background:var(--warn-500)"></div></div>
+      <div class="foot">填充保留原进度转警告色；文案「正在停止，等待当前语句返回」；停止按钮禁用。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>已完成</b><span>ok</span></div>
+      <div class="bar ok"><div class="bar-run" style="width:100%"></div></div>
+      <div class="foot">100% 后转 <code>--ok-500</code>；ETA 位换「共 2,000 条 · 用时 01:06 · 0 错误」。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>执行失败</b><span>fail</span></div>
+      <div class="bar fail"><div class="bar-scan" style="width:100%"></div><div class="bar-run" style="width:82%"></div></div>
+      <div class="foot">停在失败处转红；脚注给失败语句序号与错误码；<code>aria-valuetext</code> 带原因。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>结果未知</b><span>unknown</span></div>
+      <div class="bar idle"><div class="bar-run" style="width:82%"></div></div>
+      <div class="foot">灰填充不转色；文案「结果未知，正在回看同一任务」；禁止重试，只允许停止与核对。</div>
+    </div>
+
+    <div class="card">
+      <div class="k"><b>条目 · 成功</b><span>26px</span></div>
+      <div class="mini-rows">
+        <div class="mini ok"><span class="d"></span><span class="ms">0.9ms</span><span class="sql">SHOW INDEX FROM `t_comment`</span></div>
+        <div class="mini ok"><span class="d"></span><span class="ms">4.1ms</span><span class="sql">SELECT `id` FROM `t_big` LIMIT ?</span></div>
+      </div>
+      <div class="foot">绿点 + 耗时右对齐 + 单行 SQL 截断；行尾给结果（行数 / 0 行）。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>条目 · 失败</b><span>左红条</span></div>
+      <div class="mini-rows">
+        <div class="mini err"><span class="d"></span><span class="ms fail">0.3ms</span><span class="sql">ALTER TABLE `t_comment` ADD INDEX …</span></div>
+      </div>
+      <div class="foot">inset 2px 左红条 + 红点；耗时转红；行尾 <code>ERROR 1061</code>。</div>
+    </div>
+    <div class="card">
+      <div class="k"><b>条目 · 阶段信息</b><span>info</span></div>
+      <div class="mini-rows">
+        <div class="mini info"><span class="d"></span><span class="ms">—</span><span class="sql">任务已登记，等待后台执行</span></div>
+        <div class="mini info"><span class="d"></span><span class="ms">—</span><span class="sql">扫描文件：共 2,000 条完整语句，UTF-8</span></div>
+      </div>
+      <div class="foot">空心圈、无耗时、UI 字体（非 mono）；不含 SQL 时降一级色。</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

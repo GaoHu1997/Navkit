@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NavKit · 排序/筛选面板重设计</title>
+<style>
+  *{box-sizing:border-box}
+  :root{
+    --n-0:#fff;--n-25:#fbfcfd;--n-50:#f7f8fa;--n-100:#f1f3f6;--n-150:#e8ebef;--n-200:#e4e7ec;
+    --n-300:#d3d8e0;--n-400:#a8b3c1;--n-500:#7d8794;--n-600:#5c6673;--n-700:#3c434e;--n-800:#23272f;
+    --accent-50:#f2f7fe;--accent-100:#e3edfd;--accent-200:#c4d9fa;--accent-300:#9abef6;--accent-400:#6396f3;--accent-500:#3574f0;--accent-600:#2b62d9;--accent-700:#2450b4;
+    --ok-50:#e9f7ef;--ok-500:#1f9254;--danger-50:#fdeceb;--danger-500:#d92d20;
+    --font-ui:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  }
+  html,body{margin:0;padding:0}
+  body{
+    width:1280px;background:#eceef2;font-family:var(--font-ui);color:var(--n-800);
+    -webkit-font-smoothing:antialiased;padding:28px 32px 40px;
+  }
+  .page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .logo{width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#a9f6fe,#849dcb);box-shadow:inset 0 0 0 1px rgba(103,124,166,.5)}
+  .kicker{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--n-500);font-weight:600}
+  .page-head h1{font-size:20px;font-weight:600;margin:2px 0 0;color:var(--n-800)}
+  .page-head .goal{font-size:12px;color:var(--n-600);text-align:right;line-height:1.6;max-width:420px}
+
+  .block{margin-bottom:26px}
+  .block-head{display:flex;align-items:flex-start;gap:12px;padding-left:12px;border-left:3px solid var(--n-300);margin-bottom:12px}
+  .block-head.before{border-color:#f0b9b4}
+  .block-head.after{border-color:#8fd3ae}
+  .block-head.more{border-color:var(--accent-200)}
+  .tag{flex:0 0 auto;font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 8px;border-radius:999px;margin-top:1px}
+  .tag-before{background:var(--danger-50);color:#b42318}
+  .tag-after{background:var(--ok-50);color:#177346}
+  .tag-more{background:var(--accent-50);color:var(--accent-700)}
+  .block-head h2{font-size:14px;font-weight:600;margin:0;color:var(--n-800)}
+  .block-head p{font-size:12px;color:var(--n-600);margin:3px 0 0;line-height:1.55}
+
+  /* ---------- mock chrome ---------- */
+  .mock{background:var(--n-0);border:1px solid var(--n-200);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .tabs{height:32px;display:flex;align-items:flex-end;gap:2px;padding:0 8px;background:var(--n-50);border-bottom:1px solid var(--n-200)}
+  .tab{height:28px;display:flex;align-items:center;gap:6px;padding:0 12px;font-size:12px;color:var(--n-600);border-radius:6px 6px 0 0;white-space:nowrap}
+  .tab .dot{width:13px;height:13px;border-radius:3px;background:var(--accent-200);flex:0 0 auto}
+  .tab .dot.g{background:#bfe6cd}.tab .dot.o{background:#f7d9b6}
+  .tab.active{background:var(--n-0);color:var(--n-800);box-shadow:inset 0 2px 0 var(--accent-500)}
+  .toolbar{height:34px;display:flex;align-items:center;gap:2px;padding:0 8px;background:var(--n-0);border-bottom:1px solid var(--n-200)}
+  .tbtn{height:26px;display:inline-flex;align-items:center;gap:5px;padding:0 9px;font-size:12px;color:var(--n-700);border-radius:4px}
+  .tbtn:hover{background:var(--n-100)}
+  .tbtn .cv{width:8px;height:8px;border-right:1.4px solid var(--n-500);border-bottom:1.4px solid var(--n-500);transform:rotate(45deg);margin-left:1px}
+  .toolbar .spacer{flex:1}
+  .ico{width:14px;height:14px;flex:0 0 auto;color:currentColor}
+  .grid{padding:0}
+  .grid table{width:100%;border-collapse:collapse;table-layout:fixed}
+  .grid th{height:28px;font-size:11px;font-weight:600;color:var(--n-500);text-align:left;padding:0 10px;background:var(--n-0);border-right:1px solid var(--n-150);border-bottom:1px solid var(--n-200);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .grid th.sel{background:var(--accent-50);color:var(--accent-700);box-shadow:inset 0 -2px 0 var(--accent-500)}
+  .grid td{height:26px;font-size:13px;color:var(--n-700);padding:0 10px;border-right:1px solid var(--n-150);border-bottom:1px solid var(--n-150);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .grid tr:nth-child(even) td{background:var(--n-25)}
+
+  /* ---------- BEFORE: 现状 ---------- */
+  .fb-empty{padding:4px 8px;font-size:11px;color:var(--n-500);line-height:1.5;background:var(--n-0);border-bottom:1px solid var(--n-150)}
+  .fb-tools{display:flex;align-items:center;gap:4px;height:24px;padding:0 8px;background:var(--n-50);border-bottom:1px solid var(--n-150)}
+  .fb-actions{display:flex;align-items:center;gap:2px;height:26px;padding:0 8px;background:var(--n-0);border-bottom:1px solid var(--n-200)}
+  .fb-act{height:20px;display:inline-flex;align-items:center;padding:0 8px;font-size:11px;color:var(--n-600);background:var(--n-0);border:1px solid var(--n-200);border-radius:3px}
+  .fb-hint{font-size:11px;color:var(--n-400);margin-left:2px}
+
+  /* ---------- AFTER: 优化 ---------- */
+  .panel{margin:8px 10px 8px;background:var(--n-0);border:1px solid var(--n-200);border-radius:6px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .panel-head{height:38px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 10px 0 12px;background:var(--n-50);border-bottom:1px solid var(--n-150)}
+  .ph-left{display:flex;align-items:center;gap:9px;min-width:0}
+  .ph-ico{width:24px;height:24px;border-radius:5px;background:var(--accent-100);color:var(--accent-700);display:grid;place-items:center;flex:0 0 auto}
+  .ph-ico svg{width:14px;height:14px}
+  .ph-title{font-size:12px;font-weight:600;color:var(--n-800)}
+  .ph-badge{height:17px;min-width:17px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--n-600);background:var(--n-150);border-radius:999px}
+  .ph-hint{font-size:11px;color:var(--n-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ph-hint b{color:var(--n-600);font-weight:600}
+  .ph-right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  .btn{height:26px;display:inline-flex;align-items:center;gap:5px;padding:0 12px;font-size:12px;border-radius:4px;border:1px solid transparent;white-space:nowrap}
+  .btn-primary{background:var(--accent-500);color:#fff;font-weight:500;box-shadow:0 1px 2px rgba(53,116,240,.28)}
+  .btn-ghost{background:var(--n-0);border-color:var(--n-200);color:var(--n-600)}
+  .btn-ghost:hover{background:var(--n-100);color:var(--n-800)}
+  .btn[disabled]{opacity:.45}
+
+  .panel-body{padding:8px 12px 10px}
+  .rule-row{display:flex;align-items:center;gap:10px;height:32px;padding:0 8px;border-radius:6px}
+  .rule-row + .rule-row{margin-top:4px}
+  .rule-row:hover{background:var(--n-50)}
+  .prio{width:19px;height:19px;border-radius:50%;background:var(--accent-100);color:var(--accent-700);font-size:11px;font-weight:700;display:grid;place-items:center;flex:0 0 auto;font-variant-numeric:tabular-nums}
+  .fld{position:relative;height:26px;min-width:190px;display:flex;align-items:center;padding:0 26px 0 9px;font-size:12px;color:var(--n-800);background:var(--n-0);border:1px solid var(--n-200);border-radius:4px}
+  .fld .cv2{position:absolute;right:9px;top:9px;width:7px;height:7px;border-right:1.5px solid var(--n-500);border-bottom:1.5px solid var(--n-500);transform:rotate(45deg)}
+  .dirseg{display:inline-flex;height:26px;border:1px solid var(--n-200);border-radius:4px;overflow:hidden;background:var(--n-0)}
+  .dirseg button{height:24px;display:inline-flex;align-items:center;gap:5px;padding:0 10px;font-size:12px;color:var(--n-600);background:transparent;border:0;border-right:1px solid var(--n-150)}
+  .dirseg button:last-child{border-right:0}
+  .dirseg button.on{background:var(--accent-50);color:var(--accent-700);font-weight:600}
+  .dirseg button .ar{font-size:12px;line-height:1}
+  .grow{flex:1}
+  .handle{width:24px;height:24px;display:grid;place-items:center;color:var(--n-400);border-radius:4px;cursor:grab;flex:0 0 auto}
+  .handle:hover{background:var(--n-150);color:var(--n-600)}
+  .handle:active{cursor:grabbing}
+  .handle svg{width:14px;height:14px}
+  .del{width:24px;height:24px;display:grid;place-items:center;color:var(--n-400);border-radius:4px;font-size:13px}
+  .del:hover{background:var(--danger-50);color:var(--danger-500)}
+  .add-row{height:28px;display:inline-flex;align-items:center;gap:6px;margin-top:6px;padding:0 11px;font-size:12px;color:var(--accent-600);background:transparent;border:1px dashed var(--n-300);border-radius:6px}
+  .add-row:hover{background:var(--accent-50);border-color:var(--accent-300)}
+
+  /* 空态 */
+  .panel-empty{display:flex;align-items:center;gap:14px;padding:12px 14px}
+  .empty-ico{width:34px;height:34px;border-radius:8px;background:var(--n-100);color:var(--n-500);display:grid;place-items:center;flex:0 0 auto}
+  .empty-ico svg{width:18px;height:18px}
+  .empty-text{flex:1;min-width:0}
+  .et-title{font-size:12px;font-weight:600;color:var(--n-700)}
+  .et-sub{font-size:11px;color:var(--n-500);margin-top:2px;line-height:1.5}
+
+  /* 筛选面板 */
+  .fgroup{display:flex;gap:10px;padding:8px 0}
+  .fgroup + .fgroup{border-top:1px dashed var(--n-150)}
+  .fjoin{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:2px;width:44px}
+  .jlabel{font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--n-600);background:var(--n-100);border-radius:999px;padding:3px 8px;white-space:nowrap;line-height:1;flex:0 0 auto}
+  .jlabel.where{color:var(--n-600);background:var(--n-100)}
+  .jlabel.and{color:#177346;background:#e9f7ef}
+  .jlabel.or{color:var(--accent-700);background:var(--accent-50)}
+  .jrail{flex:1;width:2px;min-height:14px;background:var(--n-150);border-radius:2px}
+  .fconds{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+  .fcond{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border-radius:6px}
+  .fcond:hover{background:var(--n-50)}
+  .fop{width:20px;height:20px;display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--n-500);background:var(--n-100);border-radius:4px;flex:0 0 auto}
+  .fval{height:26px;min-width:120px;flex:1;display:flex;align-items:center;padding:0 9px;font-size:12px;color:var(--n-800);border:1px solid var(--n-200);border-radius:4px;background:var(--n-0)}
+  .fval.empty{color:var(--n-400)}
+  .add-cond{height:26px;display:inline-flex;align-items:center;gap:5px;padding:0 9px;font-size:11px;color:var(--n-500);background:transparent;border:1px dashed var(--n-200);border-radius:5px;align-self:flex-start}
+
+  /* notes + spec */
+  .notes{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .note{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;color:var(--n-600);background:var(--n-0);border:1px solid var(--n-200);border-radius:999px;padding:4px 11px 4px 6px;box-shadow:0 1px 1px rgba(16,24,40,.03)}
+  .note .num{width:17px;height:17px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;flex:0 0 auto}
+  .note.b .num{background:#d9534a}
+  .note.g .num{background:#2f9e63}
+  .note.a .num{background:var(--accent-500)}
+
+  .two{display:flex;gap:16px;align-items:flex-start}
+  .two > .col{flex:1;min-width:0}
+  .col-cap{font-size:11px;font-weight:600;color:var(--n-600);margin:0 0 8px;display:flex;align-items:center;gap:6px}
+  .col-cap .pip{width:6px;height:6px;border-radius:50%;background:var(--accent-400)}
+
+  .spec{background:var(--n-0);border:1px solid var(--n-200);border-radius:8px;padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:12px 26px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .spec .item{display:flex;gap:10px;align-items:flex-start}
+  .spec .k{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:var(--accent-400);margin-top:7px}
+  .spec .t{font-size:12px;color:var(--n-700);line-height:1.6}
+  .spec .t b{color:var(--n-800);font-weight:600}
+  .spec .t code{font-family:"Cascadia Mono",Consolas,monospace;font-size:11px;background:var(--n-100);color:var(--n-700);padding:1px 5px;border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <div class="brand">
+    <div class="logo"></div>
+    <div>
+      <div class="kicker">NavKit · 表数据页</div>
+      <h1>排序 / 筛选面板块 · 重设计</h1>
+    </div>
+  </div>
+  <div class="goal">现状三层稀薄堆叠、提示与按钮抢位、主次操作不分明。<br>目标：分区承载、拉开间距、明确优先级与主操作。</div>
+</div>
+
+<!-- ============ BEFORE ============ -->
+<section class="block" id="before">
+  <div class="block-head before">
+    <span class="tag tag-before">现状 · BEFORE</span>
+    <div>
+      <h2>排序面板：三层各有内容，却每层都只有 22–26px</h2>
+      <p>空态文案、添加按钮＋提示、应用/清除，各占一整行；提示与按钮同排抢视线，主操作被压成两个小按钮贴在左下角。</p>
+    </div>
+  </div>
+  <div class="mock">
+    <div class="tabs">
+      <div class="tab"><span class="dot"></span>对象@navkit_fulltest</div>
+      <div class="tab"><span class="dot o"></span>用户</div>
+      <div class="tab"><span class="dot g"></span>自动运行</div>
+      <div class="tab"><span class="dot"></span>查询 - MySQL@navkit_ac…</div>
+      <div class="tab active"><span class="dot"></span>t_big@navkit_accept</div>
+      <div class="tab"><span class="dot"></span>items@navkit_fulltest</div>
+    </div>
+    <div class="toolbar">
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h8"/></svg>文本<span class="cv"></span></span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 2.5h11l-4.2 5v5l-2.6-1.4v-3.6z"/></svg>筛选</span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3v9M5 3L2.5 5.5M5 3l2.5 2.5M11 13V4M11 13l-2.5-2.5M11 13l2.5-2.5"/></svg>排序</span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M8 10l-3-3M8 10l3-3M3 13h10"/></svg>导入</span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 14V6M8 6L5 9M8 6l3 3M3 3h10"/></svg>导出</span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2l1.3 3.4L13 6.7l-3.7 1.3L8 11.4 6.7 8 3 6.7l3.7-1.3z"/></svg>数据生成</span>
+      <span class="spacer"></span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="11" height="11" rx="1.4"/><path d="M2.5 6h11M6 2.5v11"/></svg></span>
+    </div>
+    <div class="fb-empty">未设置排序；可添加多个字段</div>
+    <div class="fb-tools"><button class="fb-act">＋ 添加排序字段</button><span class="fb-hint">从上到下依次排序（优先级 1 最高）</span></div>
+    <div class="fb-actions"><button class="fb-act">应用排序</button><button class="fb-act">清除排序</button></div>
+    <div class="grid">
+      <table>
+        <colgroup><col style="width:66px"><col style="width:82px"><col style="width:170px"><col style="width:110px"><col style="width:210px"><col></colgroup>
+        <thead><tr><th>id</th><th>grp</th><th class="sel">name</th><th>price</th><th>created</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>A</td><td>alpha</td><td>12.00</td><td>2026-11-12 10:02</td><td></td></tr>
+          <tr><td>2</td><td>B</td><td>bravo</td><td>8.50</td><td>2026-11-12 10:05</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="notes">
+    <span class="note b"><span class="num">1</span>3 层堆叠 ≈ 74px，信息密度低</span>
+    <span class="note b"><span class="num">2</span>「＋添加」与提示文案同排抢视线</span>
+    <span class="note b"><span class="num">3</span>主操作「应用」与「清除」挤在左下</span>
+    <span class="note b"><span class="num">4</span>面板无边界，与工具栏 / 表头粘连</span>
+  </div>
+</section>
+
+<!-- ============ AFTER ============ -->
+<section class="block" id="after">
+  <div class="block-head after">
+    <span class="tag tag-after">优化 · AFTER</span>
+    <div>
+      <h2>单头分区：头部承载标题 / 计数 / 说明 / 主次操作，规则列表独立呼吸</h2>
+      <p>面板收进一张浅色卡片（8px 外边距 + 6px 圆角），与工具栏、表头明确分层；规则行 32px、间距 4px、悬停高亮，优先级与方向一眼可读。</p>
+    </div>
+  </div>
+  <div class="mock">
+    <div class="tabs">
+      <div class="tab"><span class="dot"></span>对象@navkit_fulltest</div>
+      <div class="tab"><span class="dot o"></span>用户</div>
+      <div class="tab"><span class="dot g"></span>自动运行</div>
+      <div class="tab"><span class="dot"></span>查询 - MySQL@navkit_ac…</div>
+      <div class="tab active"><span class="dot"></span>t_big@navkit_accept</div>
+      <div class="tab"><span class="dot"></span>items@navkit_fulltest</div>
+    </div>
+    <div class="toolbar">
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h8"/></svg>文本<span class="cv"></span></span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 2.5h11l-4.2 5v5l-2.6-1.4v-3.6z"/></svg>筛选</span>
+      <span class="tbtn" style="background:var(--accent-50);color:var(--accent-700)"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3v9M5 3L2.5 5.5M5 3l2.5 2.5M11 13V4M11 13l-2.5-2.5M11 13l2.5-2.5"/></svg>排序</span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M8 10l-3-3M8 10l3-3M3 13h10"/></svg>导入</span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 14V6M8 6L5 9M8 6l3 3M3 3h10"/></svg>导出</span>
+      <span class="spacer"></span>
+      <span class="tbtn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="11" height="11" rx="1.4"/><path d="M2.5 6h11M6 2.5v11"/></svg></span>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="ph-left">
+          <span class="ph-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3v9M5 3L2.5 5.5M5 3l2.5 2.5M11 13V4M11 13l-2.5-2.5M11 13l2.5-2.5"/></svg></span>
+          <span class="ph-title">排序</span>
+          <span class="ph-badge">2</span>
+          <span class="ph-hint">按从上到下的优先级依次生效</span>
+        </div>
+        <div class="ph-right">
+          <button class="btn btn-ghost">清除</button>
+          <button class="btn btn-primary">应用排序</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="rule-row">
+          <span class="handle" title="按住拖动调整排序优先级"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1.3"/><circle cx="10" cy="4" r="1.3"/><circle cx="6" cy="8" r="1.3"/><circle cx="10" cy="8" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="10" cy="12" r="1.3"/></svg></span>
+          <span class="prio">1</span>
+          <span class="fld">name<span class="cv2"></span></span>
+          <span class="dirseg"><button class="on"><span class="ar">↑</span>升序</button><button><span class="ar">↓</span>降序</button></span>
+          <span class="grow"></span>
+          <span class="del" title="删除">✕</span>
+        </div>
+        <div class="rule-row">
+          <span class="handle" title="按住拖动调整排序优先级"><svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4" r="1.3"/><circle cx="10" cy="4" r="1.3"/><circle cx="6" cy="8" r="1.3"/><circle cx="10" cy="8" r="1.3"/><circle cx="6" cy="12" r="1.3"/><circle cx="10" cy="12" r="1.3"/></svg></span>
+          <span class="prio">2</span>
+          <span class="fld">price<span class="cv2"></span></span>
+          <span class="dirseg"><button><span class="ar">↑</span>升序</button><button class="on"><span class="ar">↓</span>降序</button></span>
+          <span class="grow"></span>
+          <span class="del" title="删除">✕</span>
+        </div>
+        <button class="add-row">＋ 添加排序字段</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <table>
+        <colgroup><col style="width:66px"><col style="width:82px"><col style="width:170px"><col style="width:110px"><col style="width:210px"><col></colgroup>
+        <thead><tr><th>id</th><th>grp</th><th class="sel">name</th><th>price</th><th>created</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>A</td><td>alpha</td><td>12.00</td><td>2026-11-12 10:02</td><td></td></tr>
+          <tr><td>2</td><td>B</td><td>bravo</td><td>8.50</td><td>2026-11-12 10:05</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="notes">
+    <span class="note g"><span class="num">1</span>头部集中：标题 · 计数 · 说明 · 清除/应用</span>
+    <span class="note g"><span class="num">2</span>规则行 32px / 间距 4px / 悬停反馈</span>
+    <span class="note g"><span class="num">3</span>拖拽手柄置行首（按住拖动排序）＋ 升/降序分段开关</span>
+    <span class="note g"><span class="num">4</span>「添加字段」虚线按钮独立成行，随规则增多自然下移</span>
+  </div>
+</section>
+
+<!-- ============ 空态 + 筛选 ============ -->
+<section class="block" id="states">
+  <div class="block-head more">
+    <span class="tag tag-more">补充 · STATES</span>
+    <div>
+      <h2>空态与筛选面板套用同一套骨架</h2>
+      <p>空态用一行「图标 + 标题说明 + 主按钮」替代原来的一行干瘪文案；筛选面板用「组标签 + 左侧轨 + 条件行」表达括号分组语义。</p>
+    </div>
+  </div>
+  <div class="two">
+    <div class="col">
+      <div class="col-cap"><span class="pip"></span>空态（Empty）</div>
+      <div class="mock">
+        <div class="panel" style="margin:10px">
+          <div class="panel-head">
+            <div class="ph-left">
+              <span class="ph-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3v9M5 3L2.5 5.5M5 3l2.5 2.5M11 13V4M11 13l-2.5-2.5M11 13l2.5-2.5"/></svg></span>
+              <span class="ph-title">排序</span>
+              <span class="ph-badge">0</span>
+              <span class="ph-hint">未设置</span>
+            </div>
+            <div class="ph-right">
+              <button class="btn btn-ghost" disabled>清除</button>
+              <button class="btn btn-primary" disabled>应用排序</button>
+            </div>
+          </div>
+          <div class="panel-empty">
+            <span class="empty-ico"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4v11M6 4L3.5 6.5M6 4l2.5 2.5M14 16V5M14 16l-2.5-2.5M14 16l2.5-2.5"/></svg></span>
+            <div class="empty-text">
+              <div class="et-title">尚未添加排序字段</div>
+              <div class="et-sub">添加字段后，结果将按从上到下的优先级依次排序。</div>
+            </div>
+            <button class="btn btn-primary">＋ 添加排序字段</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="col-cap"><span class="pip"></span>筛选面板（Filter）</div>
+      <div class="mock" id="filterpanel">
+        <div class="panel" style="margin:10px">
+          <div class="panel-head">
+            <div class="ph-left">
+              <span class="ph-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 2.5h11l-4.2 5v5l-2.6-1.4v-3.6z"/></svg></span>
+              <span class="ph-title">筛选</span>
+              <span class="ph-badge">2 组 · 3 条件</span>
+              <span class="ph-hint">组内 AND · 组间 OR（可切换）</span>
+            </div>
+            <div class="ph-right">
+              <button class="btn btn-ghost">清除</button>
+              <button class="btn btn-primary">应用筛选</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="fgroup">
+              <div class="fjoin"><span class="jlabel where">WHERE</span><span class="jrail"></span></div>
+              <div class="fconds">
+                <div class="fcond"><span class="fop">A</span><span class="fld" style="min-width:150px">status<span class="cv2"></span></span><span class="fld" style="min-width:90px">=<span class="cv2"></span></span><span class="fval">active</span><span class="del">✕</span></div>
+                <div class="fcond"><span class="fop">O</span><span class="fld" style="min-width:150px">name<span class="cv2"></span></span><span class="fld" style="min-width:90px">LIKE<span class="cv2"></span></span><span class="fval">%test%</span><span class="del">✕</span></div>
+                <button class="add-cond">＋ 在本组加条件</button>
+              </div>
+            </div>
+            <div class="fgroup">
+              <div class="fjoin"><span class="jlabel or">OR</span><span class="jrail"></span></div>
+              <div class="fconds">
+                <div class="fcond"><span class="fop">A</span><span class="fld" style="min-width:150px">price<span class="cv2"></span></span><span class="fld" style="min-width:90px">≥<span class="cv2"></span></span><span class="fval">100</span><span class="del">✕</span></div>
+                <button class="add-cond">＋ 在本组加条件</button>
+              </div>
+            </div>
+            <button class="add-row">＋ 添加条件组</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+    <span class="note a"><span class="num">1</span>空态横向排布，高度 ≈ 58px，替代三行</span>
+    <span class="note a"><span class="num">2</span>筛选组用「AND 标签 + 左轨道」表达括号语义</span>
+    <span class="note a"><span class="num">3</span>条件＝列 / 运算符 / 值三段式，等宽对齐更好扫读</span>
+  </div>
+</section>
+
+<!-- ============ 规格说明 ============ -->
+<section class="block" id="spec">
+  <div class="block-head more">
+    <span class="tag tag-more">规格 · SPEC</span>
+    <div><h2>落地要点（全部引用现有令牌，零新增色值）</h2></div>
+  </div>
+  <div class="spec">
+    <div class="item"><span class="k"></span><div class="t"><b>面板容器</b>：外边距 <code>8px 10px</code>、圆角 <code>--r-3 6px</code>、1px <code>--border</code>、<code>--shadow-1</code> 轻投影，与工具栏/表头明确分层。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>面板头</b>：高 38px，<code>--bg-subtle</code> 底 + 底边发丝线；左标题 12/600 + 计数徽标，右「清除」(ghost) + 「应用」(accent 主按钮)。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>规则行</b>：高 32px、行距 4px、圆角 6px；悬停 <code>--bg-hover</code>。行首 24px 拖拽手柄（grab），优先级圆标 19px，删除固定行尾。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>方向开关</b>：升/降序分段控件 26px，选中 <code>--accent-50</code> 底 + <code>--accent-700</code>，替代单键循环切换。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>操作位置</b>：主操作固定面板头右侧，永不在页面底部单开一行；重复操作（添加）留在列表尾部的虚线按钮。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>空态</b>：图标 + 标题/说明 + 主按钮横排，≤ 60px 高；禁用态按钮 <code>opacity .45</code>，不发灰到看不清。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>可访问性</b>：焦点环 2px <code>--accent-500</code> offset 1px；拖拽排序保留 ↑↓ 键盘操作；每行 aria-label 含字段名与方向。</div></div>
+    <div class="item"><span class="k"></span><div class="t"><b>兼容</b>：类名沿用 <code>.filter-bar / .fb-pane / .filter-rows / .filter-actions</code> 等契约，验收脚本选择器无需改动。</div></div>
+  </div>
+</section>
+
+</body>
+</html>

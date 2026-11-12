@@ -6,6 +6,7 @@ import java.util.*;
 // Java 11 source launcher. Credentials travel only on stdin, never argv.
 class NavkitJdbc {
   static Connection conn;
+  static JdbcMutationSupport relational;
   static String quote = "\"", password = "", driverClass = "";
   static String initialCatalog, initialSchema;
   static final String BIGQUERY_DRIVER = "com.google.cloud.bigquery.jdbc.BigQueryDriver";
@@ -195,9 +196,9 @@ class NavkitJdbc {
     selectNamespace(container); String[] ns=namespace(container);
     List<String[]> rows=new ArrayList<>();
     try(ResultSet rs=conn.getMetaData().getTables(ns[0],ns[1],"%",new String[]{"TABLE","VIEW","BASE TABLE"})) {
-      while(rs.next()) { String name=rs.getString("TABLE_NAME"); if(name!=null)rows.add(new String[]{name}); }
+      while(rs.next()) { String name=rs.getString("TABLE_NAME"); if(name!=null)rows.add(new String[]{name,"VIEW".equalsIgnoreCase(rs.getString("TABLE_TYPE"))?"view":"table"}); }
     }
-    rowsJson(out,rows,new String[]{"name"});
+    rowsJson(out,rows,new String[]{"name","type"});
   }
   static void rows(PrintWriter out,String container,String table,long offset,long limit,int timeout) throws SQLException {
     if(offset<0 || offset>MAX_OFFSET || limit<0 || limit>MAX_PAGE || offset+limit>MAX_OFFSET)
@@ -266,10 +267,11 @@ class NavkitJdbc {
     PrintWriter out=new PrintWriter(new OutputStreamWriter(System.out,StandardCharsets.UTF_8),true);
     try {
       String line;
-      while((line=in.readLine())!=null) {
+      while((line=JdbcMutationSupport.readLine(in))!=null) {
         try {
           String[] p=line.split("\t",-1);
           if(p[0].equals("connect")) {
+            if(conn!=null)throw new SQLException("Sidecar already owns a physical connection", "08002");
             driverClass=decode(p[4]);
             String url=decode(p[1]),user=decode(p[2]); password=decode(p[3]);
             if(driverClass.equals(BIGQUERY_DRIVER) || driverClass.equals(SPANNER_DRIVER)) suppressCredentialDriverLogs();
@@ -307,7 +309,11 @@ class NavkitJdbc {
             qualifiedCatalogs=driverClass.equals("io.trino.jdbc.TrinoDriver") || driverClass.equals("io.prestosql.jdbc.PrestoDriver") || driverClass.equals("com.databricks.client.jdbc.Driver") || driverClass.startsWith("net.snowflake.");
             catalogOnly=!qualifiedCatalogs && !md.supportsSchemasInTableDefinitions() && md.supportsCatalogsInTableDefinitions();
             initialCatalog=catalog(); initialSchema=schema();
+            relational=new JdbcMutationSupport(conn,"jdbc");
             rowsJson(out,Collections.singletonList(new String[]{md.getDatabaseProductName(),md.getDatabaseProductVersion()}),new String[]{"product","version"});
+          } else if(p[0].equals("v2")) {
+            if(relational==null || p.length!=2)throw new SQLException("Relational sidecar is not connected", "08003");
+            relational.handle(p[1],out,password);
           } else if(p[0].equals("ping")) { ping(out,Integer.parseInt(p[1])); }
           else if(p[0].equals("query")) { query(out,decode(p[1]),Integer.parseInt(p[2]),p.length>3?decode(p[3]):""); }
           else if(p[0].equals("containers")) { containers(out); }

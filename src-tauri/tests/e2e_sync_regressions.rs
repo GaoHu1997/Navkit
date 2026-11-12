@@ -31,7 +31,7 @@ impl Fixture {
 }
 fn kind() -> DbKind { DbKind::of("sqlite") }
 fn options() -> SyncOptions {
-    SyncOptions {task_id:Some(uuid::Uuid::new_v4().to_string()),source_connection:"source".into(),source_schema:"main".into(),source_table:"t".into(),target_connection:"target".into(),target_schema:"main".into(),target_table:"t".into(),mode:"data".into(),write_mode:"append".into(),sync_mode:"incremental".into(),incremental_update:true,create_target:false,columns:vec![],where_clause:None}
+    SyncOptions {task_id:Some(uuid::Uuid::new_v4().to_string()),source_connection:"source".into(),source_schema:"main".into(),source_table:"t".into(),target_connection:"target".into(),target_schema:"main".into(),target_table:"t".into(),mode:"data".into(),write_mode:"append".into(),sync_mode:"incremental".into(),incremental_update:true,create_target:false,columns:vec![],key_columns: Vec::new(), delete_missing: false, where_clause:None}
 }
 async fn exec(pool: &SqlitePool, sql: &str) -> Result<()> {sqlx::query(sql).execute(pool).await?;Ok(())}
 async fn both(f: &Fixture, sql: &str) -> Result<()> {exec(f.src(),sql).await?;exec(f.dst(),sql).await}
@@ -167,7 +167,12 @@ async fn run_case(case: &str, f: &Fixture) -> Result<Value> {
             seed_bulk(f.src(),"t",1).await?;let alias=Db::Sqlite(open(&f.root.join("source.sqlite3")).await?);
             opts.mode="both".into();opts.sync_mode="full".into();opts.write_mode="recreate".into();opts.create_target=true;
             let result=sync::synchronize(&f.source,&kind(),&alias,&kind(),&opts).await;
-            if let Db::Sqlite(pool)=&alias {pool.close().await;}
+            if let Db::Sqlite(pool)=&alias {
+                pool.close().await;
+                // Windows：sqlx 物理连接回收异步完成，等待句柄释放后 fixture 清理才能删除文件。
+                for _ in 0..100 { if pool.size()==0 { break } tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
+                drop(pool);
+            }
             ensure!(result.is_err(),"same-file connection alias was allowed to recreate source table");
             let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM t").fetch_one(f.src()).await?;ensure!(count==1,"source alias guard lost data");
         }

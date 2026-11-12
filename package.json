@@ -1,7 +1,7 @@
 {
   "name": "navkit",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.0-pre",
   "description": "NavKit 数据库管理工具 (Tauri 2 + Rust + 原生 TypeScript)",
   "type": "module",
   "scripts": {
@@ -11,11 +11,15 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test:ui": "node --test tools/tests/data-grid-filter-sort.test.mjs tools/acceptance/object-tools.test.mjs tools/tests/portable-packaging.test.mjs tools/tests/transfer-feedback.test.mjs tools/tests/driver-download.test.mjs tools/tests/ribbon-layout.test.mjs tools/tests/tree-drag-sort.test.mjs tools/tests/sql-completion-execution.test.mjs tools/tests/tool-commands.test.mjs tools/tests/query-builder.test.mjs tools/tests/column-order.test.mjs tools/tests/chart-data.test.mjs tools/tests/manual-transaction.test.mjs tools/tests/manual-transaction-controller.test.mjs tools/tests/fixture-transport.test.mjs tools/tests/datasource-sync.test.mjs",
+    "test:ui": "node --test --test-concurrency=1 tools/tests/import-wizard.test.mjs tools/tests/sql-format.test.mjs tools/tests/ipc-errors.test.mjs tools/tests/preview-mock-coverage.test.mjs tools/tests/query-result-model.test.mjs tools/tests/query-result-panel.test.mjs tools/tests/query-result-host.test.mjs tools/tests/cell-preview-isolation.test.mjs tools/tests/structure-sync.test.mjs tools/tests/scheduler.test.mjs tools/tests/scheduler-panel.test.mjs tools/tests/execution-controller.test.mjs tools/tests/grid-clipboard.test.mjs tools/tests/mutation.test.mjs tools/tests/connection-health-client.test.mjs tools/tests/runtime-profile.test.mjs tools/tests/http-runtime-profile.test.mjs tools/tests/routine-objects.test.mjs tools/tests/routine-editor.test.mjs tools/tests/routine-create.test.mjs tools/tests/object-mutation.test.mjs tools/tests/object-mutation-browser.test.mjs tools/tests/object-browser.test.mjs tools/tests/user-flow-regressions.test.mjs tools/tests/user-editor.test.mjs tools/tests/data-grid-filter-sort.test.mjs tools/acceptance/object-tools.test.mjs tools/tests/portable-packaging.test.mjs tools/tests/transfer-feedback.test.mjs tools/tests/driver-download.test.mjs tools/tests/ribbon-layout.test.mjs tools/tests/tree-drag-sort.test.mjs tools/tests/sql-completion-execution.test.mjs tools/tests/query-execution.test.mjs tools/tests/tool-commands.test.mjs tools/tests/query-builder.test.mjs tools/tests/tab-snippet-workflows.test.mjs tools/tests/column-order.test.mjs tools/tests/manual-transaction.test.mjs tools/tests/manual-transaction-controller.test.mjs tools/tests/fixture-transport.test.mjs tools/tests/datasource-sync.test.mjs tools/tests/approved-ui-styles.test.mjs tools/tests/ui-completion-styles.test.mjs tools/tests/settings-dialog-design.test.mjs tools/tests/history-log-design.test.mjs tools/tests/server-monitor-design.test.mjs tools/tests/database-workflows.test.mjs tools/tests/namespace-semantics.test.mjs tools/tests/data-grid-controls.test.mjs tools/tests/table-designer.test.mjs tools/tests/table-designer-metadata.test.mjs tools/tests/batch-execution-service.test.mjs tools/tests/batch-execution-dom.test.mjs tools/tests/execution-log-format.test.mjs tools/tests/background-tasks.test.mjs tools/tests/er-diagram.test.mjs tools/tests/data-dictionary-dialog.test.mjs tools/tests/update-dialog.test.mjs tools/tests/update-badge.test.mjs",
+    "test:query-layout": "pnpm run build && node tools/tests/query-result-layout-browser.mjs",
+    "test:workflows": "node --test tools/tests/database-workflows.test.mjs tools/tests/namespace-semantics.test.mjs tools/tests/data-grid-controls.test.mjs tools/tests/table-designer.test.mjs tools/tests/object-browser.test.mjs tools/tests/tree-drag-sort.test.mjs tools/tests/table-designer-metadata.test.mjs tools/tests/batch-execution-service.test.mjs tools/tests/batch-execution-dom.test.mjs",
     "test:rust": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --lib --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance",
     "test:sync": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance -- --nocapture",
     "test:sync:live": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --test e2e_sync_live_matrix --test transfer_sync_acceptance -- --ignored --nocapture",
     "test:sync:simulated": "node tools/acceptance/sync/run-simulations.mjs",
+    "test:execution:native": "node tools/tests/native-execution-identity.mjs",
+    "test:routines:native": "node tools/tests/routine-ipc-native.mjs",
     "test:desktop": "node tools/acceptance/e2e/desktop14-runner-e2c772c4.mjs"
   },
   "dependencies": {

@@ -1,4 +1,8 @@
 //! Deliberately focused heterogeneous table synchronization (no scheduling/ETL features).
+#[path = "sync_stream.rs"]
+mod sync_stream;
+#[cfg(test)] #[path = "sync_full_performance_tests.rs"] mod full_performance_tests;
+#[cfg(test)] #[path = "sync_performance_tests.rs"] mod performance_tests;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -32,6 +36,10 @@ pub struct SyncOptions {
     #[serde(default)] pub incremental_update: bool,
     #[serde(default)] pub create_target: bool,
     #[serde(default)] pub columns: Vec<SyncColumnMapping>,
+    /// 自定义业务键（源列名，按顺序比较）；为空时使用源表主键。
+    #[serde(default)] pub key_columns: Vec<String>,
+    /// Legacy flag; true is rejected before all DDL/DML until reviewed deletion is available.
+    #[serde(default)] pub delete_missing: bool,
     #[serde(default)] pub where_clause: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,13 +50,17 @@ pub struct SyncTypeMapping { pub source: String, pub source_type: String, pub ta
 /// Existing metadata/qualified SQL only supports SQLite main. Fail closed instead of
 /// silently reading/writing a same-named table in another attached database.
 pub(crate) async fn validate_sqlite_namespace(db: &Db, namespace: &str, table: &str) -> Result<()> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Sqlite(pool) = db {
         if !namespace.is_empty() && !namespace.eq_ignore_ascii_case("main") { bail!("SQLite 工具暂仅支持 main 数据库，禁止附加库或 temp 错靶操作"); }
-        let shadow: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM temp.sqlite_master WHERE name=? COLLATE NOCASE")
+        let shadow: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM temp.sqlite_master WHERE name=? COLLATE NOCASE")
             .bind(table).fetch_one(pool).await?;
         if shadow > 0 { bail!("存在同名 SQLite 临时对象，无法安全确定 main 目标，请移除临时对象后重试"); }
     }
     Ok(())
+
+    }).await
 }
 
 pub fn supported(kind: &DbKind) -> bool {
@@ -124,10 +136,14 @@ pub fn validate_target_type(raw: &str, target: &DbKind) -> Result<String> {
     Ok(t)
 }
 pub async fn type_mapping(source: &Db, source_kind: &DbKind, schema: &str, table: &str, target_kind: &DbKind) -> Result<Vec<SyncTypeMapping>> {
+    let __sql_history_context = crate::sql_history::db_context(source);
+    crate::sql_history::scope(__sql_history_context, async {
     if !supported(source_kind) || !supported(target_kind) { bail!("同步支持 SQLite、MySQL/PostgreSQL 协议族、SQL Server、ClickHouse 与 ODBC 关系型数据源；Redis、Elasticsearch、Kafka 等非关系型不支持"); }
     validate_sqlite_namespace(source, schema, table).await?;
     let schema = crate::schema::table_schema(source, source_kind.clone(), schema, table).await?;
     Ok(schema.columns.iter().map(|c| SyncTypeMapping { source: c.name.clone(), source_type: c.data_type.clone(), target_type: map_type(&c.data_type, target_kind) }).collect())
+
+    }).await
 }
 fn binary(ty: &str) -> bool { let t = ty.to_ascii_uppercase(); t.contains("BLOB") || t.contains("BINARY") || t == "BYTEA" }
 pub fn value_sql(value: Option<&str>, target: &DbKind, target_type: &str, source_type: &str) -> Result<String> {
@@ -166,9 +182,17 @@ pub(crate) fn row_key(names: &[String], row: &[Option<String>], cols: &[String])
     let values=cols.iter().map(|col|names.iter().position(|n|n==col).and_then(|i|row.get(i))).collect::<Option<Vec<_>>>()?;
     serde_json::to_string(&values).ok()
 }
-fn validate_key_mapping(meta: &crate::models::TableSchema, mapping: &[SyncColumnMapping]) -> Result<()> {
-    for column in meta.columns.iter().filter(|c|c.primary_key) {
-        if !mapping.iter().any(|m|m.source==column.name) {bail!("增量同步/差异比较必须映射完整主键，缺少主键列: {}",column.name);}
+fn validate_key_mapping(meta: &crate::models::TableSchema, mapping: &[SyncColumnMapping], keys: &[String]) -> Result<()> {
+    if keys.is_empty() {
+        for column in meta.columns.iter().filter(|c|c.primary_key) {
+            if !mapping.iter().any(|m|m.source==column.name) {bail!("增量同步/差异比较必须映射完整主键，缺少主键列: {}",column.name);}
+        }
+        return Ok(());
+    }
+    if keys.len() > 8 { bail!("业务键最多支持 8 列"); }
+    for key in keys {
+        if !meta.columns.iter().any(|c| &c.name==key) { bail!("业务键列不存在: {key}"); }
+        if !mapping.iter().any(|m| &m.source==key) { bail!("业务键列必须参与列映射: {key}"); }
     }
     Ok(())
 }
@@ -250,20 +274,20 @@ async fn same_database(source: &Db, target: &Db) -> Result<bool> {
     if std::ptr::eq(source, target) { return Ok(true); }
     match (source, target) {
         (Db::Sqlite(a), Db::Sqlite(b)) => {
-            let a: String = sqlx::query("PRAGMA database_list").fetch_one(a).await?.try_get("file")?;
-            let b: String = sqlx::query("PRAGMA database_list").fetch_one(b).await?.try_get("file")?;
+            let a: String = crate::sql_history::query("PRAGMA database_list").fetch_one(a).await?.try_get("file")?;
+            let b: String = crate::sql_history::query("PRAGMA database_list").fetch_one(b).await?.try_get("file")?;
             Ok(!a.is_empty() && std::fs::canonicalize(a)? == std::fs::canonicalize(b)?)
         },
         (Db::Mysql(a), Db::Mysql(b)) => {
             let sql = "SELECT CONCAT(@@hostname, ':', @@port, ':', @@server_id)";
-            let a: String = sqlx::query_scalar(sql).fetch_one(a).await?;
-            let b: String = sqlx::query_scalar(sql).fetch_one(b).await?;
+            let a: String = crate::sql_history::query_scalar(sql).fetch_one(a).await?;
+            let b: String = crate::sql_history::query_scalar(sql).fetch_one(b).await?;
             Ok(a == b)
         },
         (Db::Postgres(a), Db::Postgres(b)) => {
             let sql = "SELECT current_database() || ':' || COALESCE(inet_server_addr()::text,'local') || ':' || COALESCE(inet_server_port()::text,'local')";
-            let a: String = sqlx::query_scalar(sql).fetch_one(a).await?;
-            let b: String = sqlx::query_scalar(sql).fetch_one(b).await?;
+            let a: String = crate::sql_history::query_scalar(sql).fetch_one(a).await?;
+            let b: String = crate::sql_history::query_scalar(sql).fetch_one(b).await?;
             Ok(a == b)
         },
         _ => Ok(false),
@@ -276,23 +300,33 @@ pub async fn synchronize(source: &Db, source_kind: &DbKind, target: &Db, target_
     result
 }
 async fn synchronize_inner(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &DbKind, opts: &SyncOptions, task: Option<&TaskControl>, label: &str) -> Result<SyncReport> {
-    let prefix = if label.is_empty() { String::new() } else { format!("{} · ", label) };
-    if !supported(source_kind) || !supported(target_kind) { bail!("同步支持 SQLite、MySQL/PostgreSQL 协议族、SQL Server、ClickHouse 与 ODBC 关系型数据源；Redis、Elasticsearch、Kafka 等非关系型不支持"); }
-    validate_sqlite_namespace(source, &opts.source_schema, &opts.source_table).await?;
-    validate_sqlite_namespace(target, &opts.target_schema, &opts.target_table).await?;
-    transfer::validate_names(&[opts.source_table.clone()])?; transfer::validate_names(&[opts.target_table.clone()])?;
-    transfer::validate_where(opts.where_clause.as_deref())?;
+    // A boolean does not bind the deletion scope, source snapshot, or target revision.
+    // Reject it for every mode before touching either database, including legacy full requests.
+    if opts.delete_missing { bail!("删除目标多余行需要完整范围/预览/CAS授权；legacy delete_missing=true已在任何DDL或DML前拒绝"); }
     if !matches!(opts.mode.as_str(), "structure" | "data" | "both") || !matches!(opts.write_mode.as_str(), "append" | "replace" | "recreate") { bail!("同步模式或写入模式无效"); }
     if !matches!(opts.sync_mode.as_str(), "" | "full" | "incremental") { bail!("同步方式无效：仅支持 full / incremental"); }
     let incremental = opts.sync_mode == "incremental";
-    if incremental && opts.write_mode != "append" { bail!("增量同步只支持「追加数据」写入模式；清空/重建属于全量语义"); }
     let structure = opts.mode != "data";
     let data = opts.mode != "structure";
+    if incremental && !data { bail!("增量同步必须包含数据；仅结构同步请使用 full，未发送任何DDL或DML"); }
+    if incremental && opts.write_mode != "append" { bail!("增量同步只支持「追加数据」写入模式；清空/重建属于全量语义"); }
     if (!structure && opts.write_mode == "recreate") || (!data && opts.write_mode == "replace") { bail!("仅数据模式不能重建表；仅结构模式不能清空数据"); }
-    // MergeTree 不是唯一键表，也不接受普通 UPDATE；必须在任何 DDL/INSERT 前拒绝。
-    if incremental && data && opts.incremental_update && target_kind.protocol() == Protocol::Clickhouse {
-        bail!("ClickHouse 目标不支持普通 UPDATE 增量更新；请关闭更新，仅插入缺失行，或使用全量重建");
+    if !supported(source_kind) || !supported(target_kind) { bail!("同步支持 SQLite、MySQL/PostgreSQL 协议族、SQL Server、ClickHouse 与 ODBC 关系型数据源；Redis、Elasticsearch、Kafka 等非关系型不支持"); }
+    transfer::validate_names(&[opts.source_table.clone()])?; transfer::validate_names(&[opts.target_table.clone()])?;
+    transfer::validate_where(opts.where_clause.as_deref())?;
+    // Resolve all incremental requests before same_table, pooled metadata, and legacy DDL.
+    // Only the verified physical SQLite pair may enter the snapshot/spill/typed transaction path.
+    if incremental {
+        match (source, target) {
+            (Db::Sqlite(source), Db::Sqlite(target)) if source_kind.is_sqlite() && target_kind.is_sqlite() => {
+                return sync_stream::sqlite_incremental(source, target, opts, task, label).await;
+            }
+            _ => bail!("增量数据同步目前仅验证 SQLite 原生源与目标的有界快照/typed事务；此通道未发送DDL或DML，不回退到全量读取后截断的旧增量路径"),
+        }
     }
+    let prefix = if label.is_empty() { String::new() } else { format!("{} · ", label) };
+    validate_sqlite_namespace(source, &opts.source_schema, &opts.source_table).await?;
+    validate_sqlite_namespace(target, &opts.target_schema, &opts.target_table).await?;
     let same_table = opts.source_table == opts.target_table || (source_kind.is_sqlite() && opts.source_table.eq_ignore_ascii_case(&opts.target_table)) || (source_kind.is_mysql_family() && opts.source_table.eq_ignore_ascii_case(&opts.target_table)) || (source_kind.protocol() == Protocol::Mssql && opts.source_table.eq_ignore_ascii_case(&opts.target_table));
     let same_namespace = source_kind.is_sqlite() || opts.source_schema == opts.target_schema;
     if same_table && same_namespace && (opts.source_connection == opts.target_connection || same_database(source, target).await?) { bail!("源表与目标表不能是同一张表（包括连接别名）"); }
@@ -308,7 +342,6 @@ async fn synchronize_inner(source: &Db, source_kind: &DbKind, target: &Db, targe
         let ty = match &m.target_type { Some(t) => validate_target_type(t, target_kind)?, None => map_type(&c.data_type, target_kind) };
         cols.push((m, c, ty));
     }
-    if incremental && data {validate_key_mapping(&source_schema,&mapping)?;}
     let exists = crate::schema::list_tables(target, target_kind.clone(), &opts.target_schema).await?.iter().any(|(n, _)| n == &opts.target_table);
     let create = structure && (!exists || opts.write_mode == "recreate");
     if !exists && (!structure || !opts.create_target) { bail!("目标表不存在：仅数据模式要求已有表；结构模式需启用建表"); }
@@ -373,59 +406,44 @@ async fn synchronize_inner(source: &Db, source_kind: &DbKind, target: &Db, targe
             }
         }
     }
-    if data {
-        if let Some(t) = task { t.check()?; t.update("read", 0, 0, &format!("{}正在读取源数据，目标尚未修改", prefix)); }
-        let (names, rows) = transfer::fetch_transfer_rows(source, source_kind, &opts.source_schema, &opts.source_table, opts.where_clause.as_deref(), None).await?;
-        if let Some(t) = task { t.check()?; }
-        if opts.write_mode == "replace" && exists {
-            let delete = if target_kind.protocol() == Protocol::Clickhouse {
-                format!("DELETE FROM {} WHERE 1", full)
-            } else { format!("DELETE FROM {}", full) };
-            stmts.push((delete, false));
+    // 全量替换：清空目标表旧数据（含 ClickHouse 轻量删除变体）。
+    // 该压入必须在分页快速路径（下方 data && !incremental 提前 return）之前完成，
+    // 否则 replace 的 DELETE 永远不会执行（曾致 full_replace 撞主键，BUG-R1-002）。
+    // 注意：仅数据写入需要清空；recreate 走上方 DROP+CREATE；增量已在元数据读取前单独路由。
+    if data && opts.write_mode == "replace" && exists {
+        let delete = if target_kind.protocol() == Protocol::Clickhouse {
+            format!("DELETE FROM {} WHERE 1", full)
+        } else { format!("DELETE FROM {}", full) };
+        stmts.push((delete, false));
+        if target_kind.protocol() != Protocol::Sqlite && target_kind.protocol() != Protocol::Mysql && target_kind.protocol() != Protocol::Postgres {
+            warnings.push("replace 在该目标通道不支持事务：先清空后写入，中途失败/取消会留下空表或部分数据；建议先小规模试跑或改用「重建目标表」".into());
         }
-        let mut update_stmts: Vec<(String, bool)> = Vec::new();
-        let rows = if incremental {
-            // 增量：按主键与目标已有行比较，只插入缺失行；可选更新主键相同但内容不同的行。
-            // 目标表本次才创建（或为空）时无需主键，直接全量插入。
-            let (tnames, trows): (Vec<String>, Vec<Vec<Option<String>>>) = if exists {
-                transfer::fetch_transfer_rows(target, target_kind, &opts.target_schema, &opts.target_table, None, None).await?
-            } else { (Vec::new(), Vec::new()) };
-            let pk_cols: Vec<(&SyncColumnMapping, &ColumnInfo)> = cols.iter().filter(|(_, c, _)| c.primary_key).map(|(m, c, _)| (*m, *c)).collect();
-            if exists && !trows.is_empty() && pk_cols.is_empty() {
-                bail!("增量同步需要源表有主键；无主键请改用全量同步");
-            }
-            let pk_source: Vec<String> = pk_cols.iter().map(|(m, _)| m.source.clone()).collect();
-            let pk_target: Vec<String> = pk_cols.iter().map(|(m, _)| m.target.clone()).collect();
-            // 先验证双方完整且非 NULL 的唯一键，避免 HashMap 静默覆盖并产生破坏性 UPDATE。
-            if !pk_source.is_empty() {keyed_rows(&names,&rows,&pk_source,"源表")?;}
-            let target_by_key=if pk_target.is_empty(){std::collections::HashMap::new()}else{keyed_rows(&tnames,&trows,&pk_target,"目标表")?};
-            let source_total = rows.len();
-            let pair_cols: Vec<(&SyncColumnMapping, &ColumnInfo)> = cols.iter().map(|(m, c, _)| (*m, *c)).collect();
-            let mut kept: Vec<Vec<Option<String>>> = Vec::with_capacity(rows.len());
-            for row in rows {
-                let Some(key) = row_key(&names, &row, &pk_source) else { bail!("增量同步无法读取主键列的值（列缺失或类型异常）"); };
-                match target_by_key.get(&key) {
-                    Some(trow) => {
-                        if opts.incremental_update && row_differs(&names, &row, &tnames, trow, &pair_cols, target_meta.as_ref())? {
-                            update_stmts.push((update_sql(&full, target_kind, &names, &row, &cols, target_meta.as_ref())?, true));
-                        }
-                    }
-                    None => kept.push(row),
+        if target_kind.protocol() == Protocol::Mysql {
+            if let Some(meta) = &target_meta {
+                if meta.engine.as_deref().is_some_and(|e| e.eq_ignore_ascii_case("myisam")) {
+                    warnings.push("目标表为 MyISAM（不支持事务）：replace 清空后中途失败/取消无法自动回滚，请谨慎操作".into());
                 }
             }
-            if let Some(t) = task { t.update("read", 0, 0, &format!("{}增量比较完成：源 {} 行，待插入 {} 行，待更新 {} 行", prefix, source_total, kept.len(), update_stmts.len())); }
-            kept
-        } else { rows };
-        let target_names = cols.iter().map(|(m, _, _)| quote_ident(target_kind, &m.target)).collect::<Vec<_>>().join(", ");
-        for row in &rows {
-            let values = cols.iter().map(|(m, c, ty)| {
-                let i = names.iter().position(|n| n == &m.source).ok_or_else(|| anyhow!("数据列缺失: {}", m.source))?;
-                let target_type = target_meta.as_ref().and_then(|meta| meta.columns.iter().find(|c| c.name == m.target)).map(|c| c.data_type.as_str()).unwrap_or(ty);
-                value_sql(row.get(i).and_then(Option::as_deref), target_kind, target_type, &c.data_type)
-            }).collect::<Result<Vec<_>>>()?;
-            stmts.push((format!("INSERT INTO {} ({}) VALUES ({})", full, target_names, values.join(", ")), true));
         }
-        stmts.extend(update_stmts);
+    }
+    if data && !incremental {
+        if let Some(t) = task { t.check()?; t.update("read", 0, 0, &format!("{}正在按批读取源数据，目标尚未修改", prefix)); }
+        // 全量写入按页读取源表，分批写入目标，避免一次性把整张表读入内存。
+        let target_names = cols.iter().map(|(m, _, _)| quote_ident(target_kind, &m.target)).collect::<Vec<_>>().join(", ");
+        let spec = InsertSpec {
+            cols: cols.iter().map(|(m, c, ty)| (m.source.clone(), m.target.clone(), ty.clone(), c.data_type.clone())).collect(),
+            target_names,
+            full: full.clone(),
+            schema: opts.target_schema.clone(),
+            table: opts.target_table.clone(),
+        };
+        let order = source_schema.columns.iter().filter(|c| c.primary_key).map(|c| c.name.clone()).collect::<Vec<_>>();
+        let order_types = order.iter().map(|column| {
+            source_schema.columns.iter().find(|c| &c.name == column).map(|c| c.data_type.clone()).unwrap_or_default()
+        }).collect::<Vec<_>>();
+        let mut feeder = SyncPageFeeder { source, kind: source_kind, schema: &opts.source_schema, table: &opts.source_table, clause: opts.where_clause.as_deref(), order, order_types, last_key: None, offset: 0, names: Vec::new() };
+        let count = execute_sync_pages(target, &stmts, &mut feeder, &spec, target_kind, target_meta.as_ref(), task, &prefix).await?;
+        return Ok(SyncReport { rows: count, created: create, warnings });
     }
     let count = transfer::execute_atomic(target, &stmts, task).await?;
     Ok(SyncReport { rows: count, created: create, warnings })
@@ -484,8 +502,15 @@ async fn synchronize_database_inner(source: &Db, source_kind: &DbKind, target: &
     if !matches!(req.mode.as_str(), "both" | "structure") { bail!("整库同步模式无效：仅支持结构+数据或仅结构"); }
     if !matches!(req.write_mode.as_str(), "skip" | "append" | "replace" | "recreate") { bail!("目标同名表处理方式无效"); }
     if !matches!(req.sync_mode.as_str(), "" | "full" | "incremental") { bail!("同步方式无效：仅支持 full / incremental"); }
-    if req.sync_mode == "incremental" && matches!(req.write_mode.as_str(), "replace" | "recreate") {
-        bail!("整库增量同步不能与「清空后写入/重建」组合；请改用追加或跳过已存在的表");
+    if req.sync_mode == "incremental" {
+        if req.mode != "both" { bail!("整库增量同步必须包含数据；仅结构同步请使用 full，未发送任何DDL或DML"); }
+        if !matches!(req.write_mode.as_str(), "skip" | "append") {
+            bail!("整库增量同步不能与「清空后写入/重建」组合；请改用追加或跳过已存在的表");
+        }
+        // Check before pooled metadata and skip: no table may fall back to legacy incremental SQL.
+        if !matches!((source, target), (Db::Sqlite(_), Db::Sqlite(_))) || !source_kind.is_sqlite() || !target_kind.is_sqlite() {
+            bail!("整库增量数据同步目前仅验证 SQLite 原生源与目标的有界快照/typed事务；此通道未发送DDL或DML");
+        }
     }
     if req.tables.is_empty() { bail!("请至少选择一张要同步的表"); }
     transfer::validate_where(req.where_clause.as_deref())?;
@@ -534,16 +559,27 @@ async fn synchronize_database_inner(source: &Db, source_kind: &DbKind, target: &
             incremental_update: req.incremental_update,
             create_target: true,
             columns: Vec::new(),
+            key_columns: Vec::new(),
+            delete_missing: false,
             where_clause: req.where_clause.clone(),
         };
         if let Some(t) = task { t.update("sync", (index + 1) as u64, total, &format!("{} · 开始同步（{} / {}）", opts.target_table, index + 1, total)); }
         // 视图无法跨方言复制 DDL：明确按「物化为普通表」处理并写进报告。
+        // 视图没有稳定业务键，增量通道的 typed 记录快照/CAS 无法绑定它；
+        // 因此视图配对在增量请求下显式按全量物化执行，并在报告里写明换成原因。
+        let mut opts = opts;
         let view_notes = if pair.view {
-            vec![if opts.mode == "structure" {
+            let mut notes = vec![if opts.mode == "structure" {
                 format!("源对象 {} 是视图：按视图当前列结构创建目标普通表（仅结构，不复制数据）", pair.source)
             } else {
                 format!("源对象 {} 是视图：按当前查询结果物化为目标普通表并写入数据", pair.source)
-            }]
+            }];
+            if opts.sync_mode == "incremental" {
+                opts.sync_mode = "full".into();
+                opts.incremental_update = false;
+                notes.push(format!("源对象 {} 是视图：视图无稳定业务键，不能进入增量快照/CAS 通道；本项显式改为全量物化执行（未冒充增量快照）", pair.source));
+            }
+            notes
         } else { Vec::new() };
         match synchronize_inner(source, source_kind, target, target_kind, &opts, task, &pair.source).await {
             Ok(r) => {
@@ -610,7 +646,7 @@ pub async fn diff(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &
         let c = source_meta.columns.iter().find(|c| c.name == m.source).ok_or_else(|| anyhow!("源列不存在: {}", m.source))?;
         cols.push((m, c));
     }
-    validate_key_mapping(&source_meta,&mapping)?;
+    validate_key_mapping(&source_meta,&mapping,&[])?;
     let report = SyncDiffReport {
         source_rows: 0, target_rows: 0, keyed: false, missing_in_target: 0, extra_in_target: 0,
         changed: 0, changed_samples: Vec::new(),
@@ -665,6 +701,193 @@ pub async fn diff(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &
     }
     Ok(report)
 }
+
+/// 全量同步的 INSERT 语句生成器（按页构造，避免持有全部行）。
+struct InsertSpec {
+    /// (源列, 目标列, 目标类型, 源类型)
+    cols: Vec<(String, String, String, String)>,
+    target_names: String,
+    full: String,
+    /// 目标库/表原名：用于在目标事务里查询触发器，决定能否安全合并多行 VALUES。
+    schema: String,
+    table: String,
+}
+
+impl InsertSpec {
+    fn statements(&self, kind: &DbKind, names: &[String], target_meta: Option<&crate::models::TableSchema>, rows: &[Vec<Option<String>>], batch: bool) -> Result<Vec<(String, bool)>> {
+        if rows.is_empty() { return Ok(Vec::new()); }
+        // 一页内的列身份/目标类型不变，先解析一次，避免每个单元格重扫列清单。
+        let resolved = self.cols.iter().map(|(source, target, ty, source_type)| {
+            let index = names.iter().position(|name| name == source).ok_or_else(|| anyhow!("数据列缺失: {}", source))?;
+            let target_type = target_meta.and_then(|meta| meta.columns.iter().find(|column| &column.name == target)).map(|column| column.data_type.as_str()).unwrap_or(ty);
+            Ok((index, target_type, source_type.as_str()))
+        }).collect::<Result<Vec<_>>>()?;
+        let mut out = Vec::with_capacity(if batch { rows.len().div_ceil(256) } else { rows.len() });
+        let header = format!("INSERT INTO {} ({}) VALUES ", self.full, self.target_names);
+        let mut pending = String::new();
+        let mut pending_rows = 0usize;
+        for row in rows {
+            let values = resolved.iter().map(|(index, target_type, source_type)| {
+                value_sql(row.get(*index).and_then(Option::as_deref), kind, target_type, source_type)
+            }).collect::<Result<Vec<_>>>()?;
+            let tuple = format!("({})", values.join(", "));
+            if !batch { out.push((format!("{header}{tuple}"), true)); continue; }
+            // 仅合并已确认普通、无触发器/外键的 SQLite 表；每条语句最多256行/1MiB。
+            // 单行超过预算仍按旧路径单独执行，不能截断源值或静默跳行。
+            if pending_rows > 0 && (pending_rows == 256 || pending.len().saturating_add(tuple.len()).saturating_add(2) > 1024 * 1024) {
+                out.push((std::mem::take(&mut pending), true)); pending_rows = 0;
+            }
+            if pending_rows == 0 { pending.push_str(&header); } else { pending.push_str(", "); }
+            pending.push_str(&tuple); pending_rows += 1;
+        }
+        if pending_rows > 0 { out.push((pending, true)); }
+        Ok(out)
+    }
+}
+
+/// 按页读取源表，供全量同步分批写入。
+/// 有主键时走键集分页（(k1,k2) > 上一页末行），大表不会因 OFFSET 深页退化为 O(n²)；
+/// 无主键时退回 OFFSET 分页，行为与原来一致。
+struct SyncPageFeeder<'a> {
+    source: &'a Db,
+    kind: &'a DbKind,
+    schema: &'a str,
+    table: &'a str,
+    clause: Option<&'a str>,
+    order: Vec<String>,
+    /// 与 order 一一对应的源列类型，用于把续页键编码成正确的 SQL 字面量。
+    order_types: Vec<String>,
+    /// 上一页最后一行的键值；None 表示第一页。
+    last_key: Option<Vec<Option<String>>>,
+    offset: u64,
+    names: Vec<String>,
+}
+
+impl<'a> SyncPageFeeder<'a> {
+    async fn next(&mut self) -> Result<Option<(Vec<String>, Vec<Vec<Option<String>>>)>> {
+        let (names, rows) = if self.order.is_empty() || self.order_types.len() != self.order.len() {
+            let page = transfer::fetch_transfer_page(self.source, self.kind, self.schema, self.table, self.clause, &self.order, self.offset, 2000).await?;
+            if !page.1.is_empty() { self.offset += page.1.len() as u64; }
+            page
+        } else {
+            transfer::fetch_transfer_page_after(self.source, self.kind, self.schema, self.table, self.clause, &self.order, &self.order_types, self.last_key.as_deref(), 2000).await?
+        };
+        if rows.is_empty() { return Ok(None); }
+        if self.names.is_empty() { self.names = names.clone(); }
+        if !self.order.is_empty() && self.order_types.len() == self.order.len() {
+            let last = rows.last().expect("非空页");
+            let key = self.order.iter().map(|column| {
+                names.iter().position(|name| name == column).and_then(|index| last.get(index).cloned()).flatten()
+            }).collect::<Vec<_>>();
+            if key.iter().any(|value| value.is_none()) { bail!("主键列在源页中缺失或为 NULL，无法键集续页"); }
+            self.last_key = Some(key);
+        }
+        Ok(Some((names, rows)))
+    }
+}
+
+/// 在一个事务内执行全量同步的 DDL/清空前缀与分批 INSERT（非事务通道逐条自动提交）。
+async fn execute_sync_pages(
+    target: &Db,
+    prefix: &[(String, bool)],
+    feeder: &mut SyncPageFeeder<'_>,
+    spec: &InsertSpec,
+    kind: &DbKind,
+    target_meta: Option<&crate::models::TableSchema>,
+    task: Option<&TaskControl>,
+    label: &str,
+) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(target);
+    crate::sql_history::scope(__sql_history_context, async {
+    macro_rules! run_tx {
+        ($pool:expr) => {{
+            let mut count = 0u64;
+            let mut tx = $pool.begin().await?;
+            for (sql, is_row) in prefix {
+                match {
+                    let mut history = crate::sql_history::Guard::new(sql, Vec::new());
+                    let result = sqlx::Executor::execute(&mut *tx, sql.as_str()).await;
+                    history.result(&result, |result| result.rows_affected() as i64);
+                    result
+                } {
+                    Ok(r) => if *is_row { count += r.rows_affected(); },
+                    Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context("同步前置语句执行失败，未提交数据已回滚")); }
+                }
+            }
+            // 在同一目标事务/前缀DDL之后验证。带触发器或外键必须保留原逐行语义，
+            // PostgreSQL语句级触发器及MySQL元数据可见性尚未验证，不进入批插入。
+            // 合并多行 VALUES 的前提：目标表没有触发器（触发器逐行语义与批量等价，
+            // 但语句级触发器/过渡表在各方言未逐一验证，故有触发器即退回逐行）。
+            // SQLite 额外要求无外键且是 main 普通表；MySQL/PG 的外键在语句内同样逐行检查，
+            // 违反时整条语句失败并在本事务内回滚，与逐行失败的可观察结果一致。
+            let batch = if kind.is_sqlite() {
+                let name = spec.full.strip_prefix('"').and_then(|name| name.strip_suffix('"')).ok_or_else(|| anyhow!("SQLite目标标识符格式不符"))?.replace("\"\"", "\"");
+                let triggers: i64 = crate::sql_history::query_scalar("SELECT (SELECT COUNT(*) FROM main.sqlite_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE)+(SELECT COUNT(*) FROM temp.sqlite_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE)").bind(&name).bind(&name).fetch_one(&mut *tx).await?;
+                let foreign_keys: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM pragma_foreign_key_list(?)").bind(&name).fetch_one(&mut *tx).await?;
+                let ordinary: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM pragma_table_list WHERE schema='main' AND name=? COLLATE NOCASE AND type='table'").bind(&name).fetch_one(&mut *tx).await?;
+                triggers == 0 && foreign_keys == 0 && ordinary == 1
+            } else if kind.is_mysql_family() {
+                let triggers: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA=? AND EVENT_OBJECT_TABLE=?").bind(&spec.schema).bind(&spec.table).fetch_one(&mut *tx).await?;
+                triggers == 0
+            } else if kind.is_pg_family() {
+                let triggers: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal").bind(&spec.schema).bind(&spec.table).fetch_one(&mut *tx).await?;
+                triggers == 0
+            } else { false };
+            while let Some((names, rows)) = feeder.next().await? {
+                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消，未提交的目标修改已回滚"))?; }
+                for (sql, is_row) in spec.statements(kind, &names, target_meta, &rows, batch)? {
+                    match {
+                        let mut history = crate::sql_history::Guard::new(&sql, Vec::new());
+                        let result = sqlx::Executor::execute(&mut *tx, sql.as_str()).await;
+                        history.result(&result, |result| result.rows_affected() as i64);
+                        result
+                    } {
+                        Ok(r) => if is_row { count += r.rows_affected(); },
+                        Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context("同步分批写入失败，未提交数据已回滚")); }
+                    }
+                }
+                if let Some(t) = task { t.update("write", count, 0, &format!("{}正在分批写入目标（提交前可取消）", label)); }
+                tokio::task::yield_now().await;
+            }
+            // 提交前最终取消检查：最后一页写入期间收到的取消必须回滚而非提交
+            // （BUG-R1-003：单页写完直接 commit 曾把已取消任务提交并误报成功）。
+            if let Some(t) = task {
+                if let Err(e) = t.check() { let _ = tx.rollback().await; return Err(e.context("任务已取消，未提交的目标修改已回滚")); }
+            }
+            tx.commit().await?;
+            Ok(count)
+        }};
+    }
+    match target {
+        Db::Sqlite(p) => run_tx!(p),
+        Db::Mysql(p) => run_tx!(p),
+        Db::Postgres(p) => run_tx!(p),
+        Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => {
+            let mut count = 0u64;
+            for (sql, is_row) in prefix {
+                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消；该目标通道不支持事务，已执行的语句不会自动回滚"))?; }
+                let n = target.generic_exec(sql).await.map_err(|e| anyhow!(e).context("同步前置语句失败；该目标通道不支持事务，已执行的语句不会自动回滚"))?;
+                if *is_row { count += n.max(1); }
+            }
+            while let Some((names, rows)) = feeder.next().await? {
+                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消；该目标通道不支持事务，已执行的语句不会自动回滚"))?; }
+                for (sql, is_row) in spec.statements(kind, &names, target_meta, &rows, false)? {
+                    let n = target.generic_exec(&sql).await.map_err(|e| anyhow!(e).context("同步写入失败；该目标通道不支持事务，已执行的语句不会自动回滚"))?;
+                    if is_row { count += n.max(1); }
+                }
+                if let Some(t) = task { t.update("write", count, 0, &format!("{}正在分批写入目标（非事务通道，逐条提交）", label)); }
+                tokio::task::yield_now().await;
+            }
+            // 非事务通道同样补最终检查（对齐 transfer::execute_atomic 范式）：最后一条语句执行期间也可能收到取消。
+            if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消；该目标通道不支持事务，已执行的语句不会自动回滚"))?; }
+            Ok(count)
+        }
+        _ => bail!("同步支持 SQLite、MySQL/PostgreSQL 协议族、SQL Server、ClickHouse 与 ODBC 关系型数据源"),
+    }
+
+    }).await
+}
+
 
 #[cfg(test)]
 mod db_sync_table_tests {
@@ -739,6 +962,31 @@ mod diff_helpers_tests {
         assert!(row_differs(&snames, &srow, &tnames, &trow_diff, &cols, None).unwrap());
         // 未映射进比较的列（extra 列）不影响结果；映射列缺失报错
         assert!(row_differs(&snames, &srow, &tnames, &trow_same, &cols, None).is_ok());
+    }
+
+    #[test]
+    fn business_keys_must_exist_and_be_mapped() {
+        let c_id = ColumnInfo { name: "id".into(), data_type: "int".into(), nullable: false, default: None, primary_key: true, auto_increment: false, comment: None, length: None, precision: None, scale: None };
+        let c_code = ColumnInfo { name: "code".into(), data_type: "text".into(), nullable: false, default: None, primary_key: false, auto_increment: false, comment: None, length: None, precision: None, scale: None };
+        let c_note = ColumnInfo { name: "note".into(), data_type: "text".into(), nullable: true, default: None, primary_key: false, auto_increment: false, comment: None, length: None, precision: None, scale: None };
+        let meta = crate::models::TableSchema { table: "t".into(), database: "d".into(), columns: vec![c_id, c_code, c_note], indexes: Vec::new(), foreign_keys: Vec::new(), comment: None, engine: None, collation: None, row_count: None };
+        let mapping = vec![
+            SyncColumnMapping { source: "id".into(), target: "id".into(), target_type: None },
+            SyncColumnMapping { source: "code".into(), target: "code".into(), target_type: None },
+        ];
+        assert!(validate_key_mapping(&meta, &mapping, &["code".to_string()]).is_ok());
+        assert!(validate_key_mapping(&meta, &mapping, &["missing".to_string()]).is_err());
+        // 业务键存在但未参与列映射 → 拒绝
+        assert!(validate_key_mapping(&meta, &mapping, &["note".to_string()]).is_err());
+        // 未指定业务键时要求完整映射主键
+        assert!(validate_key_mapping(&meta, &mapping, &[]).is_ok());
+    }
+
+    #[test]
+    fn delete_missing_and_business_keys_are_optional_by_default() {
+        let opts: SyncOptions = serde_json::from_str(r#"{"source_connection":"a","source_schema":"s","source_table":"x","target_connection":"b","target_schema":"t","target_table":"y","mode":"both","write_mode":"append"}"#).unwrap();
+        assert!(opts.key_columns.is_empty());
+        assert!(!opts.delete_missing);
     }
 
     #[test]

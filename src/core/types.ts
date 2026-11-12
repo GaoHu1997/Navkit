@@ -12,6 +12,7 @@ export type ObjectType =
   | "schema"
   | "table"
   | "view"
+  | "materialized_view"
   | "column"
   | "index"
   | "procedure"
@@ -97,6 +98,7 @@ export interface ForeignKeyInfo {
   name: string;
   columns: string[];
   ref_table: string;
+  ref_schema?: string | null;
   ref_columns: string[];
   on_update: string | null;
   on_delete: string | null;
@@ -112,6 +114,65 @@ export interface TableSchema {
   engine: string | null;
   collation: string | null;
   row_count: number | null;
+}
+
+export interface TableFeatureCapability {
+  supported: boolean;
+  /** 不支持或受限的真实后端原因，不得用空元数据推断支持。 */
+  reason: string | null;
+}
+
+export interface TableDesignCapabilities {
+  checks: TableFeatureCapability;
+  triggers: TableFeatureCapability;
+  options: TableFeatureCapability;
+  rebuild: TableFeatureCapability;
+  clear: TableFeatureCapability;
+  copy_structure: TableFeatureCapability;
+  copy_data: TableFeatureCapability;
+  supported_options: string[];
+  limitations: string[];
+}
+
+export interface CheckDesign {
+  name: string;
+  orig_name?: string | null;
+  /** 仅 CHECK 内的表达式，不是顶层 DDL。 */
+  expression: string;
+  /** 匿名既有 CHECK 的合成展示身份；不得当作真实可 DROP 的约束名。 */
+  generated_name?: boolean;
+}
+
+export interface TriggerDesign {
+  name: string;
+  orig_name?: string | null;
+  timing: string;
+  event: string;
+  /** SQLite/MySQL 为触发器 body；PG 为已存在函数的 EXECUTE FUNCTION 调用。 */
+  statement: string;
+  /** 只读完整原定义。未修改时原样保留，修改时只能由后端受限编译。 */
+  definition?: string | null;
+}
+
+export interface TableOptionsDesign {
+  engine?: string | null;
+  charset?: string | null;
+  collation?: string | null;
+  row_format?: string | null;
+  strict?: boolean | null;
+  without_rowid?: boolean | null;
+  fillfactor?: number | null;
+}
+
+export interface TableOperation {
+  connection_id: string;
+  schema: string;
+  table: string;
+  kind: "clear" | "copy_structure" | "copy_data";
+  target_table?: string | null;
+  /** 来自真实完整 snapshot；执行在物理连接锁内再次核验。 */
+  base_revision: string;
+  source_fingerprint: string;
 }
 
 export interface ResultColumn {
@@ -138,6 +199,22 @@ export interface MultiResult {
   sets: ResultSet[];
   messages: string[];
   elapsed_ms: number;
+  /** 本次执行的完整落盘快照；旧后端/历史结果可能没有。 */
+  spool_id?: string | null;
+}
+
+export interface QuerySpoolScope {
+  spoolId: string;
+  connectionId: string;
+  ownerId: string;
+  namespace: string;
+}
+
+export interface QueryRowsPage {
+  rows: (string | null)[][];
+  total: number;
+  truncated: boolean;
+  message: string;
 }
 
 export interface FilterCondition {
@@ -210,11 +287,15 @@ export interface RowInsert {
 }
 
 export interface AppSettings {
+  settings_version?: number;
   font_family: string;
   font_size: number;
   grid_font_size: number;
   rows_per_page: number;
   query_timeout_secs: number;
+  connect_timeout_secs?: number;
+  pool_acquire_timeout_secs?: number;
+  sqlite_busy_timeout_secs?: number;
   theme: string;
   show_system_tray: boolean;
   confirm_on_close: boolean;
@@ -236,6 +317,7 @@ export interface Favorite {
   name: string;
   sql: string;
   connection_id: string | null;
+  schema?: string | null;
   timestamp: number;
 }
 
@@ -251,6 +333,10 @@ export interface ImportOptions {
   create_table: boolean;
   truncate: boolean;
   sheet: string | null;
+  /** 记录冲突策略：""（报错）| skip | update */
+  on_conflict?: string;
+  /** 冲突键列（目标表列名）；留空使用主键。 */
+  conflict_columns?: string[];
 }
 
 export interface ExportOptions {
@@ -305,6 +391,10 @@ export interface BackupOptions {
   comment: string;
   /** 要备份的表 / 视图名单；空表示全部。 */
   tables: string[];
+  /** 要备份的函数 / 存储过程名单；空表示不包含例程。 */
+  routines?: string[];
+  /** 备份文件名（不含扩展名 / 路径）；空由后端按时间戳生成。 */
+  file_name?: string | null;
   include_structure: boolean;
   include_data: boolean;
 }
@@ -331,8 +421,6 @@ export type TabKind =
   | "backup"
   | "users"
   | "schedule"
-  | "model"
-  | "chart"
   | "viewdesign"
   | "routinedesign";
 
@@ -348,6 +436,14 @@ export interface TabState {
   objectType: ObjectType;
   /** 查询页的 SQL 文本。 */
   sql: string;
+  savedQueryId?: string;
+  /** SQL 设计器创建模式：首次保存绝不能先删除已有对象。 */
+  designCreating?: boolean;
+  /** 完整例程身份与打开时快照；保存不能重新读取旧基线。 */
+  routineObject?: import("./object-catalog").DatabaseObjectId;
+  routineSnapshot?: import("./object-catalog").RoutineSnapshot;
+  /** 新建例程的真实不存在基线，不冒充已存在对象快照。 */
+  routineCreation?: import("./routine-create").RoutineCreationBaseline;
   /** 查询页的多结果集。 */
   results: MultiResult | null;
   /** 当前显示的结果集索引。 */
@@ -370,10 +466,10 @@ export interface TabState {
   datasourceStale?: string;
   /** 选中的行索引。 */
   selectedRows: Set<number>;
-  /** 图表页保留创建时的内存快照与展示选项；关闭后不保存。 */
-  chart?: import("./chart").ChartState;
   /** 正在编辑的单元格。 */
   editing: { row: number; col: number } | null;
+  /** 表数据页视图模式：网格（缺省）/ 表单（每屏一条记录）。 */
+  viewMode?: "grid" | "form";
 }
 
 /** 对象列表的一行（对象标签页网格）。 */
@@ -390,26 +486,53 @@ export interface ObjectInfo {
 
 /** 左侧树节点（含运行时展开状态）。 */
 export interface TreeItem extends TreeNode {
+  /** 不能从显示名或路径猜重载 / 触发器父表。 */
+  objectDescriptor?: import("./object-catalog").ObjectDescriptor;
+  /** 部分目录不能显示为完整空列表。 */
+  catalogNotice?: string;
   loading?: boolean;
   loaded?: boolean;
   /** 连接节点：是否已打开（行尾绿点 + 图标着色）。 */
   connected?: boolean;
 }
 
-/** 自动运行任务。 */
+/** 自动任务的动作类型（定时执行的是数据同步 / 数据生成 / 备份 / 数据字典等任务，不是 SQL）。 */
+export type ScheduleTaskKind =
+  | "backup"
+  | "export"
+  | "import"
+  | "data_sync"
+  | "data_generation"
+  | "data_dictionary";
+
+/** 自动任务的动作配置：与对应工具对话框的选项结构一致，按 kind 解释。 */
+export interface ScheduleTaskPayload {
+  kind: ScheduleTaskKind;
+  /** 各任务类型的配置；键与对应工具对话框提交的选项一致。 */
+  options: Record<string, unknown>;
+}
+
+/** 自动任务。 */
 export interface ScheduleJob {
   id: string;
   name: string;
   connection_id: string;
   database: string;
+  /** 旧版 SQL 任务文本；新任务一律使用 task。 */
   sql: string;
   interval_secs: number;
+  /** 每天的固定执行时刻（本地时间 HH:MM）；填写后忽略 interval_secs。 */
+  daily_at?: string | null;
+  /** 可视化 cron 定时（五字段：分 时 日 月 星期）；填写后优先于 interval_secs / daily_at。 */
+  cron?: string | null;
+  /** 任务动作（备份 / 导出 / 导入 / 数据同步 / 数据生成 / 数据字典）；旧版 SQL 任务为 null。 */
+  task?: ScheduleTaskPayload | null;
   enabled: boolean;
   last_run: string | null;
   last_status: string | null;
 }
 
-/** 一次自动运行记录。 */
+/** 一次自动任务运行记录。 */
 export interface JobHistoryEntry {
   job_id: string;
   job_name: string;
@@ -448,4 +571,98 @@ export interface RestoreReport {
   succeeded: number;
   failed: number;
   steps: RestoreStep[];
+}
+
+/** 手动事务内的图形化行变更（表数据页事务路径保留；当前事务入口在查询页）。 */
+export type ManualMutationOp =
+  | { kind: "update"; table: string; changes: [string, string | null][]; keys: [string, string | null][]; old_values: [string, string | null][] }
+  | { kind: "insert"; table: string; columns: string[]; values: (string | null)[] }
+  | { kind: "delete"; table: string; keys: [string, string | null][]; old_values: [string, string | null][] };
+
+// ---------------------------------------------------------------- 数据字典导出
+
+/** 数据字典：列。 */
+export interface DictionaryColumn {
+  order: number;
+  name: string;
+  type_name: string;
+  length: string;
+  primary_key: boolean;
+  auto_increment: boolean;
+  nullable: boolean;
+  default_value: string;
+  comment: string;
+}
+
+/** 数据字典：表。 */
+export interface DictionaryTable {
+  name: string;
+  comment: string;
+  db_type: string;
+  columns: DictionaryColumn[];
+}
+
+/** 数据字典：视图 / 存储过程。 */
+export interface DictionaryObject {
+  name: string;
+  comment: string;
+  script: string;
+  db_type: string;
+}
+
+/** 一份数据库字典元数据（对应后端 data_dictionary::DictDatabase）。 */
+export interface DictionaryDatabase {
+  name: string;
+  doc_title: string;
+  tables: DictionaryTable[];
+  views: DictionaryObject[];
+  routines: DictionaryObject[];
+}
+
+/** 数据字典导出选项（对应后端 DictExportOptions）。 */
+export interface DictionaryExportOptions {
+  format: "markdown" | "html" | "excel" | "word" | "pdf" | string;
+  excel_sheet_mode: "single" | "per_table" | string;
+  include_tables: boolean;
+  include_views: boolean;
+  include_routines: boolean;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------- 软件更新
+
+/** 更新清单（后端 updater::UpdateManifest）。 */
+export interface UpdateManifest {
+  version: string;
+  notes: string;
+  pub_date: string;
+  url: string;
+  sha256: string;
+  size: number;
+}
+
+/** 检查更新结果。 */
+export interface UpdateCheckResult {
+  current_version: string;
+  update_available: boolean;
+  manifest: UpdateManifest | null;
+}
+
+/** 下载进度事件载荷（update-progress 事件）。 */
+export interface UpdateProgressEvent {
+  phase: "checking" | "downloading" | "verifying" | "ready" | "error" | string;
+  done: number;
+  total: number;
+  speed: number;
+  message: string;
+}
+
+/** 当前更新状态（update_status 轮询兜底）。 */
+export interface UpdateStatus {
+  phase: string;
+  done: number;
+  total: number;
+  speed: number;
+  message: string;
+  staged_file: string | null;
 }

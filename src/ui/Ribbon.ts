@@ -45,9 +45,9 @@ const PICT_BY_KEY: Record<string, string> = {
   ribbon_other: "其它",
   ribbon_query: "查询",
   ribbon_backup: "备份",
-  ribbon_schedule: "自动运行",
-  ribbon_model: "模型",
+  ribbon_schedule: "自动任务",
   ribbon_chart: "图表",
+  ribbon_diagram: "关系图",
 };
 
 /** 右下角下拉箭头（10px chevron-down，currentColor 跟随文字色）。 */
@@ -65,8 +65,8 @@ export const RIBBON_MAIN: RibbonItem[] = [
   { id: "open-query", icon: "ribbon_query", label: "查询" },
   { id: "backup", icon: "ribbon_backup", label: "备份", groupEnd: true },
   { id: "open-user", icon: "ribbon_user", label: "用户" },
-  { id: "schedule", icon: "ribbon_schedule", label: "自动运行" },
-  { id: "model", icon: "ribbon_model", label: "模型" },
+  { id: "schedule", icon: "ribbon_schedule", label: "自动任务" },
+  { id: "er-diagram", icon: "ribbon_diagram", label: "关系图", groupEnd: true },
 ];
 
 export class Ribbon {

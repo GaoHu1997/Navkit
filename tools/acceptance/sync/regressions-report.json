@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "suite": "incremental-safety-and-precision-regressions",
+  "timestamp_utc": "2026-11-11T08:13:36.855864100+00:00",
+  "counts": {
+    "total": 13,
+    "pass": 13,
+    "fail": 0
+  },
+  "rows": [
+    {
+      "case": "bigint_precision",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 121,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "decimal_precision",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 119,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "text_whitespace",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 118,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "text_key_whitespace",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 126,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "composite_key_delimiter",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 150,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "incomplete_composite_key_mapping",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 79,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "binary_primary_key_update",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 137,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "nullable_primary_key_rejected",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 77,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "duplicate_target_key_rejected",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 101,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "synchronize_mid_write_cancel",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 138,
+      "status": "PASS",
+      "details": {
+        "writes_observed_before_cancel": 5,
+        "source_rows": 2000,
+        "target_transaction_rolled_back": true
+      }
+    },
+    {
+      "case": "whole_database_last_table_cancel",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 176,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    },
+    {
+      "case": "bulk_2000_rows_roundtrip",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 30273,
+      "status": "PASS",
+      "details": {
+        "full_rows": 2000,
+        "incremental_writes": 2,
+        "verified_cells": 4002
+      }
+    },
+    {
+      "case": "same_file_connection_alias_guard",
+      "evidence_type": "REAL_SQLITE_FILE_EXECUTION",
+      "cleanup_success": true,
+      "elapsed_ms": 62,
+      "status": "PASS",
+      "details": {
+        "actual_rust_synchronize_or_diff": true,
+        "independent_sql_readback": true
+      }
+    }
+  ],
+  "limitations": [
+    "Decimal lexeme regression uses SQLite TEXT affinity to avoid SQLite's own NUMERIC-to-REAL rounding. Live MySQL/PostgreSQL decimal coverage is reported separately.",
+    "The 2000-row case is bounded bulk correctness coverage, not a throughput benchmark or large-scale memory guarantee."
+  ]
+}

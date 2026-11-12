@@ -1,0 +1,481 @@
+{
+  "schema_version": 1,
+  "protocol": "odbc",
+  "tag": "oracle",
+  "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",
+  "status": "SIMULATED_SYNC_FAIL",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "limitations": [
+    "Not a vendor server or certification",
+    "Finite documented SQL/wire subset with actual mutable backend state",
+    "No user connection secrets or data/ files are used",
+    "Existing proxy translates a finite family-dialect subset to actual DuckDB; not Oracle/Dameng/Db2 vendor syntax/type certification"
+  ],
+  "cases": [
+    {
+      "name": "sqlite_to_odbc_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 489,
+      "evidence": {
+        "baseline": {
+          "source_kind": "sqlite",
+          "target_kind": "oracle",
+          "source_table": "T40E9BCC59C0249B494A99D9D7FC98283",
+          "target_table": "T3ADCFF646B99446E95C859DA9F603583",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "625bb23d-5625-4f8e-bcbc-06f967549827:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "625bb23d-5625-4f8e-bcbc-06f967549827:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "f8e48351-ac71-4d2b-9938-2b7139335993:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:266e571f-93f2-49bd-a311-98e9a35e062b:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_sqlite_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 337,
+      "evidence": {
+        "baseline": {
+          "source_kind": "oracle",
+          "target_kind": "sqlite",
+          "source_table": "T8B6DE58707124D0F90854F36651F0F55",
+          "target_table": "TCC881AE680014F4D93737A9BDC193902",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "82792853-d700-4584-bfcb-aefb6e0d9f7e:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "82792853-d700-4584-bfcb-aefb6e0d9f7e:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "f5c8c8b7-2265-40a8-b7d2-ac420b931872:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:210f43a7-5b41-4aec-8f5f-19adaefb224b:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_odbc_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 473,
+      "evidence": {
+        "baseline": {
+          "source_kind": "oracle",
+          "target_kind": "oracle",
+          "source_table": "TAD3FF393E28F47509DB21F062285201E",
+          "target_table": "T6E0054366A88411DBD66C5C1A1B2C38B",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "997e7d90-ef94-48bc-9832-f9978e677366:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "997e7d90-ef94-48bc-9832-f9978e677366:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "a4c64b95-f20f-4258-8112-3533a9785c4d:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:50cc42f8-838c-486b-a659-aa4f21f62525:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_nontransactional_failure_after_first_write",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 46,
+      "evidence": {
+        "sync_error": "第 2 条目标语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚: ODBC 执行失败: ODBC emitted an error calling 'SQLExecDirect':\nState: HY000, Native error: 0, Message: ODBC_DuckDB->SingleExecuteStmt\nConstraint Error: CHECK constraint failed on table \"T1CF3B804AF5549708AA1C789013691CF\" with expression CHECK((ID != 2))",
+        "committed_rows_after_error": [
+          [
+            "1",
+            "c2e82266-d818-4184-bd8e-613ce9e0fb74:中文;O'Reilly\\尾🙂",
+            null
+          ]
+        ],
+        "task": {
+          "task_id": "d80c012b-ef6c-4ebf-b0ed-1d95982818b5",
+          "status": "failed",
+          "phase": "write",
+          "processed": 1,
+          "total": 2,
+          "message": "第 2 条目标语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚: ODBC 执行失败: ODBC emitted an error calling 'SQLExecDirect':\nState: HY000, Native error: 0, Message: ODBC_DuckDB->SingleExecuteStmt\nConstraint Error: CHECK constraint failed on table \"T1CF3B804AF5549708AA1C789013691CF\" with expression CHECK((ID != 2))"
+        },
+        "atomicity": "NON_TRANSACTIONAL_EARLIER_WRITE_REMAINS"
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "sqlite_to_odbc_lossless_binary",
+      "status": "SIMULATED_SYNC_FAIL",
+      "elapsed_ms": 38,
+      "evidence": null,
+      "error": "binary bytes must survive NUL/non-UTF8: source=[[Some(\"1\"), Some(\"0x00FF1080\")]], target=[[Some(\"1\"), Some(\"\\\\x00\\\\xFF\\\\x10\\\\x80\")]]",
+      "vendor_server_status": "NOT_TESTED"
+    }
+  ],
+  "cleanup": {
+    "success": true,
+    "root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-0069f1ff600f4c1585cdf1a318e04010",
+    "errors": [],
+    "scope": "explicit pool close; owned child kill/reap; only UUID fixture directory"
+  },
+  "fixture_root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-0069f1ff600f4c1585cdf1a318e04010",
+  "wire": [],
+  "counts": {
+    "pass": 4,
+    "fail": 1,
+    "vendor_real_pass": 0
+  }
+}

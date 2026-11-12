@@ -30,7 +30,8 @@ try {
   await row('conn:a').dragTo(row('conn:d'), { targetPosition: { x: 100, y: 21 } });
   await expectMoves(3);
   assert.deepEqual((await snapshot()).filter(c => c.group === 'folder').map(c => c.id), ['c', 'd', 'a']); checks.push('connection lower half = after');
-  await row('conn:a').dragTo(page.locator('.tree-root-drop'));
+  const scrollBox = await page.locator('.tree-scroll').boundingBox();
+  await row('conn:a').dragTo(page.locator('.tree-scroll'), { targetPosition: { x: 60, y: scrollBox.height - 6 } });
   await expectMoves(4);
   assert.deepEqual((await snapshot()).filter(c => !c.group).map(c => c.id), ['b', 'a']); checks.push('dedicated root drop');
   const beforeInvalid = await moveCount();
@@ -47,19 +48,16 @@ try {
   assert.deepEqual((await snapshot()).filter(c => c.group === 'folder').map(c => c.id), ['c', 'd', 'a']); checks.push('keyboard insert after');
   await page.keyboard.press('Alt+ArrowUp'); await expectMoves(7);
   assert.deepEqual((await snapshot()).filter(c => c.group === 'folder').map(c => c.id), ['c', 'a', 'd']); checks.push('keyboard same-group reorder');
-  await row('conn:a').focus(); await page.keyboard.press('Control+x');
-  await page.locator('.tree-root-drop').focus(); await page.keyboard.press('Enter'); await expectMoves(8);
-  assert.equal((await snapshot()).find(c => c.id === 'a').group, ''); checks.push('root button Enter moves to ungrouped');
   await row('conn:a').focus(); await page.keyboard.press('Control+x'); await page.keyboard.press('Escape');
   await row('group:folder').focus(); await page.keyboard.press('Control+v');
-  assert.equal(await moveCount(), 8); checks.push('Escape cancels keyboard movement');
+  assert.equal(await moveCount(), 7); checks.push('Escape cancels keyboard movement');
   const externalBlocked = await page.evaluate(() => {
     const dataTransfer = new DataTransfer(); dataTransfer.items.add(new File(['external'], 'external.txt'));
     const target = document.querySelector('.tree-scroll');
     const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer });
     const drop = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer });
     target.dispatchEvent(over); target.dispatchEvent(drop);
-    return over.defaultPrevented && drop.defaultPrevented && window.treeRegression.moves.length === 8;
+    return over.defaultPrevented && drop.defaultPrevented && window.treeRegression.moves.length === 7;
   });
   assert.equal(externalBlocked, true); checks.push('external files cannot move or navigate WebView');
   const persisted = await snapshot();
@@ -87,9 +85,9 @@ try {
   const prior = await snapshot();
   await row('conn:b').focus(); await page.keyboard.press('Control+x');
   await row('group:folder').focus(); await page.keyboard.press('Control+v');
-  await page.waitForFunction(() => document.querySelector('.tree-move-status').textContent.includes('移动失败'));
+  await page.waitForFunction(() => document.querySelector('.tree-scroll').getAttribute('aria-busy') !== 'true');
   assert.deepEqual(await snapshot(), prior);
-  assert.equal(await page.locator('.tree-root-drop').isDisabled(), false); checks.push('save errors announced without changing data');
+  assert.equal(await row('conn:b').evaluate(el => el.classList.contains('move-picked')), true); checks.push('save errors keep data unchanged and keyboard source retryable');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: checks.length, checks, screenshot, url: page.url(), browserErrors: errors }, null, 2));
 } finally { await browser.close(); }

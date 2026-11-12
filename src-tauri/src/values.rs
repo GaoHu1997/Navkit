@@ -7,7 +7,23 @@
 //! 覆盖常用类型。
 
 use sqlx::postgres::PgRow;
-use sqlx::Row;
+use sqlx::{Row, TypeInfo, ValueRef};
+
+/// Binary is never implicitly decoded as UTF-8: even ASCII bytes retain their type.
+pub fn format_binary(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut text = String::with_capacity(2 + bytes.len() * 2);
+    text.push_str("0x");
+    for byte in bytes {
+        text.push(HEX[(byte >> 4) as usize] as char);
+        text.push(HEX[(byte & 15) as usize] as char);
+    }
+    text
+}
+
+pub(crate) fn is_binary_type(name: &str) -> bool {
+    matches!(name.to_ascii_uppercase().as_str(), "BYTEA" | "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB")
+}
 
 /// 浮点数格式化：整数则不带小数。
 pub fn format_float(f: f64) -> String {
@@ -22,6 +38,11 @@ pub fn format_float(f: f64) -> String {
 pub fn pg_row_values(row: &PgRow, count: usize) -> Vec<Option<String>> {
     (0..count)
         .map(|i| {
+            // Some drivers also allow String decoding for ASCII BLOB values.
+            // Inspect the runtime type first so binary identity is never lost.
+            if row.try_get_raw(i).map(|v| is_binary_type(v.type_info().name())).unwrap_or(false) {
+                return row.try_get::<Option<Vec<u8>>, _>(i).ok().flatten().map(|x| format_binary(&x));
+            }
             if let Ok(v) = row.try_get::<Option<String>, _>(i) {
                 return v;
             }
@@ -52,7 +73,7 @@ pub fn pg_row_values(row: &PgRow, count: usize) -> Vec<Option<String>> {
                 return v.map(|x| x.to_string());
             }
             if let Ok(v) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i) {
-                return v.map(|x| x.naive_utc().to_string());
+                return v.map(|x| x.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
             }
             if let Ok(v) = row.try_get::<Option<chrono::NaiveDate>, _>(i) {
                 return v.map(|x| x.to_string());
@@ -64,16 +85,13 @@ pub fn pg_row_values(row: &PgRow, count: usize) -> Vec<Option<String>> {
             if let Ok(v) = row.try_get::<Option<uuid::Uuid>, _>(i) {
                 return v.map(|x| x.to_string());
             }
-            // JSON / JSONB
-            if let Ok(v) = row.try_get::<Option<serde_json::Value>, _>(i) {
-                return v.map(|x| x.to_string());
+            // JSON/JSONB numeric lexemes must not pass through serde_json::Value/f64.
+            if let Ok(v) = row.try_get::<Option<sqlx::types::Json<Box<serde_json::value::RawValue>>>, _>(i) {
+                return v.map(|x| x.0.get().to_owned());
             }
             // BYTEA：非 UTF-8 的二进制以 0x 十六进制呈现，防止乱码被原样回写
             if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                return v.map(|x| match std::str::from_utf8(&x) {
-                    Ok(t) => t.to_string(),
-                    Err(_) => format!("0x{}", x.iter().map(|b| format!("{:02X}", b)).collect::<String>()),
-                });
+                return v.map(|x| format_binary(&x));
             }
             // 数组类型：text[] / int8[] / float8[]
             if let Ok(v) = row.try_get::<Option<Vec<String>>, _>(i) {
@@ -145,6 +163,11 @@ pub fn pg_row_values(row: &PgRow, count: usize) -> Vec<Option<String>> {
 pub fn my_row_values(row: &sqlx::mysql::MySqlRow, count: usize) -> Vec<Option<String>> {
     (0..count)
         .map(|i| {
+            // Some drivers also allow String decoding for ASCII BLOB values.
+            // Inspect the runtime type first so binary identity is never lost.
+            if row.try_get_raw(i).map(|v| is_binary_type(v.type_info().name())).unwrap_or(false) {
+                return row.try_get::<Option<Vec<u8>>, _>(i).ok().flatten().map(|x| format_binary(&x));
+            }
             if let Ok(v) = row.try_get::<Option<String>, _>(i) {
                 return v;
             }
@@ -178,18 +201,23 @@ pub fn my_row_values(row: &sqlx::mysql::MySqlRow, count: usize) -> Vec<Option<St
             if let Ok(v) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i) {
                 return v.map(|x| x.to_string());
             }
+            // MySQL TIMESTAMP 只能解码为 DateTime<Utc>/<Local>；二进制传输是 UTC 时刻，按本地会话时区还原字面值。
+            if let Ok(v) = row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(i) {
+                return v.map(|x| x.naive_local().to_string());
+            }
             if let Ok(v) = row.try_get::<Option<chrono::NaiveDate>, _>(i) {
                 return v.map(|x| x.to_string());
             }
             if let Ok(v) = row.try_get::<Option<chrono::NaiveTime>, _>(i) {
                 return v.map(|x| x.to_string());
             }
-            // BLOB / BINARY：非 UTF-8 的二进制以 0x 十六进制呈现
+            // JSON keeps the server's numeric lexemes without JavaScript/f64 conversion.
+            if let Ok(v) = row.try_get::<Option<sqlx::types::Json<Box<serde_json::value::RawValue>>>, _>(i) {
+                return v.map(|x| x.0.get().to_owned());
+            }
+            // BLOB / BINARY：以 0x 十六进制保留二进制类型
             if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                return v.map(|x| match std::str::from_utf8(&x) {
-                    Ok(t) => t.to_string(),
-                    Err(_) => format!("0x{}", x.iter().map(|b| format!("{:02X}", b)).collect::<String>()),
-                });
+                return v.map(|x| format_binary(&x));
             }
             None
         })
@@ -200,6 +228,11 @@ pub fn my_row_values(row: &sqlx::mysql::MySqlRow, count: usize) -> Vec<Option<St
 pub fn sqlite_row_values(row: &sqlx::sqlite::SqliteRow, count: usize) -> Vec<Option<String>> {
     (0..count)
         .map(|i| {
+            // Some drivers also allow String decoding for ASCII BLOB values.
+            // Inspect the runtime type first so binary identity is never lost.
+            if row.try_get_raw(i).map(|v| is_binary_type(v.type_info().name())).unwrap_or(false) {
+                return row.try_get::<Option<Vec<u8>>, _>(i).ok().flatten().map(|x| format_binary(&x));
+            }
             if let Ok(v) = row.try_get::<Option<String>, _>(i) {
                 return v;
             }
@@ -213,10 +246,7 @@ pub fn sqlite_row_values(row: &sqlx::sqlite::SqliteRow, count: usize) -> Vec<Opt
                 return v.map(|b| if b { "1".into() } else { "0".into() });
             }
             if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                return v.map(|x| match std::str::from_utf8(&x) {
-                    Ok(t) => t.to_string(),
-                    Err(_) => format!("0x{}", x.iter().map(|b| format!("{:02X}", b)).collect::<String>()),
-                });
+                return v.map(|x| format_binary(&x));
             }
             None
         })

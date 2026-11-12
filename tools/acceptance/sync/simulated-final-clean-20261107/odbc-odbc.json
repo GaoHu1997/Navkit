@@ -1,0 +1,575 @@
+{
+  "schema_version": 1,
+  "protocol": "odbc",
+  "tag": "odbc",
+  "executed_binary": {
+    "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+    "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
+  },
+  "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",
+  "status": "SIMULATED_SYNC_PASS",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "limitations": [
+    "Not a vendor server or certification",
+    "Finite documented SQL/wire subset with actual mutable backend state",
+    "No user connection secrets or data/ files are used",
+    "Existing proxy translates a finite family-dialect subset to actual DuckDB; not Oracle/Dameng/Db2 vendor syntax/type certification"
+  ],
+  "cases": [
+    {
+      "name": "sqlite_to_odbc_full_diff_incremental",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 210,
+      "evidence": {
+        "baseline": {
+          "source_kind": "sqlite",
+          "target_kind": "odbc",
+          "source_table": "T598B040011004E7194482EF1D1EBAB68",
+          "target_table": "TFE42E024D1DF4A8D9A484064EB37941C",
+          "tested": [
+            "structure",
+            "data",
+            "both/recreate",
+            "where+column mapping",
+            "diff+exact complete readback",
+            "data/replace"
+          ],
+          "source_rows": [
+            [
+              "1",
+              "a225d12d-c4d3-49ff-beb1-567fb27068ed:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "target_rows": [
+            [
+              "1",
+              "a225d12d-c4d3-49ff-beb1-567fb27068ed:中文;O'Reilly\\尾🙂",
+              null
+            ],
+            [
+              "2",
+              "second",
+              "present"
+            ]
+          ],
+          "diff": {
+            "source_rows": 2,
+            "target_rows": 2,
+            "keyed": true,
+            "missing_in_target": 0,
+            "extra_in_target": 0,
+            "changed": 0,
+            "changed_samples": [],
+            "target_missing_columns": [],
+            "target_extra_columns": [],
+            "message": null
+          },
+          "mapping_rows": [
+            [
+              "2",
+              "second"
+            ]
+          ],
+          "source_has_null": true
+        },
+        "before_diff": {
+          "source_rows": 3,
+          "target_rows": 3,
+          "keyed": true,
+          "missing_in_target": 1,
+          "extra_in_target": 1,
+          "changed": 1,
+          "changed_samples": [
+            "1"
+          ],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "insert_rows": 1,
+        "insert_readback": [
+          [
+            "1",
+            "c2d5309f-ecb0-43a2-9219-3b4e1512b46a:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "update_rows": 1,
+        "update_readback": [
+          [
+            "1",
+            "updated:fcfabf61-edef-42d2-aea6-d6f5132be24b:中文🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ],
+          [
+            "3",
+            "third",
+            null
+          ],
+          [
+            "9",
+            "extra",
+            null
+          ]
+        ],
+        "after_diff": {
+          "source_rows": 3,
+          "target_rows": 4,
+          "keyed": true,
+          "missing_in_target": 0,
+          "extra_in_target": 1,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": null
+        },
+        "idempotent_rows": 0
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_sqlite_full_diff",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 80,
+      "evidence": {
+        "source_kind": "odbc",
+        "target_kind": "sqlite",
+        "source_table": "T7D171E2CC6094725A48DE74D04A2E15B",
+        "target_table": "TA6A03371126C4C5C8A8D11F739E26C7F",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback",
+          "data/replace"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "fc5d07d6-df57-4c9d-b618-903f04a42aa3:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "fc5d07d6-df57-4c9d-b618-903f04a42aa3:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": true
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_odbc_full_diff",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 96,
+      "evidence": {
+        "source_kind": "odbc",
+        "target_kind": "odbc",
+        "source_table": "T8A42157FAFF84BE1B6A21FD5B976262F",
+        "target_table": "T7C1DD32F857044DC8ADA04A3F30D861A",
+        "tested": [
+          "structure",
+          "data",
+          "both/recreate",
+          "where+column mapping",
+          "diff+exact complete readback",
+          "data/replace"
+        ],
+        "source_rows": [
+          [
+            "1",
+            "5101ad6a-9509-40f8-a2af-b56ececf86b6:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "5101ad6a-9509-40f8-a2af-b56ececf86b6:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ],
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "mapping_rows": [
+          [
+            "2",
+            "second"
+          ]
+        ],
+        "source_has_null": true
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_missing_pk_metadata_incremental_safely_rejected",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 31,
+      "evidence": {
+        "source_metadata_keyed": false,
+        "diff": {
+          "source_rows": 2,
+          "target_rows": 2,
+          "keyed": false,
+          "missing_in_target": 0,
+          "extra_in_target": 0,
+          "changed": 0,
+          "changed_samples": [],
+          "target_missing_columns": [],
+          "target_extra_columns": [],
+          "message": "源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。"
+        },
+        "incremental_status": "EXPLICIT_REJECTION_NO_TARGET_CHANGE",
+        "error": "增量同步需要源表有主键；无主键请改用全量同步",
+        "target_rows": [
+          [
+            "1",
+            "f332abdb-8134-4fd3-b4cc-4b29bbd7136f:中文;O'Reilly\\尾🙂",
+            null
+          ],
+          [
+            "2",
+            "second",
+            "present"
+          ]
+        ]
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_nontransactional_failure_after_first_write",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 32,
+      "evidence": {
+        "sync_error": "第 2 条目标语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚: ODBC 执行失败: ODBC emitted an error calling 'SQLExecDirect':\nState: HY000, Native error: 0, Message: ODBC_DuckDB->SingleExecuteStmt\nConstraint Error: CHECK constraint failed on table \"T615A7CC7229F4B3EA091946BA6E373CD\" with expression CHECK((ID != 2))",
+        "committed_rows_after_error": [
+          [
+            "1",
+            "6d24e4d8-dc83-406a-a666-62214ddccc25:中文;O'Reilly\\尾🙂",
+            null
+          ]
+        ],
+        "task": {
+          "task_id": "255ff60b-b694-45a1-970c-06b1996c607c",
+          "status": "failed",
+          "phase": "write",
+          "processed": 1,
+          "total": 2,
+          "message": "第 2 条目标语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚: ODBC 执行失败: ODBC emitted an error calling 'SQLExecDirect':\nState: HY000, Native error: 0, Message: ODBC_DuckDB->SingleExecuteStmt\nConstraint Error: CHECK constraint failed on table \"T615A7CC7229F4B3EA091946BA6E373CD\" with expression CHECK((ID != 2))"
+        },
+        "atomicity": "NON_TRANSACTIONAL_EARLIER_WRITE_REMAINS"
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "sqlite_to_odbc_binary_4values_exact_bytes_null_empty",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 37,
+      "evidence": {
+        "source_kind": "sqlite",
+        "target_kind": "odbc",
+        "source_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "expected_rows": [
+          [
+            "1",
+            "0X00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0X"
+          ],
+          [
+            "4",
+            "0X00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "cases": [
+          "NUL_and_non_UTF8",
+          "NULL",
+          "empty_BLOB",
+          "mixed_binary_UTF8_bytes"
+        ],
+        "physical_storage": {
+          "fixture_backend_type_and_hex": [
+            [
+              "1",
+              "BLOB",
+              "00FF1080"
+            ],
+            [
+              "2",
+              "BLOB",
+              null
+            ],
+            [
+              "3",
+              "BLOB",
+              ""
+            ],
+            [
+              "4",
+              "BLOB",
+              "00017F80FEFF41C3A9F09F9982"
+            ]
+          ]
+        },
+        "sync": {
+          "rows": 4,
+          "created": true,
+          "warnings": [
+            "该目标通道不支持事务：语句逐条自动提交，中途失败时已写入的部分不会自动回滚",
+            "ODBC 目标按 ANSI SQL 生成（Oracle/DB2/达梦 系对象名自动大写）；建议先小规模试跑核对类型与对象名"
+          ]
+        }
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    },
+    {
+      "name": "odbc_to_sqlite_binary_4values_exact_bytes_null_empty",
+      "status": "SIMULATED_SYNC_PASS",
+      "elapsed_ms": 22,
+      "evidence": {
+        "source_kind": "odbc",
+        "target_kind": "sqlite",
+        "source_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "target_rows": [
+          [
+            "1",
+            "0x00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0x"
+          ],
+          [
+            "4",
+            "0x00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "expected_rows": [
+          [
+            "1",
+            "0X00FF1080"
+          ],
+          [
+            "2",
+            null
+          ],
+          [
+            "3",
+            "0X"
+          ],
+          [
+            "4",
+            "0X00017F80FEFF41C3A9F09F9982"
+          ]
+        ],
+        "cases": [
+          "NUL_and_non_UTF8",
+          "NULL",
+          "empty_BLOB",
+          "mixed_binary_UTF8_bytes"
+        ],
+        "physical_storage": {
+          "storage_classes": [
+            "blob",
+            "null",
+            "blob",
+            "blob"
+          ],
+          "decoded_bytes": [
+            [
+              0,
+              255,
+              16,
+              128
+            ],
+            null,
+            [],
+            [
+              0,
+              1,
+              127,
+              128,
+              254,
+              255,
+              65,
+              195,
+              169,
+              240,
+              159,
+              153,
+              130
+            ]
+          ]
+        },
+        "sync": {
+          "rows": 4,
+          "created": true,
+          "warnings": []
+        }
+      },
+      "error": null,
+      "vendor_server_status": "NOT_TESTED"
+    }
+  ],
+  "cleanup": {
+    "success": true,
+    "root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-b073df2fb49e44729460c5530f682493",
+    "errors": [],
+    "scope": "explicit pool close; owned child kill/reap; only UUID fixture directory"
+  },
+  "fixture_root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-sync-sim-b073df2fb49e44729460c5530f682493",
+  "wire": [],
+  "counts": {
+    "pass": 7,
+    "fail": 0,
+    "vendor_real_pass": 0
+  }
+}

@@ -64,30 +64,42 @@ function harness(callback) {
   panel.setNodes(nodes);
   const scroll = panel.el.querySelector('.tree-scroll');
   const row = id => scroll.querySelectorAll('.tree-node').find(el => el.dataset.id === id);
-  const rootDrop = panel.el.querySelector('.tree-root-drop');
-  const status = panel.el.querySelector('.tree-move-status');
   const transfer = () => ({ types: [], values: {}, setData(k, v) { this.values[k] = v; this.types.push(k); }, getData(k) { return this.values[k] ?? ''; } });
   const start = id => { const dataTransfer = transfer(); row(`conn:${id}`).fire('dragstart', { dataTransfer }); return dataTransfer; };
   const over = (target, dataTransfer, y = 35) => scroll.fire('dragover', { target, dataTransfer, clientY: y });
   const drop = (target, dataTransfer, y = 35) => scroll.fire('drop', { target, dataTransfer, clientY: y });
-  return { panel, nodes, connections, moves, row, scroll, rootDrop, status, document, transfer, start, over, drop };
+  return { panel, nodes, connections, moves, row, scroll, document, transfer, start, over, drop };
 }
 
-test('group folder, label/icon descendants, blank root and dedicated root drop all move', async () => {
-  for (const destination of ['group:folder', 'group:empty', 'blank', 'root']) {
+test('双击同一节点只选择一次，展开/收起仍触发，回到树时恢复详情', () => {
+  const h = harness(), selected = [], opened = [];
+  h.panel.cb.onSelect = node => selected.push(node.id);
+  h.panel.cb.onOpen = node => opened.push(node.id);
+  const row = h.row('conn:c/db/main');
+  row.fire('mousedown', { button: 0 }); row.focus();
+  row.fire('mousedown', { button: 0 }); row.fire('dblclick');
+  assert.deepEqual(selected, ['conn:c/db/main']); assert.deepEqual(opened, ['conn:c/db/main']);
+  row.fire('mousedown', { button: 0 }); row.fire('dblclick');
+  assert.equal(selected.length, 1); assert.equal(opened.length, 2);
+  h.document.activeElement = new Element('input');
+  row.fire('mousedown', { button: 0 }); assert.equal(selected.length, 2);
+  row.fire('contextmenu', { clientX: 1, clientY: 1 }); assert.equal(selected.length, 3);
+});
+
+test('tree panel renders no operation hint rows', () => {
+  const h = harness();
+  assert.equal(h.panel.el.querySelector('.tree-root-drop'), null);
+  assert.equal(h.panel.el.querySelector('.tree-move-status'), null);
+});
+
+test('group folder, label/icon descendants and blank root all move', async () => {
+  for (const destination of ['group:folder', 'group:empty', 'blank']) {
     const h = harness(); const dataTransfer = h.start('a');
-    if (destination === 'root') {
-      assert.equal(h.rootDrop.fire('dragover', { dataTransfer }).defaultPrevented, true);
-      assert.equal(h.rootDrop.classList.contains('drop-target'), true);
-      h.rootDrop.fire('drop', { dataTransfer });
-    } else {
-      const target = destination === 'blank' ? h.scroll : h.row(destination).querySelector('.tree-label');
-      assert.equal(h.over(target, dataTransfer).defaultPrevented, true);
-      h.drop(target, dataTransfer);
-    }
+    const target = destination === 'blank' ? h.scroll : h.row(destination).querySelector('.tree-label');
+    assert.equal(h.over(target, dataTransfer).defaultPrevented, true);
+    h.drop(target, dataTransfer);
     await settle();
     assert.deepEqual(plain(h.moves), [['a', destination.startsWith('group:') ? destination.slice(6) : '', null, null]]);
-    assert.equal(h.rootDrop.classList.contains('drop-target'), false);
     assert.equal(h.scroll.classList.contains('drop-root'), false);
     assert.equal(h.scroll.attributes['aria-busy'], undefined);
   }
@@ -147,32 +159,29 @@ test('Alt arrow same-group ordering and Ctrl X/V cross-group before/after/root a
     const h = harness(); const event = h.row(`conn:${id}`).fire('keydown', { key, altKey: true });
     await settle(); assert.equal(event.stopped, true); assert.deepEqual(plain(h.moves[0]), expected);
   }
-  for (const [destination, shift, expected] of [['group:empty', false, ['a', 'empty', null, null]], ['conn:c', false, ['a', 'folder', 'c', 'before']], ['conn:d', true, ['a', 'folder', 'd', 'after']], ['root', false, ['a', '', null, null]]]) {
+  for (const [destination, shift, expected] of [['group:empty', false, ['a', 'empty', null, null]], ['conn:c', false, ['a', 'folder', 'c', 'before']], ['conn:d', true, ['a', 'folder', 'd', 'after']]]) {
     const h = harness();
     h.row('conn:a').fire('keydown', { key: 'x', ctrlKey: true });
     assert.equal(h.row('conn:a').classList.contains('move-picked'), true);
-    if (destination === 'root') h.rootDrop.fire('click');
-    else h.row(destination).fire('keydown', { key: 'v', ctrlKey: true, shiftKey: shift });
+    h.row(destination).fire('keydown', { key: 'v', ctrlKey: true, shiftKey: shift });
     await settle(); assert.deepEqual(plain(h.moves[0]), expected);
     assert.equal(h.row('conn:a').classList.contains('move-picked'), false);
   }
   const h = harness(); h.row('conn:a').fire('keydown', { key: 'x', ctrlKey: true });
   h.panel.el.fire('keydown', { key: 'Escape' });
   h.row('group:folder').fire('keydown', { key: 'v', ctrlKey: true });
-  assert.equal(h.moves.length, 0); assert.match(h.status.textContent, /取消/);
+  assert.equal(h.moves.length, 0);
 });
 
-test('pending save blocks duplicate operations; rejection is visible and keyboard source remains retryable', async () => {
+test('pending save blocks duplicate operations; rejection keeps keyboard source retryable', async () => {
   let reject;
   const h = harness(() => new Promise((_, fail) => { reject = fail; }));
   h.row('conn:a').fire('keydown', { key: 'x', ctrlKey: true });
   h.row('conn:b').fire('keydown', { key: 'v', ctrlKey: true });
-  assert.equal(h.rootDrop.disabled, true); assert.equal(h.scroll.attributes['aria-busy'], 'true');
+  assert.equal(h.scroll.attributes['aria-busy'], 'true');
   h.row('group:folder').fire('keydown', { key: 'v', ctrlKey: true });
   assert.equal(h.moves.length, 1);
   reject(new Error('disk read-only')); await settle();
-  assert.match(h.status.textContent, /移动失败.*disk read-only/);
-  assert.equal(h.rootDrop.disabled, false);
   assert.equal(h.row('conn:a').classList.contains('move-picked'), true);
   assert.equal(h.scroll.attributes['aria-busy'], undefined);
 });
@@ -182,7 +191,7 @@ test('filtered trees preserve target membership and block ambiguous Alt ordering
   const search = h.panel.el.querySelector('input'); search.value = 'D'; search.fire('input');
   assert.equal(h.row('conn:d').attributes['aria-level'], '2');
   h.row('conn:d').fire('keydown', { key: 'ArrowUp', altKey: true });
-  assert.equal(h.moves.length, 0); assert.match(h.status.textContent, /清除搜索/);
+  assert.equal(h.moves.length, 0);
   h.panel.keyboardConnectionId = 'a';
   h.row('conn:d').fire('keydown', { key: 'v', ctrlKey: true, shiftKey: true }); await settle();
   assert.deepEqual(plain(h.moves[0]), ['a', 'folder', 'd', 'after']);

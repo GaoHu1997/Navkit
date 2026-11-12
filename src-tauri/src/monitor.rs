@@ -61,17 +61,21 @@ fn digits_only(value: &str) -> bool {
 }
 
 async fn list_processes(db: &Db, kind: &crate::models::DbKind) -> Result<Vec<ProcessInfo>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     match db {
         Db::Mysql(pool) => mysql_processes(pool).await,
         Db::Postgres(pool) => pg_processes(pool).await,
         Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => generic_processes(db, kind).await,
         _ => bail!("该数据源没有服务器会话概念，无法列出连接（SQLite 为嵌入式数据库）"),
     }
+
+    }).await
 }
 
 async fn mysql_processes(pool: &sqlx::MySqlPool) -> Result<Vec<ProcessInfo>> {
-    let own: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()").fetch_one(pool).await?;
-    let rows = sqlx::query("SHOW FULL PROCESSLIST").fetch_all(pool).await?;
+    let own: u64 = crate::sql_history::query_scalar("SELECT CONNECTION_ID()").fetch_one(pool).await?;
+    let rows = crate::sql_history::query("SHOW FULL PROCESSLIST").fetch_all(pool).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in &rows {
         // PROCESSLIST 列在部分兼容协议服务端（TiDB/OceanBase 等）可能以 binary 字符集返回，
@@ -97,7 +101,7 @@ async fn mysql_processes(pool: &sqlx::MySqlPool) -> Result<Vec<ProcessInfo>> {
 }
 
 async fn pg_processes(pool: &sqlx::PgPool) -> Result<Vec<ProcessInfo>> {
-    let rows = sqlx::query(
+    let rows = crate::sql_history::query(
         "SELECT pid, COALESCE(usename,'') AS usename, \
          COALESCE(client_addr::text,'本地') AS client_addr, \
          COALESCE(datname,'') AS datname, COALESCE(state,'') AS state, \
@@ -137,6 +141,8 @@ async fn pg_processes(pool: &sqlx::PgPool) -> Result<Vec<ProcessInfo>> {
 
 /// MSSQL / ClickHouse 走 generic_rows 文本行查询；按列名宽容取值。
 async fn generic_processes(db: &Db, kind: &crate::models::DbKind) -> Result<Vec<ProcessInfo>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let sql = if kind.id() == "sqlserver" || matches!(db, Db::Mssql(_)) {
         "SELECT s.session_id, COALESCE(s.login_name,'') AS login_name, \
          COALESCE(s.host_name,'') AS host_name, COALESCE(DB_NAME(s.database_id),'') AS db_name, \
@@ -191,9 +197,13 @@ async fn generic_processes(db: &Db, kind: &crate::models::DbKind) -> Result<Vec<
     }
     out.retain(|p| !p.id.is_empty());
     Ok(out)
+
+    }).await
 }
 
 async fn kill_process(db: &Db, kind: &crate::models::DbKind, process_id: &str) -> Result<String> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let pid = process_id.trim();
     if pid.is_empty() {
         bail!("缺少会话 ID");
@@ -203,7 +213,7 @@ async fn kill_process(db: &Db, kind: &crate::models::DbKind, process_id: &str) -
             if !digits_only(pid) {
                 bail!("MySQL 会话 ID 必须是数字");
             }
-            sqlx::query(&format!("KILL {}", pid)).execute(pool).await?;
+            crate::sql_history::query(&format!("KILL {}", pid)).execute(pool).await?;
             Ok(format!("已结束 MySQL 会话 {}", pid))
         }
         Db::Postgres(pool) => {
@@ -211,7 +221,7 @@ async fn kill_process(db: &Db, kind: &crate::models::DbKind, process_id: &str) -
                 bail!("PostgreSQL 会话 ID 必须是数字");
             }
             let id: i64 = pid.parse()?;
-            let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+            let terminated: bool = crate::sql_history::query_scalar("SELECT pg_terminate_backend($1)")
                 .bind(id)
                 .fetch_one(pool)
                 .await?;
@@ -241,6 +251,8 @@ async fn kill_process(db: &Db, kind: &crate::models::DbKind, process_id: &str) -
             kind.0
         ),
     }
+
+    }).await
 }
 
 #[cfg(test)]

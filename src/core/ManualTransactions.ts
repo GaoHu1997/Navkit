@@ -59,7 +59,8 @@ export class ManualTransactions {
     return this.status(id);
   }
   private assertQuery(context: TransactionContext, allowBusy = false): void {
-    if (context.kind !== "query") throw new Error("事务只能由查询页面提交或回滚");
+    // 事务所有者：查询页（SQL 执行）或表数据页（表格可视化编辑）。
+    if (!["query", "table"].includes(context.kind)) throw new Error("事务只能由查询或表数据页面提交或回滚");
     if (context.running) throw new Error("SQL 正在执行，请等待完成后操作事务");
     if (!allowBusy && this.busy(context.connectionId)) throw new Error("事务操作正在进行");
   }
@@ -82,34 +83,42 @@ export class ManualTransactions {
 
   async begin(): Promise<boolean> {
     const original = this.host.context();
-    if (!original) { this.host.toast("error", "请先打开查询或表数据页面"); return false; }
+    if (!original) { this.host.toast("error", "请先打开表数据或查询页面"); return false; }
     const id = original.connectionId;
     let locked = false;
     try {
       const unavailable = manualTransactionUnavailableReason(this.host.connection(id));
       if (unavailable) throw new Error(unavailable);
-      if (!["query", "table"].includes(original.kind)) throw new Error("请在查询或表数据页面开始事务");
+      if (!["query", "table"].includes(original.kind)) throw new Error("请在表数据或查询页面开始事务");
       if (original.running) throw new Error("SQL 正在执行，请等待完成");
-      if (original.pendingEdits) throw new Error("表数据有待提交改动，请先保存或取消，再开始独立查询事务");
+      if (original.pendingEdits) throw new Error("表数据有待提交改动，请先保存或取消，再开始事务");
       this.lock(id); locked = true;
       await this.refresh(id);
-      if (this.status(id)) throw new Error("此连接已有手动事务，请先在所有者查询页提交或回滚");
-      const accepted = await this.confirm("开始手动事务", `${original.kind === "table" ? "将打开独立查询页面；不会提交表格中的待编辑数据。\n" : ""}此事务绑定当前连接和查询页。SQL 更改在提交前仅本事务可见；其它自动提交写入入口暂时停用。请明确提交或回滚，关闭事务页面将请求回滚。`, "开始事务");
+      if (this.status(id)) throw new Error("此连接已有手动事务，请先在所有者页面提交或回滚");
+      const fromTable = original.kind === "table";
+      const accepted = await this.confirm(
+        "开始手动事务",
+        fromTable
+          ? "事务将绑定当前表数据页：此后表格中的编辑、插入、删除都会在该事务连接上执行，提交前仅本事务可见；其它自动提交写入入口暂时停用。请用工具栏的「提交事务 / 回滚事务」结束事务。"
+          : "此事务绑定当前连接和查询页。SQL 更改在提交前仅本事务可见；其它自动提交写入入口暂时停用。请明确提交或回滚，关闭事务页面将请求回滚。",
+        "开始事务",
+      );
       if (!accepted) return false;
       const current = this.host.context();
       if (!current || current.id !== original.id || current.connectionId !== id || current.schema !== original.schema) throw new Error("当前页面或数据库已变化，事务操作已取消");
-      let query = original.kind === "query" ? current : await this.host.createQuery(id, original.schema);
-      this.assertQuery(query, true);
-      await query.prepare();
-      query = this.checkedContext(query.id);
-      if (this.host.context()?.id !== query.id || query.connectionId !== id || (original.schema && query.schema !== original.schema)) throw new Error("当前查询页面或原数据库/模式已变化，事务操作已取消");
-      this.assertQuery(query, true);
-      if (!query.schema) throw new Error("没有可用的真实数据库/模式，请先选择数据库");
-      const result = await this.source.startManualTransaction(id, query.schema, query.id);
+      // 表数据页事务直接绑定本页面（表格可视化操作）；查询页事务绑定查询页本身。
+      const owner = fromTable ? current : current;
+      this.assertQuery(owner, true);
+      await owner.prepare();
+      const checked = this.checkedContext(owner.id);
+      if (this.host.context()?.id !== checked.id || checked.connectionId !== id || (original.schema && checked.schema !== original.schema)) throw new Error("当前页面或原数据库/模式已变化，事务操作已取消");
+      this.assertQuery(checked, true);
+      if (!checked.schema) throw new Error("没有可用的真实数据库/模式，请先选择数据库");
+      const result = await this.source.startManualTransaction(id, checked.schema, checked.id);
       this.publish(id, result);
-      if (!result.active || result.owner !== query.id || result.schema !== query.schema) throw new Error("后端事务所有者或模式不匹配，未确认开始成功");
-      this.host.toast("success", "手动事务已开始，更改尚未提交");
-      this.host.focus(query.id);
+      if (!result.active || result.owner !== checked.id || result.schema !== checked.schema) throw new Error("后端事务所有者或模式不匹配，未确认开始成功");
+      this.host.toast("success", fromTable ? "手动事务已开始：表格中的编辑将在提交前仅本事务可见" : "手动事务已开始，更改尚未提交");
+      this.host.focus(checked.id);
       return true;
     } catch (error) {
       this.host.toast("error", String(error));

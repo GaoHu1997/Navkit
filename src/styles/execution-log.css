@@ -1,0 +1,102 @@
+/* 执行日志台：进度条 + 逐条记录。全部色彩/字体消费 base.css 既有令牌，无新增色。 */
+
+/* ── 进度区 ─────────────────────────────────────────────── */
+.exec-log-progress { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
+.exec-log-progress[hidden] { display: none; }
+.exec-log-progress-head { display: flex; align-items: baseline; gap: var(--sp-3); }
+.exec-log-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-12); font-weight: 600; color: var(--text-secondary); }
+.exec-log-state > i { width: 7px; height: 7px; border-radius: var(--r-full); background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent); }
+.exec-log-progress[data-phase='running'] .exec-log-state { color: var(--accent-600); }
+.exec-log-progress[data-phase='indeterminate'] .exec-log-state { color: var(--accent-600); }
+.exec-log-progress[data-phase='running'] .exec-log-state > i { animation: exec-log-pulse 1.6s var(--ease-out) infinite; }
+.exec-log-progress[data-phase='stopping'] .exec-log-state { color: var(--warn-600); }
+.exec-log-progress[data-phase='stopped'] .exec-log-state { color: var(--warn-600); }
+.exec-log-progress[data-phase='done'] .exec-log-state { color: var(--ok-600); }
+.exec-log-progress[data-phase='failed'] .exec-log-state { color: var(--danger-600); }
+@keyframes exec-log-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.exec-log-count { font-size: var(--fs-12); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.exec-log-count > b { font-size: var(--fs-13); font-weight: 600; color: var(--text); }
+.exec-log-eta { margin-left: auto; font-size: var(--fs-11); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.exec-log-bar { position: relative; height: 6px; border-radius: var(--r-full); background: var(--bg-sunken); overflow: hidden; }
+.exec-log-bar > div { position: absolute; inset: 0 auto 0 0; border-radius: var(--r-full); transition: width 180ms var(--ease-out); }
+.exec-log-bar-scan { background: var(--accent-200); }
+.exec-log-bar-run { background: var(--accent-500); }
+.exec-log-progress[data-phase='done'] .exec-log-bar-run { background: var(--ok-500); }
+.exec-log-progress[data-phase='failed'] .exec-log-bar-run { background: var(--danger-500); }
+.exec-log-progress[data-phase='stopping'] .exec-log-bar-run { background: var(--warn-500); }
+.exec-log-progress[data-phase='stopped'] .exec-log-bar-run { background: var(--warn-500); }
+.exec-log-progress[data-phase='unknown'] .exec-log-bar-run { background: var(--n-400); }
+.exec-log-progress[data-phase='indeterminate'] .exec-log-bar-run {
+  width: 34% !important;
+  background: repeating-linear-gradient(115deg, var(--accent-400) 0 8px, var(--accent-300) 8px 16px);
+  animation: exec-log-slide 1.4s linear infinite;
+}
+@keyframes exec-log-slide { from { transform: translateX(-34%); } to { transform: translateX(300%); } }
+.exec-log-progress-foot { display: flex; gap: var(--sp-2); font-size: var(--fs-11); color: var(--text-tertiary); }
+.exec-log-progress-foot .exec-log-sep { color: var(--border-strong); }
+
+/* ── 逐条记录：沿用 .batch-execution-logs 容器，改为结构化行 ── */
+/* 记录页高度链：对话框内容区 → 页签面板 → 面板 → 列表，列表吃掉剩余空间 */
+.batch-execution-dialog-body { display: flex; flex-direction: column; min-height: 0; }
+.batch-sql-tabpanel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.batch-execution-panel { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* 任务选择与停止/转后台同排：动作永远在可视区，不随内容滚走 */
+.batch-execution-top { display: flex; align-items: center; gap: var(--sp-2); }
+.batch-execution-top .batch-task-picker { flex: 1 1 auto; min-width: 0; }
+.batch-execution-top .batch-execution-actions { flex: 0 0 auto; }
+/* 记录区保底 210：不足时面板整体滚动，绝不压缩到读不到一条完整记录 */
+.exec-log-list.batch-execution-logs { flex: 1 1 210px; height: auto; min-height: 210px; padding: 2px 0; }
+.exec-log-row { display: grid; grid-template-columns: 12px 54px 82px 10px 62px minmax(0, 1fr) 70px;
+  align-items: center; gap: 8px; height: 26px; padding: 0 12px; position: relative; cursor: default; }
+.exec-log-row[hidden], .exec-log-detail[hidden] { display: none; }
+.exec-log-row:hover { background: var(--bg-hover); }
+.exec-log-row[aria-expanded='true'] { background: var(--bg-selected); }
+.exec-log-row[aria-expanded='true']:hover { background: var(--accent-200); }
+.exec-log-row[data-level='error'] { box-shadow: inset 2px 0 0 var(--danger-500); }
+.exec-log-caret { width: 0; height: 0; border-left: 4px solid var(--n-400);
+  border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; opacity: 0; transition: opacity 120ms var(--ease-out); }
+.exec-log-row:hover .exec-log-caret { opacity: .7; }
+.exec-log-row[aria-expanded='true'] .exec-log-caret { opacity: 1; border-left-color: var(--accent-600); transform: rotate(90deg); }
+.exec-log-seq { font: var(--fs-11) var(--font-mono); color: var(--text-tertiary); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.exec-log-time { font: var(--fs-11) var(--font-mono); color: var(--text-tertiary); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.exec-log-dot { width: 7px; height: 7px; border-radius: var(--r-full); background: transparent; border: 1px solid var(--n-400); }
+.exec-log-row[data-level='success'] .exec-log-dot { background: var(--ok-500); border-color: var(--ok-500); }
+.exec-log-row[data-level='error'] .exec-log-dot { background: var(--danger-500); border-color: var(--danger-500); }
+.exec-log-ms { font: var(--fs-11) var(--font-mono); color: var(--text-secondary); font-variant-numeric: tabular-nums; text-align: right; }
+.exec-log-ms[data-slow='warn'] { color: var(--warn-600); font-weight: 600; }
+.exec-log-ms[data-slow='fail'] { color: var(--danger-600); font-weight: 600; }
+.exec-log-sql { font: var(--fs-12)/1.4 var(--font-mono); color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.exec-log-row[data-level='info'] .exec-log-sql { font-family: var(--font-ui); font-size: var(--fs-11); color: var(--text-secondary); }
+.exec-log-result { font: var(--fs-11) var(--font-ui); color: var(--text-tertiary); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.exec-log-result[data-bad='true'] { color: var(--danger-600); font-weight: 600; }
+
+/* 展开态：与历史日志窗口同一三段格式 */
+.exec-log-detail { margin: 0 12px 6px; padding: 9px 12px 10px; background: var(--n-25);
+  border: 1px solid var(--border-subtle); border-left: 2px solid var(--accent-400); border-radius: var(--r-2); }
+.exec-log-detail[data-level='error'] { background: var(--danger-50); border-color: var(--danger-100); border-left-color: var(--danger-500); }
+.exec-log-meta { font: var(--fs-11)/1.6 var(--font-mono); color: var(--text-tertiary); word-break: break-all; }
+.exec-log-sqltext { margin: 4px 0 0; font: var(--fs-12)/1.65 var(--font-mono); color: var(--text);
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word; max-height: 88px; overflow: auto; }
+.exec-log-detail-foot { display: flex; align-items: center; gap: var(--sp-3); margin-top: 6px; font: var(--fs-11)/1.6 var(--font-mono); }
+.exec-log-duration { color: var(--text-secondary); }
+.exec-log-attr { margin-left: auto; color: var(--text-tertiary); font-family: var(--font-ui); }
+.exec-log-error { margin-top: 3px; font: var(--fs-11)/1.6 var(--font-mono); color: var(--danger-600); word-break: break-all; }
+
+/* 同步/导入向导的原生 progress：统一为同一视觉语言，保留原生可访问语义 */
+.exec-log-native-progress { width: 100%; height: 6px; accent-color: var(--accent-500); }
+.exec-log-progress-label { margin-top: 4px; font-size: var(--fs-11); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+/* 面板内：日志标题工具与结果过滤分段 */
+.batch-execution-log-tools { display: flex; align-items: center; gap: var(--sp-2); }
+.batch-execution-log-tools .btn { height: var(--h-control-sm); padding: 0 var(--sp-2); font-size: var(--fs-11); }
+.batch-execution-filters { display: flex; gap: 2px; padding: 2px; width: fit-content; border-radius: var(--r-2); background: var(--bg-sunken); }
+.batch-execution-filters > button { display: inline-flex; align-items: center; gap: 5px; height: var(--h-control-sm);
+  padding: 0 9px; border: 1px solid transparent; border-radius: var(--r-1); background: transparent;
+  color: var(--text-secondary); font: var(--fs-11) var(--font-ui); cursor: pointer; }
+.batch-execution-filters > button:hover { color: var(--text); }
+.batch-execution-filters > button[aria-selected='true'] { background: var(--bg-surface); border-color: var(--border);
+  color: var(--text); font-weight: 600; box-shadow: var(--shadow-1); }
+.batch-execution-filters b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-tertiary); }
+.batch-execution-filters b[data-tone='danger'] { color: var(--danger-600); }
+.batch-execution-filters b[data-tone='warn'] { color: var(--warn-600); }

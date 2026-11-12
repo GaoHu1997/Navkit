@@ -1,6 +1,7 @@
 /** 通用对话框框架：1px 深边框 + 标题栏，与参考程序一致。 */
 
 import { ICON_CROSS, svg } from "./icons";
+import { formatError } from "../core/execution";
 
 export interface DialogOptions {
   title: string;
@@ -35,6 +36,9 @@ export class Dialog {
   private backdrop: HTMLElement;
   private onCloseCbs: (() => void)[] = [];
   private closed = false;
+  /** 当前错误提示浮层及其自动消失计时器。 */
+  private errorBox: HTMLElement | null = null;
+  private errorTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: DialogOptions) {
     this.backdrop = document.createElement("div");
@@ -54,12 +58,28 @@ export class Dialog {
     title.appendChild(titleText);
     title.addEventListener("mousedown", (e) => {
       if ((e.target as HTMLElement).closest(".dialog-title-close")) return;
-      const startX = e.clientX - this.el.offsetLeft;
-      const startY = e.clientY - this.el.offsetTop;
+      // 以视口坐标记录抓取点：对话框初始由遮罩 flex 居中，offsetLeft 相对定位祖先，
+      // 直接用 offsetLeft 换算会把弹窗跳到偏移量翻倍的位置（点击标题就"乱跳"）。
+      const rect = this.el.getBoundingClientRect();
+      const grabX = e.clientX - rect.left;
+      const grabY = e.clientY - rect.top;
+      let dragging = false;
+
       const move = (ev: MouseEvent) => {
-        const x = Math.max(-this.el.offsetWidth + 80, Math.min(window.innerWidth - 80, ev.clientX - startX));
-        const y = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - startY));
-        this.el.style.position = "relative";
+        if (!dragging) {
+          if (Math.abs(ev.clientX - e.clientX) < 3 && Math.abs(ev.clientY - e.clientY) < 3) return;
+          dragging = true;
+          // 从居中布局切到固定定位时先用当前矩形锁位，首帧不会跳。
+          this.el.style.position = "fixed";
+          this.el.style.margin = "0";
+          this.el.style.left = `${rect.left}px`;
+          this.el.style.top = `${rect.top}px`;
+        }
+        const maxX = Math.max(0, window.innerWidth - rect.width);
+        const maxY = Math.max(0, window.innerHeight - rect.height);
+        const x = Math.min(maxX, Math.max(0, ev.clientX - grabX));
+        const y = Math.min(maxY, Math.max(0, ev.clientY - grabY));
+
         this.el.style.left = `${x}px`;
         this.el.style.top = `${y}px`;
       };
@@ -128,7 +148,8 @@ export class Dialog {
           const r = await b.onClick(this);
           if (r !== false) this.close();
         } catch (e) {
-          this.showError(e instanceof Error ? e.message : String(e));
+          console.error(`对话框操作失败：${b.label}`, e);
+          this.showError(formatError(e));
         }
       });
       if (b.alignLeft && leftGroup) {
@@ -156,6 +177,7 @@ export class Dialog {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.clearError();
     this.backdrop.remove();
     for (const callback of this.onCloseCbs) callback();
   }
@@ -165,20 +187,59 @@ export class Dialog {
     this.onCloseCbs.push(cb);
   }
 
-  /** 显示错误消息（在内容区顶部插入一条）。 */
+  /** 显示错误消息：悬浮在内容区顶部，不挤占布局；自动消失，也可手动关闭。 */
   showError(msg: string): void {
-    this.body.querySelector(".dialog-error")?.remove();
+    this.clearError();
     const box = document.createElement("div");
     box.className = "dialog-error toast error";
-    box.style.position = "relative";
-    box.style.right = "auto";
-    box.style.bottom = "auto";
-    box.style.marginBottom = "8px";
+    box.setAttribute("role", "alert");
     const text = document.createElement("div");
     text.className = "toast-text";
     text.textContent = msg;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "dialog-error-close";
+    close.setAttribute("title", "关闭提示");
+    close.setAttribute("aria-label", "关闭提示");
+    close.innerHTML = svg(ICON_CROSS);
+    close.addEventListener("click", () => this.clearError());
     box.appendChild(text);
+    box.appendChild(close);
     this.body.insertBefore(box, this.body.firstChild);
+    this.errorBox = box;
+    // 悬停时暂停倒计时，移开后再继续；避免读长消息时提示突然消失。
+    box.addEventListener("mouseenter", () => this.stopErrorTimer());
+    box.addEventListener("mouseleave", () => this.scheduleErrorDismiss(box, msg.length));
+    this.scheduleErrorDismiss(box, msg.length);
+  }
+
+  /** 立即移除当前错误提示并停止自动消失计时。 */
+  clearError(): void {
+    this.stopErrorTimer();
+    this.errorBox = null;
+    this.body.querySelector(".dialog-error")?.remove();
+  }
+
+  /** 短消息停留 5 秒，长消息最多 12 秒。 */
+  private scheduleErrorDismiss(box: HTMLElement, length: number): void {
+    this.stopErrorTimer();
+    // 最小 DOM 测试环境没有定时器：保留手动关闭即可。
+    const defer = (globalThis as unknown as { setTimeout?: typeof setTimeout }).setTimeout;
+    if (typeof defer !== "function") return;
+    const ttl = Math.min(12000, Math.max(5000, 3000 + length * 60));
+    this.errorTimer = defer(() => {
+      this.errorTimer = null;
+      if (this.errorBox === box) this.clearError();
+    }, ttl);
+    // Node 测试环境里不要让计时器拖住进程退出。
+    (this.errorTimer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private stopErrorTimer(): void {
+    if (this.errorTimer === null) return;
+    const cancel = (globalThis as unknown as { clearTimeout?: (id: ReturnType<typeof setTimeout>) => void }).clearTimeout;
+    if (typeof cancel === "function") cancel(this.errorTimer);
+    this.errorTimer = null;
   }
 }
 
@@ -264,7 +325,8 @@ export function radioGroup(
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.style.display = "flex";
-  wrap.style.gap = "12px";
+  wrap.style.gap = "16px";
+  wrap.style.flexWrap = "wrap";
   for (const o of options) {
     const el = document.createElement("label");
     el.className = "radio";

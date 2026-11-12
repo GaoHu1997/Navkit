@@ -1,0 +1,1923 @@
+{
+  "schema_version": 1,
+  "suite": "real-sqlite-mysql-postgres-synchronization",
+  "run_id": "7536be8008084a04b0d6c24d80213589",
+  "timestamp_utc": "2026-11-07T03:50:33.889291800+00:00",
+  "source_hashes": {
+    "src-tauri/src/sync.rs": "8e38d219e2250d1eaeb1bdc42f44007daf3fde5e4fb2ab2b028c9bfb3ea97ef4",
+    "src-tauri/src/transfer.rs": "07038eb8eb00d64f1f4cf01212941c1ad7cfb995b4d303aa79a3b2608578b7bc",
+    "src-tauri/src/mssql.rs": "2e971da8f65756a98fe8a780f27946ea349ccbc19b98e01dc106aba48f4d360a",
+    "src-tauri/src/schema.rs": "ea518de894a687607472d9da4ad3b6bf2f660d3e8eab5442a5004ea67744f3f8",
+    "src-tauri/src/db.rs": "217dec741db49d58cc5a5d176febe3eebeddb97512da9cd228fecadb847e0758",
+    "src-tauri/tests/e2e_sync_live_matrix.rs": "c8beb0de310e67f7cf43010f7021efd081c8bd04884833141e71bda72b66d298"
+  },
+  "source_unchanged_during_run": true,
+  "counts": {
+    "directions": 9,
+    "homogeneous_directions": 3,
+    "heterogeneous_directions": 6,
+    "cases": 108,
+    "pass": 107,
+    "fail_or_not_run": 1
+  },
+  "setup": [
+    {
+      "kind": "sqlite",
+      "role": "source",
+      "status": "LIVE_CONNECTED",
+      "version": "3.46.0"
+    },
+    {
+      "kind": "sqlite",
+      "role": "target",
+      "status": "LIVE_CONNECTED",
+      "version": "3.46.0"
+    },
+    {
+      "kind": "mysql",
+      "role": "source",
+      "status": "LIVE_CONNECTED",
+      "version": "8.0.44"
+    },
+    {
+      "kind": "mysql",
+      "role": "target",
+      "status": "LIVE_CONNECTED",
+      "version": "8.0.44"
+    },
+    {
+      "kind": "postgresql",
+      "role": "source",
+      "status": "LIVE_CONNECTED",
+      "version": "16.4"
+    },
+    {
+      "kind": "postgresql",
+      "role": "target",
+      "status": "LIVE_CONNECTED",
+      "version": "16.4"
+    }
+  ],
+  "rows": [
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": []
+      },
+      "elapsed_ms": 80
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 76
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 91
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 90
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 122
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 101
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 98
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 117
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 59
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: (code: 275) CHECK constraint failed: id<>3: (code: 275) CHECK constraint failed: id<>3",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 78
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_11",
+            "target_table": "missing_out_11",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_11_sqlite",
+            "target_table": "out_11_sqlite",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": []
+          },
+          {
+            "source_table": "view_11_sqlite",
+            "target_table": "view_out_11_sqlite",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_11_sqlite 是视图：按当前查询结果物化为目标普通表并写入数据"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 85
+    },
+    {
+      "source": "sqlite",
+      "target": "sqlite",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 63
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": [
+          "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+        ]
+      },
+      "elapsed_ms": 149
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 123
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 216
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 228
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 202
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 163
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "FAIL",
+      "error": "repeating precise heterogeneous incremental comparison must be idempotent",
+      "elapsed_ms": 153
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 165
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 104
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: 3819 (HY000): Check constraint 'out_22_sqlite_chk_1' is violated.: 3819 (HY000): Check constraint 'out_22_sqlite_chk_1' is violated.",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 125
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_23",
+            "target_table": "missing_out_23",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_23_sqlite",
+            "target_table": "out_23_sqlite",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+            ]
+          },
+          {
+            "source_table": "view_23_sqlite",
+            "target_table": "view_out_23_sqlite",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_23_sqlite 是视图：按当前查询结果物化为目标普通表并写入数据",
+              "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 184
+    },
+    {
+      "source": "sqlite",
+      "target": "mysql",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 111
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": []
+      },
+      "elapsed_ms": 141
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 120
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 88
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 119
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 110
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 117
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 134
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 141
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 79
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: new row for relation \"out_34_sqlite\" violates check constraint \"out_34_sqlite_id_check\": new row for relation \"out_34_sqlite\" violates check constraint \"out_34_sqlite_id_check\"",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 104
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_35",
+            "target_table": "missing_out_35",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_35_sqlite",
+            "target_table": "out_35_sqlite",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": []
+          },
+          {
+            "source_table": "view_35_sqlite",
+            "target_table": "view_out_35_sqlite",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_35_sqlite 是视图：按当前查询结果物化为目标普通表并写入数据"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 126
+    },
+    {
+      "source": "sqlite",
+      "target": "postgresql",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 87
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": []
+      },
+      "elapsed_ms": 118
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 143
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 150
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 141
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 205
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 243
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 185
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 200
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 127
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: (code: 275) CHECK constraint failed: id<>3: (code: 275) CHECK constraint failed: id<>3",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 152
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_47",
+            "target_table": "missing_out_47",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_47_mysql",
+            "target_table": "out_47_mysql",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": []
+          },
+          {
+            "source_table": "view_47_mysql",
+            "target_table": "view_out_47_mysql",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_47_mysql 是视图：按当前查询结果物化为目标普通表并写入数据"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 137
+    },
+    {
+      "source": "mysql",
+      "target": "sqlite",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 104
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": [
+          "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+        ]
+      },
+      "elapsed_ms": 196
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 159
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 246
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 266
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 265
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 245
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 236
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 245
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 138
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: 3819 (HY000): Check constraint 'out_58_mysql_chk_1' is violated.: 3819 (HY000): Check constraint 'out_58_mysql_chk_1' is violated.",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 160
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_59",
+            "target_table": "missing_out_59",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_59_mysql",
+            "target_table": "out_59_mysql",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+            ]
+          },
+          {
+            "source_table": "view_59_mysql",
+            "target_table": "view_out_59_mysql",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_59_mysql 是视图：按当前查询结果物化为目标普通表并写入数据",
+              "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 254
+    },
+    {
+      "source": "mysql",
+      "target": "mysql",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 153
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": []
+      },
+      "elapsed_ms": 393
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 187
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 156
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 174
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 177
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 201
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 218
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 220
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 121
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: new row for relation \"out_70_mysql\" violates check constraint \"out_70_mysql_id_check\": new row for relation \"out_70_mysql\" violates check constraint \"out_70_mysql_id_check\"",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 150
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_71",
+            "target_table": "missing_out_71",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_71_mysql",
+            "target_table": "out_71_mysql",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": []
+          },
+          {
+            "source_table": "view_71_mysql",
+            "target_table": "view_out_71_mysql",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_71_mysql 是视图：按当前查询结果物化为目标普通表并写入数据"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 191
+    },
+    {
+      "source": "mysql",
+      "target": "postgresql",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 139
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": []
+      },
+      "elapsed_ms": 78
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 75
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 88
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 373
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 130
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 117
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 117
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 133
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 52
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: (code: 275) CHECK constraint failed: id<>3: (code: 275) CHECK constraint failed: id<>3",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 75
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_83",
+            "target_table": "missing_out_83",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_83_postgresql",
+            "target_table": "out_83_postgresql",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": []
+          },
+          {
+            "source_table": "view_83_postgresql",
+            "target_table": "view_out_83_postgresql",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_83_postgresql 是视图：按当前查询结果物化为目标普通表并写入数据"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 88
+    },
+    {
+      "source": "postgresql",
+      "target": "sqlite",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 54
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": [
+          "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+        ]
+      },
+      "elapsed_ms": 169
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 122
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 169
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 234
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 335
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 252
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 180
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 185
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 108
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: 3819 (HY000): Check constraint 'out_94_postgresql_chk_1' is violated.: 3819 (HY000): Check constraint 'out_94_postgresql_chk_1' is violated.",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 129
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_95",
+            "target_table": "missing_out_95",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_95_postgresql",
+            "target_table": "out_95_postgresql",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+            ]
+          },
+          {
+            "source_table": "view_95_postgresql",
+            "target_table": "view_out_95_postgresql",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_95_postgresql 是视图：按当前查询结果物化为目标普通表并写入数据",
+              "MySQL DDL 自动提交：取消/错误可回滚数据，但已完成建表/重建不能回滚"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 188
+    },
+    {
+      "source": "postgresql",
+      "target": "mysql",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": false,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 257
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "full_create",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "warnings": []
+      },
+      "elapsed_ms": 541
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "structure_then_data",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 98
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "replace",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 101
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "recreate",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 133
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "incremental_insert",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 0,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 126
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "incremental_update",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "inserted": 2,
+        "updated": 1,
+        "extra_target_row_preserved": true
+      },
+      "elapsed_ms": 118
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "exact_precision_and_whitespace_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 3,
+        "changed_rows": 3,
+        "updated_rows": 3,
+        "repeat_writes": 0,
+        "oracle": "independent i64 and BigDecimal equality plus exact whitespace-bearing TEXT"
+      },
+      "elapsed_ms": 128
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "composite_unicode_key_incremental",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 2,
+        "inserted_rows": 1,
+        "updated_rows": 1,
+        "oracle": "complete mapped composite primary key with Unicode, quote, backslash and leading/trailing whitespace"
+      },
+      "elapsed_ms": 141
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "filter_and_mapping",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 83
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "constraint_failure_rollback",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "expected_error": "第 4 条目标语句执行失败，未提交数据已回滚: error returned from database: new row for relation \"out_106_postgresql\" violates check constraint \"out_106_postgresql_id_check\": new row for relation \"out_106_postgresql\" violates check constraint \"out_106_postgresql_id_check\"",
+        "rollback_verified": true
+      },
+      "elapsed_ms": 111
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "whole_database_partial_failure_and_view",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp",
+        "per_table_reports": [
+          {
+            "source_table": "missing_107",
+            "target_table": "missing_out_107",
+            "rows": 0,
+            "created": false,
+            "skipped": false,
+            "error": "源表不存在或没有可同步列",
+            "warnings": []
+          },
+          {
+            "source_table": "case_107_postgresql",
+            "target_table": "out_107_postgresql",
+            "rows": 4,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": []
+          },
+          {
+            "source_table": "view_107_postgresql",
+            "target_table": "view_out_107_postgresql",
+            "rows": 2,
+            "created": true,
+            "skipped": false,
+            "error": null,
+            "warnings": [
+              "源对象 view_107_postgresql 是视图：按当前查询结果物化为目标普通表并写入数据"
+            ]
+          }
+        ]
+      },
+      "elapsed_ms": 134
+    },
+    {
+      "source": "postgresql",
+      "target": "postgresql",
+      "case": "invalid_options_preserve_target",
+      "evidence_type": "LIVE_DATABASE_SYNC",
+      "homogeneous": true,
+      "status": "PASS",
+      "details": {
+        "source_rows": 4,
+        "oracle": "every cell: NULL/empty/Unicode/whitespace/binary/boolean/decimal/microsecond timestamp"
+      },
+      "elapsed_ms": 79
+    }
+  ],
+  "cleanup": [
+    {
+      "endpoint": "mysql-source",
+      "success": true,
+      "error": null
+    },
+    {
+      "endpoint": "mysql-target",
+      "success": true,
+      "error": null
+    },
+    {
+      "endpoint": "postgresql-source",
+      "success": true,
+      "error": null
+    },
+    {
+      "endpoint": "postgresql-target",
+      "success": true,
+      "error": null
+    },
+    {
+      "endpoint": "sqlite-source",
+      "success": true,
+      "error": null
+    },
+    {
+      "endpoint": "sqlite-target",
+      "success": true,
+      "error": null
+    },
+    {
+      "endpoint": "owned_sqlite_directory",
+      "success": true,
+      "error": null
+    }
+  ],
+  "limitations": [
+    "Homogeneous MySQL/PostgreSQL use separate UUID namespaces and separate production pools on the same local server, not separate machines.",
+    "Incremental synchronization means key comparison; it is not binlog/WAL CDC and does not delete target-only rows.",
+    "All data checks call the actual Rust synchronization engine; this suite does not assert GUI click paths."
+  ]
+}

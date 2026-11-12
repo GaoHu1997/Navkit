@@ -10,6 +10,8 @@
  * 设计目标：一屏一主题，降低表单认知负担；已完成步骤可点击回退。
  */
 
+import { formatError } from "../core/execution";
+
 export interface WizardStep {
   /** 步骤标题（显示在步骤条上）。 */
   label: string;
@@ -27,6 +29,8 @@ export interface WizardOptions {
   onFinish: () => void | Promise<void>;
   /** 完成按钮文案。 */
   finishLabel?: string;
+  /** 单一完成门禁；长任务回执/预览确认变化后调用 refreshControls() 重新求值。 */
+  finishEligible?: () => boolean;
   /** 步骤切换回调（常用于懒加载该步数据）。 */
   onEnter?: (index: number) => void;
 }
@@ -34,6 +38,8 @@ export interface WizardOptions {
 /** 勾选图标（完成态徽标）。 */
 const CHECK_SVG =
   '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.4 6.3 4.9 8.7 9.6 3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+let wizardSequence = 0;
 
 export class Wizard {
   /** 步骤条元素（调用方 append 到 body 顶部）。 */
@@ -43,8 +49,10 @@ export class Wizard {
   /** 底部按钮（调用方放进 Dialog footer，顺序：上一步 → 下一步/完成）。 */
   readonly backBtn: HTMLButtonElement;
   readonly nextBtn: HTMLButtonElement;
-  /** 错误提示行。 */
+  /** 错误提示浮层（悬浮在内容区右上角；不占布局，自动消失，也可手动关闭）。 */
   readonly errorEl: HTMLElement;
+  private readonly errorText: HTMLElement;
+  private errorTimer: ReturnType<typeof setTimeout> | null = null;
 
   private index = 0;
   private readonly steps: WizardStep[];
@@ -54,6 +62,8 @@ export class Wizard {
   private readonly lines: HTMLElement[] = [];
   private readonly opts: WizardOptions;
   private busy = false;
+  private finishing = false;
+  private readonly ariaId = `wizard-${++wizardSequence}`;
 
   constructor(opts: WizardOptions) {
     this.opts = opts;
@@ -70,6 +80,17 @@ export class Wizard {
     this.errorEl.className = "wizard-error";
     this.errorEl.setAttribute("role", "alert");
     this.errorEl.hidden = true;
+    this.errorText = document.createElement("div");
+    this.errorText.className = "wizard-error-text";
+    const errorClose = document.createElement("button");
+    errorClose.type = "button";
+    errorClose.className = "wizard-error-close";
+    errorClose.setAttribute("aria-label", "关闭提示");
+    errorClose.setAttribute("title", "关闭提示");
+    // 纯文本关闭符号：向导模块不引入图标依赖，最小 DOM 测试桩也能直接执行。
+    errorClose.textContent = "×";
+    errorClose.addEventListener("click", () => this.clearError());
+    this.errorEl.append(this.errorText, errorClose);
 
     this.backBtn = document.createElement("button");
     this.backBtn.type = "button";
@@ -80,7 +101,9 @@ export class Wizard {
     this.nextBtn = document.createElement("button");
     this.nextBtn.type = "button";
     this.nextBtn.className = "btn primary";
-    this.nextBtn.addEventListener("click", () => void this.next());
+    this.nextBtn.addEventListener("click", () => {
+      void this.next().catch(error => { console.error("向导步骤操作失败", error); this.showError(formatError(error)); });
+    });
 
     this.buildSteps();
     this.buildPanels();
@@ -97,6 +120,7 @@ export class Wizard {
 
   /** 跳到指定步（不校验）。 */
   go(index: number): void {
+    if (this.busy || this.finishing) return;
     const clamped = Math.max(0, Math.min(this.steps.length - 1, index));
     this.index = clamped;
     this.stepEls.forEach((el, i) => {
@@ -106,6 +130,7 @@ export class Wizard {
       el.classList.toggle("done", done);
       el.setAttribute("aria-selected", String(active));
       el.setAttribute("aria-current", active ? "step" : "false");
+      el.tabIndex = active ? 0 : -1;
       // 序号徽标：完成态换勾，当前态强调实底
       const badge = this.badges[i];
       if (badge) {
@@ -120,9 +145,9 @@ export class Wizard {
       node.hidden = i !== clamped;
     });
     this.clearError();
-    this.backBtn.disabled = clamped === 0;
     const last = clamped === this.steps.length - 1;
     this.nextBtn.textContent = last ? (this.opts.finishLabel ?? "完成") : "下一步";
+    this.refreshControls();
     // 切换时内容回到顶部
     const pane = this.nodes[clamped]?.querySelector<HTMLElement>(".wizard-panel-inner");
     if (pane) pane.scrollTop = 0;
@@ -136,12 +161,13 @@ export class Wizard {
 
   /** 上一步。 */
   back(): void {
+    if (this.busy || this.finishing) return;
     if (this.index > 0) this.go(this.index - 1);
   }
 
   /** 下一步（含校验）；最后一步触发 onFinish。 */
   async next(): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || this.finishing) return;
     const step = this.steps[this.index];
     const problem = step?.validate?.() ?? null;
     if (problem) {
@@ -152,34 +178,70 @@ export class Wizard {
       this.go(this.index + 1);
       return;
     }
-    this.busy = true;
-    this.nextBtn.disabled = true;
-    this.nextBtn.classList.add("busy");
+    if (this.opts.finishEligible && !this.opts.finishEligible()) { this.refreshControls(); return; }
+    this.finishing = true;
+    this.refreshControls();
     try {
       await this.opts.onFinish();
     } finally {
-      this.busy = false;
-      this.nextBtn.disabled = false;
-      this.nextBtn.classList.remove("busy");
+      // 外部 service 的 busy 与完成门禁独立；finally 不能覆盖资源未排空/unknown 锁。
+      this.finishing = false;
+      this.refreshControls();
     }
   }
 
-  /** 显示校验/执行错误。 */
+  /** 显示校验/执行错误：悬浮提示，不挤占内容区；长文本停留更久，悬停暂停倒计时。 */
   showError(message: string): void {
-    this.errorEl.textContent = message;
+    this.errorText.textContent = message;
+    this.errorEl.title = message;
     this.errorEl.hidden = false;
+    this.scheduleErrorDismiss(message.length);
   }
 
   /** 清除错误。 */
   clearError(): void {
+    this.stopErrorTimer();
     this.errorEl.hidden = true;
+    this.errorEl.title = "";
+  }
+
+  /** 短消息停留 5 秒，长消息最多 12 秒。 */
+  private scheduleErrorDismiss(length: number): void {
+    this.stopErrorTimer();
+    // 最小 DOM 测试环境没有定时器：保留手动关闭即可。
+    const defer = (globalThis as unknown as { setTimeout?: typeof setTimeout }).setTimeout;
+    if (typeof defer !== "function") return;
+    const ttl = Math.min(12000, Math.max(5000, 3000 + length * 60));
+    this.errorTimer = defer(() => {
+      this.errorTimer = null;
+      this.clearError();
+    }, ttl);
+    // Node 测试环境里不要让计时器拖住进程退出。
+    (this.errorTimer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private stopErrorTimer(): void {
+    if (this.errorTimer === null) return;
+    const cancel = (globalThis as unknown as { clearTimeout?: (id: ReturnType<typeof setTimeout>) => void }).clearTimeout;
+    if (typeof cancel === "function") cancel(this.errorTimer);
+    this.errorTimer = null;
   }
 
   /** 锁定底部按钮（长任务执行期间避免重复提交或中途跳步）。 */
   setBusy(busy: boolean): void {
     this.busy = busy;
-    this.nextBtn.disabled = busy;
-    this.backBtn.disabled = busy || this.index === 0;
+    this.refreshControls();
+  }
+
+  /** 每次从同一条件求值，不能以旧 disabled 值或 finally 无条件解锁。 */
+  refreshControls(): void {
+    const locked = this.busy || this.finishing;
+    this.bodyEl.setAttribute("aria-busy", String(locked));
+    const last = this.index === this.steps.length - 1;
+    this.nextBtn.disabled = locked || (last && this.opts.finishEligible !== undefined && !this.opts.finishEligible());
+    this.backBtn.disabled = locked || this.index === 0;
+    this.nextBtn.classList.toggle("busy", locked);
+    for (const step of this.stepEls) step.setAttribute("aria-disabled", String(locked));
   }
 
   private buildSteps(): void {
@@ -187,6 +249,8 @@ export class Wizard {
       const step = document.createElement("div");
       step.className = "wizard-step";
       step.setAttribute("role", "tab");
+      step.id = `${this.ariaId}-step-${i}`;
+      step.setAttribute("aria-controls", `${this.ariaId}-panel-${i}`);
       step.tabIndex = 0;
 
       const badge = document.createElement("div");
@@ -200,7 +264,7 @@ export class Wizard {
       step.append(badge, label);
       // 已完成步骤可点击回退；当前/未来步骤不可点
       const activate = () => {
-        if (this.busy) return;
+        if (this.busy || this.finishing) return;
         if (i < this.index) this.go(i);
       };
       step.addEventListener("click", activate);
@@ -229,6 +293,8 @@ export class Wizard {
       const node = document.createElement("div");
       node.className = "wizard-panel";
       node.setAttribute("role", "tabpanel");
+      node.id = `${this.ariaId}-panel-${i}`;
+      node.setAttribute("aria-labelledby", `${this.ariaId}-step-${i}`);
 
       const inner = document.createElement("div");
       inner.className = "wizard-panel-inner";

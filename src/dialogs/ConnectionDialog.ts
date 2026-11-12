@@ -4,7 +4,9 @@ import { currentDriverStatuses, ensureDriverStatuses } from "../core/driverStatu
 import { kindLabel, kindMeta, kindIcon } from "../core/dbcatalog";
 import type { ConnectionConfig, ConnectionRequest, DbKind } from "../core/types";
 import { checkbox, Dialog, field, numberInput, passwordInput, textInput } from "../ui/Dialog";
+import type { RuntimeProfileBindings, RuntimeProfileSubmission } from "../core/runtime-profile";
 import { iconSvgByName } from "../ui/icons";
+import { createRuntimeProfileEditor } from "../ui/RuntimeProfileEditor";
 
 export function newConnectionId(): string {
   return `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -13,6 +15,8 @@ export interface ConnectionDialogResult {
   config: ConnectionConfig;
   /** undefined preserves ciphertext; empty string deliberately removes it. */
   password?: string;
+  /** Persist with the backend local profile service; never merge this draft into params. */
+  runtimeProfile?: RuntimeProfileSubmission;
 }
 export function connectionField(label: string, control: HTMLElement): HTMLElement {
   control.setAttribute("aria-label", label.replace(/[:：]$/, ""));
@@ -43,10 +47,13 @@ export function prepareConnectionDialog(dlg: Dialog): void {
 /** Compatible groups argument intentionally unused: grouping belongs to the connection tree. */
 export function openConnectionDialog(
   existing: ConnectionConfig | null, _groups: string[],
-  onSaved: (result: ConnectionDialogResult) => void,
-  defaultKind: DbKind = "mysql", selectedDriver?: DriverDefinition,
+  onSaved: (result: ConnectionDialogResult) => void | Promise<void>,
+  defaultKind: DbKind = "mysql", selectedDriver?: DriverDefinition, runtimeProfiles?: RuntimeProfileBindings,
 ): Dialog {
   const previousFocus = document.activeElement as HTMLElement | null;
+  // 空 ID 表示复制/新建；一次表单会话使用稳定 ID，保存失败重试不会创建多个副本。
+  const connectionId = existing?.id || newConnectionId();
+  const editing = Boolean(existing?.id);
   const kind = selectedDriver ? "odbc" : existing?.kind ?? defaultKind;
   const meta = kindMeta(kind);
   let driver = selectedDriver;
@@ -91,7 +98,7 @@ export function openConnectionDialog(
   const general = document.createElement("div"); general.append(summary, connectionField("连接名称:", name));
   if (!fileKind) {
     general.append(connectionField("主机 / 地址:", host), connectionField("端口:", port), connectionField(kind === "dynamodb" ? "Access Key ID:" : "用户名:", user), connectionField(kind === "dynamodb" ? "Secret Access Key:" : ["bigquery", "spanner", "salesforce"].includes(kind) ? "OAuth 访问令牌:" : "密码:", password));
-    savePassword.style.cssText = "margin:0 0 14px 140px"; general.append(savePassword);
+    general.append(field("", savePassword));
     // One input, one panel owner. Never move the database input between tabs.
     general.append(connectionField(kind === "bigquery" ? "项目 / 数据集:" : kind === "spanner" ? "项目 / 实例 / 库:" : kind === "salesforce" ? "REST API 版本:" : kind === "hbase" ? "Namespace:" : kind === "odbc" && !driverId ? "数据库 / DSN:" : "数据库:", database));
   }
@@ -104,35 +111,41 @@ export function openConnectionDialog(
     });
     pathControl.append(file, browse); file.setAttribute("aria-label", "数据库文件"); general.append(connectionField("数据库文件:", pathControl));
   }
-  const advanced = document.createElement("div"); const hint = document.createElement("p");
-  hint.style.cssText = "line-height:1.7;margin:0 0 16px;color:var(--fg-muted)";
-  hint.textContent = driverId
+  const advanced = document.createElement("div");
+  const hint = document.createElement("div"); hint.className = "conn-hint";
+  const hintLine = document.createElement("div"); hintLine.className = "conn-hint-line"; hintLine.textContent = "ⓘ 驱动、附加参数与兼容性说明";
+  const hintDetail = document.createElement("details"); hintDetail.className = "conn-hint-detail";
+  const hintSummary = document.createElement("summary"); hintSummary.textContent = "查看说明";
+  const hintBody = document.createElement("p");
+  hintDetail.append(hintSummary, hintBody); hint.append(hintLine, hintDetail);
+  const hintText = (text: string) => { hintBody.textContent = text; };
+  hintText(driverId
     ? driver?.protocol === "jdbc"
       ? "自定义 JDBC 驱动通过本地 .jar 与 Java 11+ 连接。留空沿用驱动 URL 模板；可用 {{host}}、{{port}}、{{database}}、{{file}}、{{user}}、{{password}}。不要在模板里保存明文密码。"
       : "自定义驱动通过原生 ODBC 连接。留空沿用驱动模板；可用 {{host}}、{{port}}、{{database}}、{{file}}、{{user}}、{{password}}、{{driver}}、{{dsn}}。替换值自动转义，不要额外添加花括号。"
-    : isOdbc ? "可填写完整 ODBC 连接串；不要在连接串保存明文 PWD/Password，密码应填写在常规页并加密保存。留空时数据库字段作为 DSN。" : "填写数据库适配器支持的附加参数。未实现的 SSL / SSH / HTTP 通道不在此展示。";
+    : isOdbc ? "可填写完整 ODBC 连接串；不要在连接串保存明文 PWD/Password，密码应填写在常规页并加密保存。留空时数据库字段作为 DSN。" : "填写数据库适配器支持的附加参数。未实现的 SSL / SSH / HTTP 通道不在此展示。");
   if (meta?.protocol === "native") {
-    hint.textContent = `${meta.note} 附加参数支持 JSON 对象或 key=value;key=value；凭据请填常规页，不要放在未加密参数中。`;
+    hintText(`${meta.note} 附加参数支持 JSON 对象或 key=value;key=value；凭据请填常规页，不要放在未加密参数中。`);
     params.placeholder = kind === "h2" ? '{"jdbc_url":"jdbc:h2:mem:navkit"}' : kind === "dynamodb" ? '{"region":"us-east-1"}' : '{"ssl":false}';
   }
   if (kind === "bigquery" && !driverId) {
-    hint.textContent = "使用官方完整 BigQuery JDBC 与 Java 11+；用户名为 token，令牌填常规页并加密保存。云端固定 bigquery.googleapis.com:443 和正常 HTTPS，项目格式为 project 或 project/dataset。令牌过期后需更新；ADC、刷新令牌及其它认证请显式配置自定义驱动。";
+    hintText("使用官方完整 BigQuery JDBC 与 Java 11+；用户名为 token，令牌填常规页并加密保存。云端固定 bigquery.googleapis.com:443 和正常 HTTPS，项目格式为 project 或 project/dataset。令牌过期后需更新；ADC、刷新令牌及其它认证请显式配置自定义驱动。");
     params.placeholder = "云端留空使用正常 HTTPS";
   }
   if (kind === "spanner" && !driverId) {
-    hint.textContent = "使用完整 Google Spanner JDBC 与 Java 11+；数据库填 project/instance/database。云端固定 spanner.googleapis.com:443 和正常 TLS，用户名 token，预生成令牌填常规页。令牌过期后需更新。仅连接本地模拟器时，填写字面回环地址和端口，清空用户名及令牌，再设置 ssl=false；令牌不会发送到明文端点。服务账户、ADC、刷新令牌和其它端点请配置自定义驱动。";
+    hintText("使用完整 Google Spanner JDBC 与 Java 11+；数据库填 project/instance/database。云端固定 spanner.googleapis.com:443 和正常 TLS，用户名 token，预生成令牌填常规页。令牌过期后需更新。仅连接本地模拟器时，填写字面回环地址和端口，清空用户名及令牌，再设置 ssl=false；令牌不会发送到明文端点。服务账户、ADC、刷新令牌和其它端点请配置自定义驱动。");
     params.placeholder = "云端留空；无凭据本地模拟器显式填 ssl=false";
   }
   if (kind === "salesforce" && !driverId) {
-    hint.textContent = "内置 Salesforce REST，不需要另装驱动。主机填写组织 instance 域名（如 your-org.my.salesforce.com），密码填预生成 OAuth token；API 版本默认 v59.0。支持 SOQL 和 JSON create/update/delete；云端 HTTPS 严格验证证书，令牌过期需手动更新。自定义 JDBC/ODBC 绑定仍可使用。";
+    hintText("内置 Salesforce REST，不需要另装驱动。主机填写组织 instance 域名（如 your-org.my.salesforce.com），密码填预生成 OAuth token；API 版本默认 v59.0。支持 SOQL 和 JSON create/update/delete；云端 HTTPS 严格验证证书，令牌过期需手动更新。自定义 JDBC/ODBC 绑定仍可使用。");
     params.placeholder = "云端留空；可设 api_version=v59.0";
   }
   if (kind === "hbase" && !driverId) {
-    hint.textContent = "内置 HBase Stargate REST，默认端口 8080（不是 Thrift 9090/Phoenix）。数据库填 namespace；使用 JSON scan/get/put/delete，二进制可用 *_base64。无认证端点可用 HTTP；Basic 凭据要求 HTTPS 或字面回环地址，ssl=true 启用验证证书的 HTTPS。Kerberos/SPNEGO 请显式配置自定义驱动。";
+    hintText("内置 HBase Stargate REST，默认端口 8080（不是 Thrift 9090/Phoenix）。数据库填 namespace；使用 JSON scan/get/put/delete，二进制可用 *_base64。无认证端点可用 HTTP；Basic 凭据要求 HTTPS 或字面回环地址，ssl=true 启用验证证书的 HTTPS。Kerberos/SPNEGO 请显式配置自定义驱动。");
     params.placeholder = "无认证 REST 可留空；HTTPS 填 ssl=true";
   }
   if (kind === "argodb" && !driverId) {
-    hint.textContent = "使用星环官方 Quark 完整 JDBC 与 Java 11+。主机填 ArgoDB Quark Gateway，端口通常 10000；当前托管路线明确 auth=noSasl，用户名和密码均留空。LDAP/NONE/Kerberos/TLS 请配置显式自定义 JDBC；不将该路线标记为这些认证已验证。";
+    hintText("使用星环官方 Quark 完整 JDBC 与 Java 11+。主机填 ArgoDB Quark Gateway，端口通常 10000；当前托管路线明确 auth=noSasl，用户名和密码均留空。LDAP/NONE/Kerberos/TLS 请配置显式自定义 JDBC；不将该路线标记为这些认证已验证。");
     params.placeholder = "普通 noSasl 留空；其它认证使用自定义 JDBC";
   }
   hint.id = newConnectionId();
@@ -145,6 +158,7 @@ export function openConnectionDialog(
   const versionField = connectionField("数据库驱动版本:", versionSelect);
   versionField.style.display = "none";
   advanced.append(hint, versionField, connectionField(driverId ? "连接串模板:" : "附加参数:", params));
+  const option = (label: string, value: string): HTMLOptionElement => { const item = document.createElement("option"); item.textContent = label; item.value = value; return item; };
   const populateVersions = (rows: { kind: string; version: string; status: string; can_download: boolean }[]) => {
     if (driverId) return;
     const versions = rows.filter(r => r.kind === kind && r.version).map(r => ({ ...r }));
@@ -153,23 +167,37 @@ export function openConnectionDialog(
       versions.unshift({ kind, version: savedVersion.version, status: "missing", can_download: false });
     }
     if (!versions.length) return;
-    versionSelect.replaceChildren(new Option("推荐版本（默认）", ""), ...versions.map(r => new Option(`${r.version}${r.status === "ready" ? "（已下载）" : "（未下载）"}`, r.version)));
+    versionSelect.replaceChildren(option("推荐版本（默认）", ""), ...versions.map(r => option(`${r.version}${r.status === "ready" ? "（已下载）" : "（未下载）"}`, r.version)));
     if (savedVersion?.kind === kind) versionSelect.value = savedVersion.version;
     versionField.style.display = "";
   };
   const cachedStatuses = currentDriverStatuses();
   if (cachedStatuses) populateVersions(cachedStatuses);
   else void ensureDriverStatuses().then(populateVersions).catch(() => undefined);
+  // 本机 TLS/SSH/HTTP 配置独立加密保存。旧参数不在打开表单时重写或迁移。
+  const tlsCapable = !driverId && (meta?.protocol === "mysql" || meta?.protocol === "postgres");
+  const httpCapable = !driverId && kind === "h2";
+  const tlsPanel = document.createElement("div");
+  const sshPanel = document.createElement("div");
+  const httpPanel = document.createElement("div");
+  const runtimeEditor = tlsCapable || httpCapable ? createRuntimeProfileEditor({
+    container: advanced, containers: { advanced, tls: tlsPanel, ssh: sshPanel, http: httpPanel }, status, connectionId, editing, bindings: runtimeProfiles,
+    httpAvailable: httpCapable, databaseTransportAvailable: tlsCapable,
+    rawParameters: () => params.value,
+    pickFile: async () => { const path = await openFile({ multiple: false, directory: false, title: "选择证书或私钥文件" }); return typeof path === "string" ? path : null; },
+  }) : null;
   const buildParams = (): string => {
     if (driverId) return encodeDriverParams(driverId, params.value.trim());
     const version = versionSelect.value;
-    if (version) return encodeVersionParams(kind, version, params.value.trim());
-    return params.value.trim();
+    const raw = params.value;
+    if (version) return encodeVersionParams(kind, version, raw);
+    return raw;
   };
   const request = (): ConnectionRequest => ({ kind, host: host.value.trim(), port: Number(port.value) || 0,
-    user: user.value.trim(), password: password.value, database: database.value.trim(), file: file.value.trim(),
+    user: user.value.trim(), password: runtimeEditor?.usesHttp() ? "" : password.value, database: database.value.trim(), file: file.value.trim(),
     params: buildParams(), timeout_secs: 30 });
   let showTab = (_tab: string) => {};
+  let tabExists = (_label: string) => false;
   const validate = (): boolean => {
     name.removeAttribute("aria-invalid");
     if (!name.value.trim()) { status.textContent = "请输入连接名称。"; name.setAttribute("aria-invalid", "true"); showTab("常规"); name.focus(); return false; }
@@ -179,22 +207,45 @@ export function openConnectionDialog(
       status.textContent = "请移除连接串里的明文密码，使用常规页密码字段。"; showTab("高级"); params.focus(); return false;
     }
     if (driverId && !driver) { status.textContent = "自定义驱动未载入或已删除，无法保存连接。"; return false; }
+    try { runtimeEditor?.submission(); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "本机通道配置无效；输入已保留。";
+      status.textContent = message;
+      const tab = /SSH/.test(message) ? "SSH" : /HTTP/.test(message) ? "HTTP" : /TLS|证书|主机名/.test(message) ? "SSL/TLS" : "高级";
+      if (tabExists(tab)) showTab(tab);
+      return false;
+    }
     return true;
   };
   let testing = false;
-  const dlg = new Dialog({ title: `${existing ? "连接属性" : "新建连接"} (${driver?.name ?? kindLabel(kind)})`, width: 580, height: 570,
+  let saving = false;
+  const setBusy = (busy: boolean): void => {
+    if (busy) dlg.el.setAttribute("aria-busy", "true");
+    else dlg.el.removeAttribute("aria-busy");
+    for (const button of dlg.footer.querySelectorAll<HTMLButtonElement>("button")) {
+      if (button.textContent !== "取消") button.disabled = busy;
+    }
+    for (const control of [name, host, port, user, password, database, file, params, versionSelect, saveCheckbox]) control.disabled = busy;
+    runtimeEditor?.setBusy(busy);
+  };
+  const dlg = new Dialog({ title: `${editing ? "连接属性" : "新建连接"} (${driver?.name ?? kindLabel(kind)})`, width: 580, height: 570,
     render: (body) => {
       body.style.cssText = "display:flex;flex-direction:column;overflow:hidden";
       const tabs = document.createElement("div"); tabs.className = "tabs"; tabs.style.cssText = "flex:1;min-height:0";
       const header = document.createElement("div"); header.className = "tabs-header"; header.setAttribute("role", "tablist");
       const content = document.createElement("div"); content.className = "tabs-body"; content.style.overflow = "auto";
-      const panels = new Map([["常规", general], ["高级", advanced]]); const buttons = new Map<string, HTMLButtonElement>();
+      const defs: [string, HTMLElement][] = [["常规", general], ["高级", advanced]];
+      if (tlsCapable) defs.push(["SSL/TLS", tlsPanel], ["SSH", sshPanel]);
+      if (httpCapable) defs.push(["HTTP", httpPanel]);
+      const panels = new Map(defs); const buttons = new Map<string, HTMLButtonElement>();
+      const order = defs.map(([label]) => label);
+      tabExists = (label) => panels.has(label);
       for (const [label, panel] of panels) {
         panel.id = newConnectionId(); panel.setAttribute("role", "tabpanel");
         const button = document.createElement("button"); button.type = "button"; button.className = "tabs-tab"; button.textContent = label; button.id = newConnectionId();
         button.setAttribute("role", "tab"); button.setAttribute("aria-controls", panel.id); panel.setAttribute("aria-labelledby", button.id);
         button.addEventListener("click", () => showTab(label));
-        button.addEventListener("keydown", (e) => { if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); const next = label === "常规" ? "高级" : "常规"; showTab(next); buttons.get(next)?.focus(); } });
+        button.addEventListener("keydown", (e) => { if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return; e.preventDefault(); const at = order.indexOf(label); const next = order[(at + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length]; showTab(next); buttons.get(next)?.focus(); });
         buttons.set(label, button); header.append(button); content.append(panel);
       }
       showTab = (label) => {
@@ -205,30 +256,53 @@ export function openConnectionDialog(
     },
     buttons: [
       { label: "测试连接", alignLeft: true, onClick: async () => {
-        if (testing || !validate()) return false;
-        testing = true; status.textContent = "正在建立真实连接…"; dlg.el.setAttribute("aria-busy", "true");
-        try { const result = await driverApi.testConnection(request(), existing?.id, Boolean(existing?.password) && !passwordChanged);
-          status.textContent = result.ok ? `连接成功${result.version ? ` — ${result.version}` : ""}` : `连接失败：${result.message}`;
+        if (testing || saving || !validate()) return false;
+        const submission = runtimeEditor?.submission(true);
+        const capturedRequest = request();
+        testing = true; status.textContent = "正在建立真实连接…"; setBusy(true);
+        try { const result = submission
+          ? await runtimeProfiles!.test(capturedRequest, connectionId, submission, !runtimeEditor?.usesHttp() && Boolean(existing?.password) && !passwordChanged)
+          : await driverApi.testConnection(capturedRequest, existing?.id, Boolean(existing?.password) && !passwordChanged);
+          if (result.ok && existing?.id && !submission) {
+            let diag = "";
+            try {
+              const items = await driverApi.options(existing.id);
+              const notable = items.filter((d) => d.status !== "applied");
+              diag = notable.length ? "\n" + notable.map((d) => `· ${d.key}（${d.status}）：${d.message}`).join("\n") : "";
+            } catch (error) { diag = `\n未能验证高级参数：${String(error)}`; }
+            status.textContent = `连接成功${result.version ? ` — ${result.version}` : ""}${diag}`;
+          } else {
+            status.textContent = result.ok ? `连接成功${result.version ? ` — ${result.version}` : ""}` : `连接失败：${result.message}`;
+          }
         } catch (error) { status.textContent = `连接失败：${String(error)}`; }
-        finally { testing = false; dlg.el.removeAttribute("aria-busy"); }
+        finally { testing = false; setBusy(false); }
         return false;
       } },
-      { label: "保存", primary: true, onClick: () => {
-        if (testing || !validate()) return false;
+      { label: "保存", primary: true, onClick: async () => {
+        if (testing || saving || !validate()) return false;
         const req = request();
-        const config: ConnectionConfig = { ...req, id: existing?.id ?? newConnectionId(), name: name.value.trim(),
-          password: saveCheckbox.checked ? existing?.password ?? "" : "", group: existing?.group ?? "",
+        const submission = runtimeEditor?.submission();
+        const config: ConnectionConfig = { ...req, id: connectionId, name: name.value.trim(),
+          password: runtimeEditor?.usesHttp() ? existing?.password ?? "" : saveCheckbox.checked ? existing?.password ?? "" : "", group: existing?.group ?? "",
           read_only: existing?.read_only ?? false, keep_alive: existing?.keep_alive ?? false };
-        const savedPassword = !saveCheckbox.checked ? "" : existing?.password && !passwordChanged ? undefined : password.value;
-        onSaved({ config, password: savedPassword });
+        const savedPassword = runtimeEditor?.usesHttp() ? undefined : !saveCheckbox.checked ? "" : existing?.password && !passwordChanged ? undefined : password.value;
+        saving = true; status.textContent = "正在保存连接…"; setBusy(true);
+        try {
+          await onSaved({ config, password: savedPassword, ...(submission ? { runtimeProfile: submission } : {}) });
+        } catch (error) {
+          status.textContent = `保存失败：${String(error)}`;
+          return false;
+        } finally {
+          saving = false; setBusy(false);
+        }
       } }, { label: "取消" },
     ],
   });
-  prepareConnectionDialog(dlg); dlg.onClose(() => { if (previousFocus?.isConnected) previousFocus.focus(); });
+  prepareConnectionDialog(dlg); dlg.onClose(() => { runtimeEditor?.dispose(); if (previousFocus?.isConnected) previousFocus.focus(); });
   if (driverId && !driver) void driverApi.list().then((drivers) => {
     driver = drivers.find((item) => item.id === driverId); updateSummary();
     if (!driver) status.textContent = "此连接使用的自定义驱动已删除，请在驱动管理中恢复。";
-    else dlg.setTitle(`${existing ? "连接属性" : "新建连接"} (${driver.name})`);
+    else dlg.setTitle(`${editing ? "连接属性" : "新建连接"} (${driver.name})`);
   }).catch((error) => { status.textContent = `读取驱动失败：${String(error)}`; });
   return dlg;
 }

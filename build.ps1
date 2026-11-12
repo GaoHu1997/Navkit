@@ -117,9 +117,10 @@ $sha = [System.Security.Cryptography.SHA256]::Create()
 $srcHash = -join (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($srcFingerprint))) | ForEach-Object { $_.ToString("x2") })
 
 # 从 exe 二进制中提取真正内嵌的前端资源名（tauri 以明文记录 assets 路径）
+# 用通用 chunk 名正则，避免新增分块（如 path-*.js）漏检导致校验误报
 $exeBytes = [System.IO.File]::ReadAllBytes((Join-Path $outDir "navkit.exe"))
 $exeText = [System.Text.Encoding]::ASCII.GetString($exeBytes)
-$embeddedAssets = (([regex]::Matches($exeText, '(?:index|window)-[A-Za-z0-9_-]{8}\.js') |
+$embeddedAssets = (([regex]::Matches($exeText, '[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9_-]{8}\.js') |
     ForEach-Object { $_.Value } | Sort-Object -Unique) -join ", ")
 if (-not $embeddedAssets) { $embeddedAssets = "(未识别)" }
 $info = @(

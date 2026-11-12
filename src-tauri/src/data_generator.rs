@@ -8,6 +8,12 @@ use tauri::State;
 use crate::{commands::AppState, db::{self, Db}, error::{AppError, CmdResult}, models::{DbKind, TableSchema}, schema, storage};
 
 pub const MAX_ROWS: usize = 500;
+/// DEFAULT_GENERATED is a writable default expression, not a generated column.
+/// Match the complete MySQL/MariaDB generated-storage markers, not substrings.
+pub(crate) fn mysql_generated_column(extra: &str) -> bool {
+    let words: Vec<_> = extra.split_ascii_whitespace().collect();
+    words.windows(2).any(|pair| ["VIRTUAL", "STORED", "PERSISTENT"].iter().any(|storage| pair[0].eq_ignore_ascii_case(storage)) && pair[1].eq_ignore_ascii_case("GENERATED"))
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeneratedRowsRequest {
     pub connection_id: String,
@@ -17,7 +23,7 @@ pub struct GeneratedRowsRequest {
     pub rows: Vec<Vec<Option<String>>>,
 }
 
-fn validate_shape(req: &GeneratedRowsRequest) -> Result<()> {
+pub(crate) fn validate_shape(req: &GeneratedRowsRequest) -> Result<()> {
     if req.table.is_empty() || req.table.contains('\0') || req.schema.contains('\0') { bail!("表/模式名称无效"); }
     if req.rows.is_empty() || req.rows.len() > MAX_ROWS { bail!("每批只允许 1–{} 行", MAX_ROWS); }
     if req.columns.len() > 128 { bail!("每批最多 128 个字段"); }
@@ -34,7 +40,7 @@ fn validate_shape(req: &GeneratedRowsRequest) -> Result<()> {
     if bytes > 2 * 1024 * 1024 { bail!("每批数据不能超过 2 MB"); }
     Ok(())
 }
-fn validate_columns(req: &GeneratedRowsRequest, info: &TableSchema) -> Result<()> {
+pub(crate) fn validate_columns(req: &GeneratedRowsRequest, info: &TableSchema) -> Result<()> {
     if info.columns.is_empty() { bail!("没有读取到真实表结构"); }
     for name in &req.columns {
         let col = info.columns.iter().find(|c| &c.name == name).ok_or_else(|| anyhow!("字段 {} 不属于目标表", name))?;
@@ -58,7 +64,7 @@ fn validate_columns(req: &GeneratedRowsRequest, info: &TableSchema) -> Result<()
     }
     Ok(())
 }
-fn insert_sql(kind: &DbKind, req: &GeneratedRowsRequest, pg_types: &[String]) -> String {
+pub(crate) fn insert_sql(kind: &DbKind, req: &GeneratedRowsRequest, pg_types: &[String]) -> String {
     let full = db::qualified(kind, &req.schema, &req.table);
     if req.columns.is_empty() {
         return if kind.is_mysql_family() { format!("INSERT INTO {} () VALUES ()", full) } else { format!("INSERT INTO {} DEFAULT VALUES", full) };
@@ -72,17 +78,19 @@ fn insert_sql(kind: &DbKind, req: &GeneratedRowsRequest, pg_types: &[String]) ->
 }
 
 pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     validate_shape(req)?;
     crate::sync::validate_sqlite_namespace(db, &req.schema, &req.table).await?;
     if !matches!(db, Db::Sqlite(_) | Db::Mysql(_) | Db::Postgres(_)) { bail!("该协议尚不支持安全事务批量生成"); }
     let mut info = schema::table_schema(db, kind.clone(), &req.schema, &req.table).await?;
     match db {
         Db::Sqlite(pool) => {
-            let definition: Option<String> = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
+            let definition: Option<String> = crate::sql_history::query_scalar("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
                 .bind(&req.table).fetch_optional(pool).await?;
             let definition = definition.ok_or_else(|| anyhow!("目标必须为真实表，不能是视图"))?;
             // SQLite table_info 不暴露生成列；table_xinfo hidden=2/3 必须省略。
-            let hidden = sqlx::query(&format!("PRAGMA table_xinfo({})", db::quote_ident(kind, &req.table))).fetch_all(pool).await?;
+            let hidden = crate::sql_history::query(&format!("PRAGMA table_xinfo({})", db::quote_ident(kind, &req.table))).fetch_all(pool).await?;
             for row in hidden {
                 let name: String = row.try_get("name")?;
                 let generated: i64 = row.try_get("hidden")?;
@@ -100,7 +108,7 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
             let mut tx = pool.begin().await?;
             let mut affected = 0;
             for (index, row) in req.rows.iter().enumerate() {
-                let mut query = sqlx::query(&sql);
+                let mut query = crate::sql_history::query(&sql);
                 for value in row { query = query.bind(value); }
                 match query.execute(&mut *tx).await {
                     Ok(result) => affected += result.rows_affected(),
@@ -112,15 +120,17 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
         Db::Mysql(pool) => {
             // information_schema 列在部分兼容协议服务端（TiDB/OceanBase/Doris 等）会以
             // binary 字符集返回，sqlx 会判为 BINARY；必须走宽容解码而非 try_get::<String>。
-            let table = sqlx::query("SELECT TABLE_TYPE, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?")
+            let table = crate::sql_history::query("SELECT TABLE_TYPE, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?")
                 .bind(&req.schema).bind(&req.table).fetch_optional(pool).await?.ok_or_else(|| anyhow!("表不存在"))?;
             let ty = crate::schema::mysql_get(&table, "TABLE_TYPE").unwrap_or_default();
             let engine = crate::schema::mysql_get(&table, "ENGINE");
             if ty != "BASE TABLE" { bail!("目标必须为真实表"); }
             if !engine.as_deref().is_some_and(|e| e.eq_ignore_ascii_case("InnoDB")) { bail!("安全批量生成仅支持 InnoDB 事务表，当前引擎无法保证失败全部回滚"); }
-            let generated = sqlx::query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND EXTRA LIKE '%GENERATED%'")
+            let generated = crate::sql_history::query("SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=?")
                 .bind(&req.schema).bind(&req.table).fetch_all(pool).await?;
             for row in generated {
+                let extra = crate::schema::mysql_get(&row, "EXTRA").unwrap_or_default();
+                if !mysql_generated_column(&extra) { continue; }
                 let name = crate::schema::mysql_get(&row, "COLUMN_NAME").unwrap_or_default();
                 if req.columns.contains(&name) { bail!("生成字段 {} 不可写入", name); }
                 info.columns.retain(|c| c.name != name);
@@ -129,7 +139,7 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
             let sql = insert_sql(kind, req, &[]);
             let mut tx = pool.begin().await?; let mut affected = 0;
             for (index, row) in req.rows.iter().enumerate() {
-                let mut query = sqlx::query(&sql);
+                let mut query = crate::sql_history::query(&sql);
                 for value in row { query = query.bind(value); }
                 match query.execute(&mut *tx).await {
                     Ok(result) => affected += result.rows_affected(),
@@ -139,7 +149,7 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
             tx.commit().await?; Ok(affected)
         }
         Db::Postgres(pool) => {
-            let metadata = sqlx::query("SELECT a.attname, tn.nspname AS type_schema, t.typname, a.attgenerated::text AS attgenerated, a.attidentity::text AS attidentity FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid JOIN pg_namespace tn ON tn.oid=t.typnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped")
+            let metadata = crate::sql_history::query("SELECT a.attname, tn.nspname AS type_schema, t.typname, a.attgenerated::text AS attgenerated, a.attidentity::text AS attidentity FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid JOIN pg_namespace tn ON tn.oid=t.typnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped")
                 .bind(&req.schema).bind(&req.table).fetch_all(pool).await?;
             if metadata.is_empty() { bail!("目标必须为真实表"); }
             let mut types = Vec::new();
@@ -159,7 +169,7 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
             validate_columns(req, &info)?;
             let sql = insert_sql(kind, req, &types); let mut tx = pool.begin().await?; let mut affected = 0;
             for (index, row) in req.rows.iter().enumerate() {
-                let mut query = sqlx::query(&sql);
+                let mut query = crate::sql_history::query(&sql);
                 for value in row { query = query.bind(value); }
                 match query.execute(&mut *tx).await {
                     Ok(result) => affected += result.rows_affected(),
@@ -170,6 +180,8 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
         }
         _ => unreachable!(),
     }
+
+    }).await
 }
 
 #[tauri::command]
@@ -193,21 +205,30 @@ mod tests {
     use super::*;
     async fn fixture() -> (Db, DbKind) {
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE generated(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, amount REAL NOT NULL CHECK(amount>=0), active INTEGER NOT NULL, payload TEXT NOT NULL)").execute(&pool).await.unwrap();
+        crate::sql_history::query("CREATE TABLE generated(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, amount REAL NOT NULL CHECK(amount>=0), active INTEGER NOT NULL, payload TEXT NOT NULL)").execute(&pool).await.unwrap();
         (Db::Sqlite(pool), DbKind::of("sqlite"))
     }
     fn request() -> GeneratedRowsRequest {
         GeneratedRowsRequest { connection_id: "test".into(), schema: "main".into(), table: "generated".into(), columns: ["name", "amount", "active", "payload"].map(String::from).into(),
             rows: (1..=25).map(|i| vec![Some(format!("generated_{}",i)),Some(format!("{}.25",i)),Some((i%2).to_string()),Some(format!("{{\"i\":{}}}",i))]).collect() }
     }
+    #[test]
+    fn mysql_default_generated_is_writable_but_real_generated_columns_are_not() {
+        for extra in ["", "auto_increment", "DEFAULT_GENERATED", "DEFAULT_GENERATED on update CURRENT_TIMESTAMP", "default_generated", "DEFAULT_GENERATED INVISIBLE"] { assert!(!mysql_generated_column(extra), "{extra}"); }
+        for extra in ["VIRTUAL GENERATED", "STORED GENERATED", "PERSISTENT GENERATED", "virtual\tgenerated", "STORED GENERATED INVISIBLE", "DEFAULT_GENERATED STORED GENERATED"] { assert!(mysql_generated_column(extra), "{extra}"); }
+        let mut info=TableSchema{table:"events".into(),database:"isolated".into(),columns:vec![crate::models::ColumnInfo{name:"ts".into(),data_type:"timestamp".into(),nullable:false,default:Some("CURRENT_TIMESTAMP".into()),primary_key:false,auto_increment:false,comment:None,length:None,precision:None,scale:None}],indexes:vec![],foreign_keys:vec![],comment:None,engine:Some("InnoDB".into()),collation:None,row_count:None};
+        if mysql_generated_column("DEFAULT_GENERATED") { info.columns.clear(); }
+        let req=GeneratedRowsRequest{connection_id:"isolated".into(),schema:"isolated".into(),table:"events".into(),columns:vec!["ts".into()],rows:vec![vec![Some("2026-11-11 08:00:00".into())]]};
+        assert!(validate_columns(&req,&info).is_ok(), "An explicitly supplied ordinary default-expression column must remain writable");
+    }
     #[tokio::test]
     async fn sqlite_generated_rows_are_real_and_counted() {
         let (db, kind) = fixture().await; let req = request();
         assert_eq!(insert_batch(&db, &kind, &req).await.unwrap(), 25);
         let Db::Sqlite(pool) = &db else { unreachable!() };
-        let (count, keys, amount): (i64,i64,f64) = sqlx::query_as("SELECT COUNT(*),COUNT(DISTINCT id),SUM(amount) FROM generated").fetch_one(pool).await.unwrap();
+        let (count, keys, amount): (i64,i64,f64) = crate::sql_history::query_as("SELECT COUNT(*),COUNT(DISTINCT id),SUM(amount) FROM generated").fetch_one(pool).await.unwrap();
         assert_eq!((count, keys), (25,25)); assert!((amount-331.25).abs()<0.00001);
-        let required: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM generated WHERE name IS NULL OR amount IS NULL OR active IS NULL OR payload IS NULL").fetch_one(pool).await.unwrap(); assert_eq!(required,0);
+        let required: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM generated WHERE name IS NULL OR amount IS NULL OR active IS NULL OR payload IS NULL").fetch_one(pool).await.unwrap(); assert_eq!(required,0);
         println!("actual SQLite generated rows={} distinct_primary_keys={} sum_amount={} null_required={}", count, keys, amount, required);
     }
     #[tokio::test]
@@ -215,7 +236,7 @@ mod tests {
         let (db, kind) = fixture().await; let mut req=request(); req.rows[5][1]=Some("-1".into());
         assert!(insert_batch(&db,&kind,&req).await.unwrap_err().to_string().contains("第 6 行"));
         let Db::Sqlite(pool)=&db else { unreachable!() };
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM generated").fetch_one(pool).await.unwrap(),0);
+        assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM generated").fetch_one(pool).await.unwrap(),0);
     }
     #[tokio::test]
     async fn sqlite_values_and_identifiers_cannot_inject_sql() {
@@ -223,25 +244,25 @@ mod tests {
         let attack="x'); DROP TABLE generated; --".to_string(); req.rows[0][0]=Some(attack.clone());
         assert_eq!(insert_batch(&db,&kind,&req).await.unwrap(),1);
         let Db::Sqlite(pool)=&db else { unreachable!() };
-        assert_eq!(sqlx::query_scalar::<_,String>("SELECT name FROM generated").fetch_one(pool).await.unwrap(),attack);
+        assert_eq!(crate::sql_history::query_scalar::<_,String>("SELECT name FROM generated").fetch_one(pool).await.unwrap(),attack);
         req.columns[0]="name\") VALUES ('x'); DROP TABLE generated; --".into(); assert!(insert_batch(&db,&kind,&req).await.is_err());
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM generated").fetch_one(pool).await.unwrap(),1);
+        assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM generated").fetch_one(pool).await.unwrap(),1);
     }
     #[tokio::test]
     async fn sqlite_rejects_attached_namespace_and_temp_shadow_without_writes() {
         let (db, kind) = fixture().await;
         let Db::Sqlite(pool) = &db else { unreachable!() };
-        sqlx::query("ATTACH DATABASE ':memory:' AS aux").execute(pool).await.unwrap();
-        sqlx::query("CREATE TABLE aux.generated(id INTEGER PRIMARY KEY, name TEXT)").execute(pool).await.unwrap();
+        crate::sql_history::query("ATTACH DATABASE ':memory:' AS aux").execute(pool).await.unwrap();
+        crate::sql_history::query("CREATE TABLE aux.generated(id INTEGER PRIMARY KEY, name TEXT)").execute(pool).await.unwrap();
         let mut req = request(); req.schema = "aux".into();
         assert!(insert_batch(&db, &kind, &req).await.unwrap_err().to_string().contains("main"));
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM main.generated").fetch_one(pool).await.unwrap(), 0);
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM aux.generated").fetch_one(pool).await.unwrap(), 0);
-        sqlx::query("CREATE TEMP TABLE generated(id INTEGER PRIMARY KEY, name TEXT)").execute(pool).await.unwrap();
+        assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM main.generated").fetch_one(pool).await.unwrap(), 0);
+        assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM aux.generated").fetch_one(pool).await.unwrap(), 0);
+        crate::sql_history::query("CREATE TEMP TABLE generated(id INTEGER PRIMARY KEY, name TEXT)").execute(pool).await.unwrap();
         req.schema = "main".into();
         assert!(insert_batch(&db, &kind, &req).await.unwrap_err().to_string().contains("临时对象"));
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM main.generated").fetch_one(pool).await.unwrap(), 0);
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM temp.generated").fetch_one(pool).await.unwrap(), 0);
+        assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM main.generated").fetch_one(pool).await.unwrap(), 0);
+        assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM temp.generated").fetch_one(pool).await.unwrap(), 0);
     }
     #[tokio::test]
     async fn sqlite_rejects_missing_required_fields_null_and_excess_rows() {

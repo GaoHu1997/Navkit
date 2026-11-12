@@ -180,6 +180,7 @@ export class MenuRenderer {
     row.setAttribute("role", entry.checked === undefined ? "menuitem" : "menuitemcheckbox");
     row.setAttribute("aria-label", stripAccel(entry.label ?? ""));
     row.setAttribute("aria-disabled", String(!!entry.disabled));
+    if (entry.disabledReason) { row.title = entry.disabledReason; row.setAttribute("aria-description", entry.disabledReason); }
     if (entry.checked !== undefined) row.setAttribute("aria-checked", String(entry.checked));
     row.tabIndex = -1;
     row.addEventListener("mouseup", () => {

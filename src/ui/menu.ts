@@ -1,8 +1,8 @@
 /**
  * NavKit 主菜单定义。
  *
- * 菜单栏标题与下拉项严格取自参考程序截图：
- *   文件 编辑 查看 收藏夹 工具 窗口 帮助
+ * 菜单栏标题与下拉项取自参考程序截图：
+ *   文件 编辑 查看 工具 窗口 帮助
  * 另按参考程序行为，在表/查询标签页激活时插入「表」「查询」上下文菜单。
  * 只收录真实可用的命令 —— 不留任何点击无响应的菜单项。
  */
@@ -20,6 +20,8 @@ export interface MenuEntry {
   checked?: boolean;
   /** 是否禁用。 */
   disabled?: boolean;
+  /** 实际能力或当前状态导致禁用的原因。 */
+  disabledReason?: string;
   /** 是否为分隔线。 */
   separator?: boolean;
   /** 子菜单。 */
@@ -98,47 +100,22 @@ export const MENU_BAR: MenuBarEntry[] = [
     ],
   },
   {
-    label: "收藏夹",
-    children: [
-      { id: "add-favorite", label: "添加到收藏夹", shortcut: "Ctrl+Shift+F" },
-      { id: "open-favorite", label: "打开收藏的查询" },
-      { id: "manage-favorites", label: "管理收藏夹" },
-      { separator: true },
-      { id: "recent", label: "最近打开的" },
-    ],
-  },
-  {
     label: "工具",
     children: [
-      { id: "data-sync", label: "数据同步..." },
-      { id: "data-generation", label: "数据生成..." },
-      { id: "driver-manager", label: "驱动管理..." },
+      { id: "data-sync", label: "数据同步" },
+      { id: "data-generation", label: "数据生成" },
+      { id: "data-dictionary", label: "数据字典" },
+      { id: "driver-manager", label: "驱动管理" },
       { separator: true },
-      { id: "server-monitor", label: "数据库监控..." },
-      { id: "history-log", label: "历史日志...", shortcut: "Ctrl+L" },
+      { id: "server-monitor", label: "数据库监控" },
+      { id: "history-log", label: "历史日志", shortcut: "Ctrl+L" },
+      { separator: true },
+      { id: "check-update", label: "检查更新" },
     ],
   },
 ];
 
 /** 表标签页的上下文菜单栏项（参考程序在表页显示「表」菜单）。 */
-export const TABLE_MENU: MenuBarEntry = {
-  label: "表",
-  children: [
-    { id: "tree-open-table", label: "打开表" },
-    { id: "tree-structure", label: "设计表" },
-    { id: "new-table", label: "新建表" },
-    { separator: true },
-    { id: "delete-table", label: "删除表" },
-    { id: "truncate-table", label: "截断表" },
-    { separator: true },
-    { id: "import", label: "导入向导..." },
-    { id: "export", label: "导出向导..." },
-    { id: "dump-sql", label: "转储 SQL 文件..." },
-    { separator: true },
-    { id: "refresh", label: "刷新", shortcut: "F5" },
-  ],
-};
-
 /** 查询标签页的上下文菜单栏项（参考程序在查询页显示「查询」「格式」菜单）。 */
 export const QUERY_MENU: MenuBarEntry = {
   label: "查询",
@@ -180,31 +157,38 @@ export function treeContextMenu(type: string): MenuEntry[] {
         { id: "tree-close", label: "关闭连接" },
       ];
     case "database":
-    case "schema":
+    case "schema": {
+      const namespace = type === "schema" ? "模式" : "数据库";
       return [
-        { id: "db-open", label: "打开数据库" },
-        { id: "db-close", label: "关闭数据库" },
-        { id: "tree-edit-db", label: "编辑数据库..." },
-        { id: "db-new", label: "新建数据库..." },
-        { id: "db-drop", label: "删除数据库" },
+        { id: "db-open", label: `打开${namespace}` },
+        { id: "db-close", label: `关闭${namespace}` },
+        { id: "tree-edit-db", label: "编辑连接..." },
+        { id: "db-new", label: `新建${namespace}...` },
+        { id: "db-drop", label: `删除${namespace}` },
         { separator: true },
         { id: "tree-new-query", label: "新建查询" },
+        { id: "tree-run-sql-file", label: "运行 SQL 文件..." },
+        { id: "tree-dump", label: "转储 SQL 文件..." },
+        { separator: true },
         { id: "tree-import", label: "导入向导..." },
         { id: "tree-export", label: "导出向导..." },
         { separator: true },
-        { id: "tree-dump", label: "转储 SQL 文件..." },
-        { id: "tree-model", label: "逆向数据库到模型..." },
         { id: "tree-server-info", label: "服务器信息" },
         { separator: true },
         { id: "tree-refresh", label: "刷新" },
       ];
+    }
     case "table":
       return [
         { id: "tree-open-table", label: "打开表" },
         { id: "tree-structure", label: "设计表" },
         { separator: true },
         { id: "delete-table", label: "删除表" },
-        { id: "truncate-table", label: "截断表" },
+        { id: "truncate-table", label: "清空表" },
+        { label: "复制表", children: [
+          { id: "copy-table-structure", label: "仅复制结构..." },
+          { id: "copy-table-data", label: "复制结构和数据..." },
+        ] },
         { separator: true },
         { id: "tree-import", label: "导入向导..." },
         { id: "tree-export", label: "导出向导..." },

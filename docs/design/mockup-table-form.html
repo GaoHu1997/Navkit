@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NavKit · 表数据页 · 网格/表单视图 · 设计稿</title>
+<link rel="stylesheet" href="./assets/app.css">
+<style>
+body{margin:0;padding:28px 32px 48px;background:var(--n-150);font:12px/1.5 var(--font-ui);color:var(--text)}
+.screen{display:flex;flex-direction:column;gap:10px;margin-bottom:36px}
+.screen-meta h2{margin:0 0 4px;font-size:14px;font-weight:600;color:var(--text)}
+.screen-meta p{margin:0;max-width:1100px;font-size:12px;line-height:1.7;color:var(--text-tertiary)}
+.screen-frame{position:relative;overflow:hidden;border:1px solid var(--border-strong);border-radius:8px;background:var(--bg-surface);box-shadow:var(--shadow-2)}
+.screen-frame .window{width:100%;height:100%}
+/* 视图切换（仅图标） */
+.views-switch{display:inline-flex;align-items:center;gap:2px;padding:1px;border:1px solid var(--border);border-radius:var(--r-2);background:var(--bg-sunken);flex:0 0 auto}
+.views-switch .vs-btn{display:grid;place-items:center;width:24px;height:22px;padding:0;border:0;border-radius:var(--r-1);background:transparent;color:var(--text-secondary);cursor:default}
+.views-switch .vs-btn svg{width:14px;height:14px}
+.views-switch .vs-btn:hover{color:var(--text)}
+.views-switch .vs-btn.active{background:var(--bg-surface);color:var(--text-accent);box-shadow:var(--shadow-1)}
+.footer-divider{width:1px;height:16px;background:var(--border);margin:0 2px;flex:0 0 auto}
+.pagebox .pc{font-size:11px;color:var(--text-secondary);font-variant-numeric:tabular-nums;padding:0 2px;white-space:nowrap}
+/* 记录导航：把网格分页图标旋转 90° 得到上下方向 */
+.recnav{display:inline-flex;align-items:center;gap:2px;flex:0 0 auto}
+.recpos{display:flex;align-items:center;gap:3px;margin:0 2px}
+.recpos .pageno{width:34px}
+.rot90{display:inline-flex;transform:rotate(90deg)}
+/* 表单视图：单列、每行一个字段 */
+.form-view{flex:1;min-height:0;overflow:auto;background:var(--bg-surface);padding:20px 28px 28px}
+.form-head{display:flex;flex-direction:column;gap:4px;padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:14px}
+.form-head-main{display:flex;align-items:center;gap:8px}
+.form-title{font-size:16px;font-weight:600}
+.form-badge{font-size:10px;color:var(--text-tertiary);border:1px solid var(--border-strong);border-radius:10px;padding:0 7px;line-height:17px}
+.form-sub{font-size:11px;color:var(--text-tertiary);font-variant-numeric:tabular-nums}
+.form-grid{display:flex;flex-direction:column;max-width:840px}
+.form-field{display:grid;grid-template-columns:132px 1fr;align-items:center;gap:20px;min-height:46px;padding:6px 10px;border-radius:6px;border-bottom:1px solid var(--border-subtle)}
+.form-field:last-child{align-items:flex-start;padding-top:12px;padding-bottom:12px;border-bottom:0}
+.form-field > label{font-size:12.5px;color:var(--text-secondary);text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:30px}
+.form-field:last-child > label{padding-top:3px}
+.form-field .fv{min-width:0}
+.form-input{width:100%;height:30px;padding:0 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--bg-surface);font:13px var(--font-ui);color:var(--text)}
+.form-input:focus{outline:0;border-color:var(--accent-500);box-shadow:0 0 0 3px var(--accent-50)}
+.form-textarea{width:100%;height:96px;padding:8px 10px;border:1px solid var(--border-strong);border-radius:5px;background:var(--bg-surface);font:13px/1.6 var(--font-ui);color:var(--text);resize:none}
+.form-static{font-size:13px;color:var(--text-secondary);font-variant-numeric:tabular-nums;padding:0 10px;height:30px;display:flex;align-items:center}
+.form-static.null{color:var(--text-disabled);font-style:italic}
+.form-static.pk{color:var(--text-accent);font-weight:600}
+.form-input.pk-text{color:var(--text-accent);font-weight:600}
+.form-input.null-text{color:var(--text-disabled);font-style:italic}
+/* 细节屏 */
+.specimen{padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);box-shadow:var(--shadow-1)}
+.specimen-label{margin:0 0 12px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary)}
+.spec-note{margin:12px 0 0;font-size:12px;line-height:1.7;color:var(--text-secondary)}
+.spec-note b{color:var(--text)}
+.spec-list{margin:8px 0 0;padding-left:18px;font-size:12px;line-height:1.9;color:var(--text-secondary)}
+.spec-list b{color:var(--text)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { icon } from "./assets/icons.js";
+import { titlebar, commandbar, tabstrip, pagetoolbar, infopanel, statusbar, grid, screen, defaultTree, tree } from "./assets/ui.js";
+
+function ib(name, title, active) {
+  return '<button class="iconbtn' + (active ? ' active' : '') + '" title="' + title + '" aria-label="' + title + '">' + icon(name, { size: 13 }) + '</button>';
+}
+function rot(name, title) {
+  return '<button class="iconbtn" title="' + title + '" aria-label="' + title + '"><span class="rot90">' + icon(name, { size: 13 }) + '</span></button>';
+}
+function formIcon(s) {
+  return '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.4" y="4.2" width="17.2" height="15.6" rx="2.2"/><path d="M7.2 9h3.4M13.4 9h3.4M7.2 13h3.4M13.4 13h3.4"/></svg>';
+}
+function viewSwitch(active) {
+  var g = '<button class="vs-btn' + (active === 'grid' ? ' active' : '') + '" title="网格视图" aria-label="网格视图">' + icon('grid', { size: 14 }) + '</button>';
+  var f = '<button class="vs-btn' + (active === 'form' ? ' active' : '') + '" title="表单视图" aria-label="表单视图">' + formIcon(14) + '</button>';
+  return '<div class="views-switch" role="tablist" aria-label="视图切换">' + g + f + '</div>';
+}
+
+function gridFooterNew() {
+  var pager = '<div class="pagebox">'
+    + ib('page-first', '第一页') + ib('page-prev', '上一页')
+    + '<input class="pageno" value="1" readonly aria-label="当前页码"><span class="pc">/ 8 页</span>'
+    + ib('page-next', '下一页') + ib('page-last', '最后一页')
+    + '</div>';
+  return '<div class="grid-footer">'
+    + ib('plus', '插入记录') + ib('minus', '删除记录')
+    + ib('check', '提交改动') + ib('cross', '清除改动')
+    + '<div class="spacer"></div>'
+    + pager
+    + '<span class="footer-divider" aria-hidden="true"></span>'
+    + viewSwitch('grid')
+    + '</div>';
+}
+
+function formFooter() {
+  var nav = '<div class="recnav" aria-label="逐条切换记录">'
+    + rot('page-first', '第一条') + rot('page-prev', '上一条')
+    + '<div class="recpos"><input class="pageno" value="2" readonly aria-label="当前条"></div>'
+    + rot('page-next', '下一条') + rot('page-last', '最后一条')
+    + '</div>';
+  return '<div class="grid-footer">'
+    + ib('plus', '插入记录') + ib('minus', '删除记录')
+    + ib('check', '提交改动') + ib('cross', '清除改动')
+    + '<div class="spacer"></div>'
+    + nav
+    + '<span class="footer-divider" aria-hidden="true"></span>'
+    + viewSwitch('form')
+    + '</div>';
+}
+
+var COLS = [
+  { label: '#', key: 'n', width: 36, align: 'right' },
+  { label: 'id', key: 'id', width: 52, align: 'right' },
+  { label: 'name', key: 'name', width: 108 },
+  { label: 'category', key: 'cat', width: 92 },
+  { label: 'created_at', key: 'created', width: 144, sort: 'desc' },
+  { label: 'description', key: 'desc', width: 150 },
+  { label: 'icon', key: 'icon', width: 62 },
+  { label: 'updated_at', key: 'updated', width: 150 },
+  { label: 'user_id', key: 'uid', width: 62, align: 'right' }
+];
+var NUL = '<span class="cell-null">NULL</span>';
+var ROWS = [
+  { n: '1', id: '1', name: '默认', cat: '系统', created: '2026-05-12 09:14:22', desc: { html: NUL }, icon: { html: NUL }, updated: '2026-05-12 09:14:22', uid: '1' },
+  { n: '2', id: '2', name: '代码', cat: '开发', created: '2026-05-12 09:15:03', desc: '代码片段分类', icon: { html: '<span class="cell-ico" style="color:var(--text-tertiary)">' + icon('code', { size: 13 }) + '</span>' }, updated: '2026-05-12 09:15:03', uid: '1' },
+  { n: '3', id: '3', name: '教程', cat: '文档', created: '2026-05-12 09:16:41', desc: { html: NUL }, icon: { html: NUL }, updated: '2026-05-12 09:16:41', uid: '1' },
+  { n: '4', id: '33', name: '测试', cat: { html: '<span style="display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:999px;background:var(--accent-50);color:var(--accent-600);font-size:11px">测试</span>' }, created: '2026-05-12 10:02:11', desc: '自动化测试数据', icon: { html: '<span class="cell-ico" style="color:var(--text-tertiary)">' + icon('wizard', { size: 13 }) + '</span>' }, updated: '2026-05-12 10:02:11', uid: '1' },
+  { n: '5', id: '34', name: '归档', cat: '系统', created: '2026-05-13 08:22:04', desc: { html: NUL }, icon: { html: NUL }, updated: '2026-05-13 08:22:04', uid: '2' },
+  { n: '6', id: '35', name: '草稿', cat: '开发', created: '2026-05-13 11:41:57', desc: '未发布的笔记', icon: { html: '<span class="cell-ico" style="color:var(--text-tertiary)">' + icon('edit', { size: 13 }) + '</span>' }, updated: '2026-05-14 02:10:33', uid: '2' },
+  { n: '7', id: '36', name: '分享', cat: '文档', created: '2026-05-14 07:03:19', desc: { html: NUL }, icon: { html: NUL }, updated: '2026-05-14 07:03:19', uid: '2' }
+];
+
+var TOOLBAR = pagetoolbar([
+  { label: '文本', icon: 'code', dropdown: true }, '-',
+  { label: '筛选', icon: 'filter' }, { label: '排序', icon: 'sort' }, { label: '列', icon: 'columns' }, '-',
+  { label: '导入', icon: 'import' }, { label: '导出', icon: 'export' }, '-',
+  { label: '数据生成', icon: 'wizard', disabled: true }, { label: '创建图表', icon: 'chart', disabled: true }, '|',
+  { label: '开始事务', icon: 'history', disabled: true }
+]);
+var INFO = {
+  icon: 'table', title: 'note_category', subtitle: '表',
+  refs: [{ logo: 'mysql', text: 'localhost / password_manager' }],
+  groups: [
+    { title: '统计', rows: [['行', '15'], ['字段数', '9'], ['索引', '2'], ['外键', '0']] },
+    { title: '属性', rows: [['引擎', 'InnoDB'], ['排序规则', 'utf8mb4_0900_ai_ci'], ['自动递增', '105'], ['数据长度', '368.0 KB'], ['修改日期', '2026-05-15 14:57:08'], ['注释', '笔记分类']] }
+  ]
+};
+var TABS = [
+  { label: '对象', icon: 'table' },
+  { label: 'note_category @password_manager', icon: 'table' },
+  { label: '无标题 — 查询', icon: 'code' }
+];
+var STATUS_LEFT = [
+  '<span class="sb-item"><span class="sb-strong">15 行</span></span>',
+  '<span class="sb-sep"></span>',
+  '<span class="sb-mono">SELECT * FROM note_category LIMIT 1000</span>'
+];
+
+function shell(opts) {
+  return '<div class="window">'
+    + titlebar({ doc: opts.doc, menu: opts.menu, openMenu: opts.openMenu })
+    + commandbar({ active: opts.active })
+    + '<div class="workarea">'
+    + '<aside class="sidebar">' + tree(opts.treeNodes) + '</aside>'
+    + '<div class="splitter"></div>'
+    + '<main class="main">'
+    + tabstrip(opts.tabs, opts.activeTab == null ? 0 : opts.activeTab)
+    + (opts.pagetoolbar || '')
+    + opts.content
+    + '</main>'
+    + '<div class="splitter"></div>'
+    + infopanel(opts.info)
+    + '</div>'
+    + statusbar({ left: opts.statusLeft })
+    + '</div>';
+}
+
+function gridScreen() {
+  var content = '<div class="content">' + grid(COLS, ROWS, { selectedRow: 1, pkKey: 'id' }) + gridFooterNew() + '</div>';
+  var body = shell({ doc: 'note_category — password_manager', active: '表', treeNodes: defaultTree('dbswitch'), tabs: TABS, activeTab: 1, pagetoolbar: TOOLBAR, content: content, info: INFO, statusLeft: STATUS_LEFT });
+  return screen('表数据页 · 网格视图', '底部页脚保持原样（增/删/提交/清除 + 分页），仅在分页控件右侧新增「网格 / 表单」图标切换，并以 1px 竖分割线分隔；切换只显示图标。', body, { w: 1440, h: 900 });
+}
+
+function formBody() {
+  function f(label, control) {
+    return '<div class="form-field"><label>' + label + '</label><div class="fv">' + control + '</div></div>';
+  }
+  function inp(v, cls) { return '<input class="form-input ' + (cls || '') + '" value="' + v + '" readonly>'; }
+  var fields = '<div class="form-grid">'
+    + f('id', inp('2', 'pk-text'))
+    + f('name', inp('代码'))
+    + f('category', inp('开发'))
+    + f('user_id', inp('1'))
+    + f('created_at', inp('2026-05-12 09:15:03'))
+    + f('updated_at', inp('2026-05-12 09:15:03'))
+    + f('icon', inp('NULL', 'null-text'))
+    + f('description', '<textarea class="form-textarea" readonly>代码片段分类</textarea>')
+    + '</div>';
+  return '<div class="form-view">' + fields + '</div>';
+}
+
+function formScreen() {
+  var content = '<div class="content">' + formBody() + formFooter() + '</div>';
+  var body = shell({ doc: 'note_category — password_manager', active: '表', treeNodes: defaultTree('dbswitch'), tabs: TABS, activeTab: 1, pagetoolbar: TOOLBAR, content: content, info: INFO, statusLeft: STATUS_LEFT });
+  return screen('表数据页 · 表单视图', '每屏一条记录，每行只放一个字段（单列）。翻页改为把网格分页图标旋转 90°：第一条 / 上一条 / 当前条 / 下一条 / 最后一条，仅图标；右侧图标切换选中表单。', body, { w: 1440, h: 900 });
+}
+
+function footerSpecScreen() {
+  var body = '<div class="window" style="padding:22px 26px;gap:16px;overflow:auto;background:var(--bg-app)">'
+    + '<div class="specimen"><div class="specimen-label">A · 网格视图页脚（原样 + 右侧图标切换）</div>'
+    + '<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">' + gridFooterNew() + '</div>'
+    + '<div class="spec-note">左：增/删/提交/清除；右：分页（首页 / 上一页 / 页码 / 下一页 / 末页）。分页右侧 <b>1px 竖分割线</b> 后是「网格 / 表单」<b>图标</b>切换（仅图标，当前选中网格）。</div></div>'
+    + '<div class="specimen"><div class="specimen-label">B · 表单视图页脚</div>'
+    + '<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">' + formFooter() + '</div>'
+    + '<div class="spec-note">把网格的四个分页图标 <b>旋转 90°</b> 得到上下方向：<b>第一条 / 上一条 / 当前条 / 下一条 / 最后一条</b>，中间显示当前条序号。同样仅图标，右侧图标切换选中表单。</div></div>'
+    + '<div class="specimen"><div class="specimen-label">变更点小结</div>'
+    + '<ul class="spec-list">'
+    + '<li><b>切换仅图标</b>：网格/表单用两个图标按钮，不再带文字。</li>'
+    + '<li><b>表单图标</b>：改用「卡片 + 两行字段」的表单图标，与九宫格网格图标区分。</li>'
+    + '<li><b>单列表单</b>：每行只显示一个字段（字段名右对齐 + 值控件），行间发丝线，整体更清爽。</li>'
+    + '<li><b>上下条按钮</b>：不复用文字按钮，直接把分页图标旋转 90°（首/上/当前/下/末）。</li>'
+    + '<li><b>不增杂项</b>：去掉此前多加的「共 X 行 / 刷新 / 更多」，保持页脚原设计。</li>'
+    + '</ul></div>'
+    + '</div>';
+  return screen('页脚控件细节 · 二态对照', '放大对照两种视图下的页脚：网格态保持原分页；表单态为旋转 90° 的上下条图标；两者右侧都以竖分割线隔开仅图标视图切换。', body, { w: 1180, h: 600 });
+}
+
+document.getElementById('app').innerHTML = [gridScreen(), formScreen(), footerSpecScreen()].join('');
+</script>
+</body>
+</html>

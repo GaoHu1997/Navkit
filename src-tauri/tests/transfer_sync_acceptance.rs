@@ -10,13 +10,13 @@ async fn rows(db: &Db, table: &str) -> Vec<(i64, Option<String>, Vec<u8>)> {
     if let Db::Sqlite(p) = db { return sqlx::query(&format!("SELECT id,name,payload FROM \"{}\" ORDER BY id",table)).fetch_all(p).await.unwrap().iter().map(|r| (r.get(0),r.get(1),r.get(2))).collect(); } unreachable!()
 }
 fn import(file: &Path, table: &str, format: &str) -> ImportTaskOptions {
-    ImportTaskOptions { task_id: uuid::Uuid::new_v4().to_string(), column_mapping: vec![], options: ImportOptions { connection_id: "target".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), create_table: false, truncate: false, sheet: None } }
+    ImportTaskOptions { task_id: uuid::Uuid::new_v4().to_string(), column_mapping: vec![], options: ImportOptions { connection_id: "target".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), create_table: false, truncate: false, sheet: None, on_conflict: "error".into(), conflict_columns: Vec::new() } }
 }
 fn export(file: &Path, table: &str, format: &str) -> ExportTaskOptions {
     ExportTaskOptions { task_id: uuid::Uuid::new_v4().to_string(), options: ExportOptions { connection_id: "source".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), where_clause: None, limit: None } }
 }
 fn sync_opts(table: &str, mode: &str) -> SyncOptions {
-    SyncOptions { task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection:"source".into(), source_schema:"main".into(), source_table:"items".into(), target_connection:"target".into(), target_schema:"main".into(), target_table:table.into(), mode:mode.into(), write_mode:"append".into(), sync_mode:"full".into(), incremental_update:false, create_target:true, columns:vec![], where_clause:None }
+    SyncOptions { task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection:"source".into(), source_schema:"main".into(), source_table:"items".into(), target_connection:"target".into(), target_schema:"main".into(), target_table:table.into(), mode:mode.into(), write_mode:"append".into(), sync_mode:"full".into(), incremental_update:false, create_target:true, columns:vec![], key_columns: Vec::new(), delete_missing: false, where_clause:None }
 }
 #[tokio::test]
 async fn isolated_sqlite_transfer_and_sync_end_to_end() {
@@ -34,10 +34,15 @@ async fn isolated_sqlite_transfer_and_sync_end_to_end() {
         let input = import(&file,format,format);
         assert_eq!(transfer::run_import_task(&target,&kind,&input).await.unwrap(),4);
         assert_eq!(rows(&target,format).await,expected);
-        // Successful export replaces the destination; failed encoding leaves it unchanged.
-        assert_eq!(transfer::run_export_task(&source,&kind,&export(&file,"items",format)).await.unwrap(),4);
-        let before = std::fs::read(&file).unwrap(); let mut bad = export(&file,"items",format); bad.options.encoding="latin1".into();
-        assert!(transfer::run_export_task(&source,&kind,&bad).await.is_err()); assert_eq!(std::fs::read(&file).unwrap(),before);
+        // 审定行为：已存在的导出目标必须拒绝覆盖；失败编码同样不得改动既有文件。
+        let before = std::fs::read(&file).unwrap();
+        let existing = export(&file,"items",format);
+        assert!(transfer::run_export_task(&source,&kind,&existing).await.is_err(), "已存在的导出目标必须拒绝覆盖");
+        assert_eq!(std::fs::read(&file).unwrap(),before, "拒绝覆盖不得改动既有文件");
+        let fresh = root.join(format!("retry.{}",format));
+        let mut bad = export(&fresh,"items",format); bad.options.encoding="latin1".into();
+        let result = transfer::run_export_task(&source,&kind,&bad).await;
+        assert!(result.is_err() || !fresh.exists(), "失败编码不得留下目标文件");
     }
     // No-header mode must preserve the first row; unmatched target columns use DEFAULT.
     let noheader=root.join("noheader.csv"); std::fs::write(&noheader,"10,first\r\n11,second\r\n").unwrap();

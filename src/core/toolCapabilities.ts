@@ -28,3 +28,27 @@ export function syncConnectionError(connection: ConnectionConfig | undefined, wr
   if (writable && connection.read_only) return "此连接只读，不能作为同步目标";
   return null;
 }
+
+/** 数据差异比较的方言白名单：与后端 sync::supported 一致。 */
+export function syncDiffConnectionError(connection: ConnectionConfig | undefined): string | null {
+  if (!connection) return "请先选择一个连接";
+  const kind = kindMeta(connection.kind);
+  if (!kind || kind.planned || parseDriverParams(connection.params) || !["sqlite", "mysql", "postgres", "mssql", "clickhouse", "odbc"].includes(kind.protocol)) {
+    return "比较差异仅支持 SQLite、MySQL/MariaDB、PostgreSQL、SQL Server、ClickHouse 与 ODBC 关系型数据源";
+  }
+  return null;
+}
+
+/**
+ * 受控结构差异预览 / 应用的方言白名单：后端只认证了原生 SQLite 对 SQLite，
+ * 其他方言会在 IPC 层返回 STRUCTURE_CONTROLLED_DIALECT_UNSUPPORTED，
+ * 因此前端提前置灰，避免用户点击后才看到报错。
+ */
+export function structureSyncConnectionError(connection: ConnectionConfig | undefined): string | null {
+  if (!connection) return "请先选择一个连接";
+  const kind = kindMeta(connection.kind);
+  if (!kind || kind.planned || parseDriverParams(connection.params) || kind.protocol !== "sqlite") {
+    return "结构差异预览/应用仅支持 SQLite → SQLite（其他方言的受控结构同步尚未接入，后端已认证 SQLite）";
+  }
+  return null;
+}

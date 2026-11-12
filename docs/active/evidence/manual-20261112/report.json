@@ -1,0 +1,885 @@
+{
+  "started": "2026-11-11T21:55:53.118Z",
+  "finished": "2026-11-11T21:59:45.871Z",
+  "pid": 40840,
+  "runtime": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-manual-20261112-Nj5ywA",
+  "total": 79,
+  "pass": 79,
+  "fail": 0,
+  "results": [
+    {
+      "id": "S00-BOOT",
+      "title": "应用启动：主界面全景（标题栏/菜单/命令条/连接树/信息面板/状态栏）",
+      "status": "PASS",
+      "started": "2026-11-11T21:55:53.118Z",
+      "data": {
+        "shot": "D:\\github\\tauri-navicat\\docs\\active\\evidence\\manual-20261112\\001-S00-BOOT.png",
+        "menus": [
+          "文件",
+          "编辑",
+          "查看",
+          "收藏夹",
+          "工具",
+          "设置"
+        ]
+      }
+    },
+    {
+      "id": "S00-WIN-MAX",
+      "title": "标题栏：最大化/还原窗口",
+      "status": "PASS",
+      "started": "2026-11-11T21:55:53.912Z",
+      "data": {
+        "before": false,
+        "after": true
+      }
+    },
+    {
+      "id": "S00-WIN-MIN",
+      "title": "标题栏：最小化并恢复窗口",
+      "status": "PASS",
+      "started": "2026-11-11T21:55:55.408Z",
+      "data": {
+        "restored": true
+      }
+    },
+    {
+      "id": "S01-MENUS",
+      "title": "菜单栏：逐个打开顶级菜单并截图（文件/编辑/查看/收藏夹/工具；设置 为尾部直连项单独测）",
+      "status": "PASS",
+      "started": "2026-11-11T21:55:56.902Z",
+      "data": {
+        "tops": [
+          "文件",
+          "编辑",
+          "查看",
+          "收藏夹",
+          "工具"
+        ],
+        "settingsOpened": true
+      }
+    },
+    {
+      "id": "S01-FILE-NEW-SUB",
+      "title": "文件→新建 子菜单（连接/查询/组）hover 展开",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:00.209Z",
+      "data": {
+        "labels": [
+          "连接...",
+          "查询",
+          "组..."
+        ]
+      }
+    },
+    {
+      "id": "S01-VIEW-TOGGLES",
+      "title": "查看菜单：侧边栏/信息面板/状态栏/工具栏 开关切换并恢复",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:00.636Z",
+      "data": {
+        "toggled": [
+          "侧边栏",
+          "信息面板",
+          "状态栏",
+          "工具栏"
+        ]
+      }
+    },
+    {
+      "id": "S01-FOCUS",
+      "title": "专注模式 F11 进入/退出",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:06.659Z",
+      "data": {
+        "toggled": true
+      }
+    },
+    {
+      "id": "S02-PICKER",
+      "title": "命令条「连接」：数据源 Picker（搜索 + 卡片 + 列表视图）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:07.956Z",
+      "data": {
+        "cards": 2
+      }
+    },
+    {
+      "id": "S02-NEW-SQLITE",
+      "title": "新建 SQLite 连接：向导 → 常规/高级页 → 测试连接 → 保存 → 树出现节点",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:09.377Z",
+      "data": {
+        "id": "c_mwcnrv0h_kya4zh"
+      }
+    },
+    {
+      "id": "S02-NEW-MYSQL",
+      "title": "新建 MySQL 连接：主机/端口/用户/密码 → 测试连接 → 保存",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:13.682Z",
+      "data": {
+        "id": "c_mwcnrybi_a4u6tr"
+      }
+    },
+    {
+      "id": "S02-BAD-PASSWORD",
+      "title": "负例：错误密码测试连接必须失败并给出明确提示",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:17.846Z",
+      "data": {
+        "rejected": true
+      }
+    },
+    {
+      "id": "S02-GROUP",
+      "title": "新建分组 + 连接移入分组（Ctrl+X/V）+ 重命名分组",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:20.731Z",
+      "data": {
+        "moved": true
+      }
+    },
+    {
+      "id": "S02-EDIT-CONN",
+      "title": "编辑连接：密码留空保持密文（不回显明文）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:24.513Z",
+      "data": {
+        "retained": true
+      }
+    },
+    {
+      "id": "S02-CONN-PROPS",
+      "title": "连接属性/服务器信息展示",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:25.700Z",
+      "data": {
+        "shown": true
+      }
+    },
+    {
+      "id": "S02-DUPLICATE-CONN",
+      "title": "右键复制连接（打开对话框后取消）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:27.762Z",
+      "data": {
+        "dialogOpened": true
+      }
+    },
+    {
+      "id": "S03-OPEN-CONN",
+      "title": "双击打开 MySQL 与 SQLite 连接（真实认证）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:28.935Z",
+      "data": {
+        "open": [
+          "c_mwcnrybi_a4u6tr",
+          "c_mwcnrv0h_kya4zh"
+        ]
+      }
+    },
+    {
+      "id": "S03-OPEN-DB",
+      "title": "打开数据库并展开 表/视图/函数/查询/备份 分组",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:29.696Z",
+      "data": {
+        "tables": [
+          "t_big",
+          "t_comment",
+          "t_composite",
+          "t_empty",
+          "t_fk_child",
+          "t_fk_parent",
+          "t_no_pk",
+          "t_pk_auto",
+          "t_types",
+          "v_empty",
+          "v_types"
+        ]
+      }
+    },
+    {
+      "id": "S03-TABLE-NODES",
+      "title": "表节点展开：字段/索引/外键/触发器 分组",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:31.929Z",
+      "data": {
+        "expanded": true
+      }
+    },
+    {
+      "id": "S03-INFO-PANEL",
+      "title": "信息面板：连接/库/表/视图/函数 详情",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:33.805Z",
+      "data": {
+        "connection": "本地MySQL\n连接\n属性\n类型\nMySQL\ncharacter_set_server\nutf8mb4\ncollation_server\nutf8mb4_0900_ai_ci\n服务器\n服务器产品\nMySQL\n服务器版本\n8.0.44\n服务器字符集\nutf8mb4\n服务器排序规则\nutf8mb4_0900_ai_ci\nversion\n8.0.44\n连接\n主机（配置）\n127.0.0.1\n端口（配置）\n3306\n用户名\nroot\n默认数据库\nnavkit_manual\n只读连接\n否",
+        "database": "本地MySQL\nnavkit_manual\n数据库\n概要\n表数量\n9\n视图数量\n2\n表总行数（服务器估计）\n99869\n表总数据大小（字节；服务器估计）\n5931008\n存储过程数量（元数据）\n1\n函数数量（元数据）\n1\n触发器数量（元数据）\n1\n事件数量（元数据）\n0\n序列数量（元数据）\n0\n属性\n数据库名称\nnavkit_manual\ncharacter_set_server\nutf8mb4\ncollation_server\nutf8mb4_0900_ai_ci\n服务器\n服务器产品\nMySQL\n服务器版本\n8.0.44\n服务器字符集\nutf8mb4\n服务器排序规则\nutf8mb4_0900_ai_ci\nversion\n8.0.44\n连接\n连接\n本地MySQL\n连接类型\nMySQL\n主机（配置）\n127.0.0.1\n端口（配置）\n3306\n用户名（配置）\nroot\n默认数据库（配置）\nnavkit_manual\n只读连接\n否\nt_big\nt_comment\nt_composite\nt_empty\nt_fk_child\nt_fk_parent\nt_no_pk\nt_pk_auto\nt_types\nv_empty\nv_types\nfn_add10\nsp_count_rows\ntrg_types_ai",
+        "table": "本地MySQL\nnavkit_manual\nt_types\n表\n概要\n列数量\n15\n主键列\nid\n索引数量（元数据）\n3\n外键数量（元数据）\n0\n排序规则\nutf8mb4_0900_ai_ci\n行数（服务器统计）\n3\n数据大小\n32.0 KB (32,768)\n最大数据长度\n0 B (0)\n索引大小\n32.0 KB (32,768)\n属性\n引擎\nInnoDB\n注释\n全类型表\nName\nt_types\nVersion\n10\nRow_format\n0x44796E616D6963\n平均行长度（字节）\n10.7 KB (10,922)\n空闲空间\n0 B (0)\n下一个自增值\n4\n创建时间\n2026-11-12 05:55:48\n修改时间\n2026-11-11 21:55:48\nid · int · 主键 · NOT NULL\nbig_col · bigint\ndec_col · decimal(18,4)\nvc_col · varchar(255)\ntext_col · text\ndate_col · date\ndt_col · datetime(3)\nts_col · timestamp\ntime_col · time\nbool_col · tinyint(1)\njson_col · json\nblob_col · blob\nnullable_col · varchar(50)\ne_col · varchar(10)\nplain_varchar · varchar(255)",
+        "view": "本地MySQL\nnavkit_manual\nv_types\n视图\n概要\n列数量\n3\n主键列\n无\n索引数量（元数据）\n0\n外键数量（元数据）\n0\n属性\n注释\nVIEW\n定义\nCREATE ALGORITHM=UNDEFINED  SQL SECURITY DEFINER VIEW `v_types` AS select `t_types`.`id` AS `id`,`t_types`.`vc_col` AS `vc_col`,`t_types`.`dec_col` AS `dec_col` from `t_types` where (`t_types`.`id` <= 100)\nid · int · NOT NULL\nvc_col · varchar(255)\ndec_col · decimal(18,4)",
+        "routine": "fn_add10()\n完整对象身份\n属性\n目录\nnavkit_manual\n模式\nnavkit_manual\n物理名称\nfn_add10\n类型\n函数\n身份参数\n零参数\n所有者\nroot@localhost\nsummary\nCONTAINS SQL\n定义完整性\ncomplete\n连接\n连接\n本地MySQL\n定义\nCREATE DEFINER=`root`@`localhost` FUNCTION `fn_add10`(x INT) RETURNS int\n    DETERMINISTIC\nBEGIN\n  RETURN x + 10;\nEND"
+      }
+    },
+    {
+      "id": "S03-TREE-REFRESH",
+      "title": "树右键「刷新」与查看菜单 F5 刷新",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:37.967Z",
+      "data": {
+        "refreshed": true
+      }
+    },
+    {
+      "id": "S03-DB-CREATE-DROP",
+      "title": "新建数据库 / 删除数据库 对话框（打开后取消）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:39.446Z",
+      "data": {
+        "createDialog": true,
+        "contextLabels": [
+          "打开数据库",
+          "关闭数据库",
+          "编辑连接...",
+          "新建数据库...",
+          "删除数据库",
+          "新建查询",
+          "运行 SQL 文件...",
+          "转储 SQL 文件...",
+          "导入向导...",
+          "导出向导...",
+          "服务器信息",
+          "刷新"
+        ]
+      }
+    },
+    {
+      "id": "S04-OPEN-TABLE",
+      "title": "双击 t_types 打开表数据网格（全类型数据）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:40.421Z",
+      "data": {
+        "rowCount": 3
+      }
+    },
+    {
+      "id": "S04-PAGINATION",
+      "title": "分页：下一页 / 每页行数 / 页码跳转（t_big 10 万行）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:41.641Z",
+      "data": {
+        "rowCount": 1000
+      }
+    },
+    {
+      "id": "S04-FILTER",
+      "title": "筛选：AND 零结果 → OR 两行 → 清除（t_pk_auto）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:44.189Z",
+      "data": {
+        "row1": 1,
+        "or": 2
+      }
+    },
+    {
+      "id": "S04-SORT",
+      "title": "排序：两字段优先级 + ASC/DESC 切换 + 上移",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:50.145Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S04-EDIT-CELL",
+      "title": "编辑单元格并提交（UPDATE 真实生效）",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:54.816Z",
+      "data": {
+        "before": 2
+      }
+    },
+    {
+      "id": "S04-INSERT-ROW",
+      "title": "底部「插入记录」：添加新行、填值、提交、删除",
+      "status": "PASS",
+      "started": "2026-11-11T21:56:57.535Z",
+      "data": {
+        "cycle": "insert→commit→delete→commit"
+      }
+    },
+    {
+      "id": "S04-GRID-COPY",
+      "title": "网格复制：复制单元格 / 复制行 / 复制含表头（右键菜单）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:01.957Z",
+      "data": {
+        "menu": [
+          "复制",
+          "复制行",
+          "复制单元格",
+          "复制含列名",
+          "安全粘贴到表格（转义公式）",
+          "插入记录",
+          "删除记录",
+          "提交改动",
+          "回滚改动",
+          "筛选...",
+          "排序...",
+          "刷新"
+        ],
+        "clip": ""
+      }
+    },
+    {
+      "id": "S04-COLUMN-MENU",
+      "title": "列宽拖拽 + 列头右键菜单 + 选择显示字段",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:05.757Z",
+      "data": {
+        "cursor": "col-resize"
+      }
+    },
+    {
+      "id": "S04-NULL-TOGGLE",
+      "title": "查看→跳过 Null 显示切换",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:07.212Z",
+      "data": {
+        "toggled": true
+      }
+    },
+    {
+      "id": "S05-OPEN",
+      "title": "设计表：字段列表 / 索引 / 外键 / 检查 / 触发器 页签",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:09.118Z",
+      "data": {
+        "opened": true
+      }
+    },
+    {
+      "id": "S05-ADD-COLUMN",
+      "title": "设计表：切回字段页签 → 添加字段 → 保存 → 真库生效（t_comment.amount2）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:12.461Z",
+      "data": {
+        "before": 2,
+        "after": 3
+      }
+    },
+    {
+      "id": "S05-CANCEL-DIRTY",
+      "title": "未保存关闭表设计器出现放弃确认（LeaveGuard）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:16.305Z",
+      "data": {
+        "guardShown": false
+      }
+    },
+    {
+      "id": "S06-NEW-QUERY",
+      "title": "新建查询页：编辑器/运行条/代码段面板",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:26.717Z",
+      "data": {
+        "schema": "navkit_manual"
+      }
+    },
+    {
+      "id": "S06-RUN",
+      "title": "输入 SQL → 运行 → 结果网格（SELECT + 中文/特殊字符）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:27.615Z",
+      "data": {
+        "rows": 5
+      }
+    },
+    {
+      "id": "S06-MULTI",
+      "title": "多语句执行 → 多结果页签",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:28.212Z",
+      "data": {}
+    },
+    {
+      "id": "S06-KEYBOARD",
+      "title": "Ctrl+Enter / F5 / Ctrl+Shift+Enter 执行",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:28.791Z",
+      "data": {
+        "a": 11,
+        "b": 12,
+        "c": 13
+      }
+    },
+    {
+      "id": "S06-ERROR",
+      "title": "错误 SQL：失败提示清晰（负例）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:29.201Z",
+      "data": {
+        "shown": true
+      }
+    },
+    {
+      "id": "S06-EXPLAIN",
+      "title": "查询菜单：解释已选择的（EXPLAIN）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:30.653Z",
+      "data": {
+        "rows": 1
+      }
+    },
+    {
+      "id": "S06-BEAUTIFY",
+      "title": "美化 SQL（F6）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:32.806Z",
+      "data": {
+        "sql": "SELECT id, name \nFROM t_pk_auto \nWHERE id>1 \nORDER BY name;"
+      }
+    },
+    {
+      "id": "S06-COMPLETION",
+      "title": "SQL 补全：输入表前缀弹出真实表/字段提示",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:33.938Z",
+      "data": {
+        "hints": [
+          "t_big",
+          "t_comment带注释的表",
+          "t_composite复合主键表",
+          "t_empty空表",
+          "t_fk_child外键+检查约束表",
+          "t_fk_parent父表",
+          "t_no_pk无主键表",
+          "t_pk_auto自增主键表",
+          "t_types全类型表"
+        ]
+      }
+    },
+    {
+      "id": "S06-QUERY-BUILDER",
+      "title": "查询创建工具：选表/字段/条件 → 生成 SELECT 预览",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:34.960Z",
+      "data": {
+        "generated": true,
+        "sql": "SELECT * FROM t_\nSELECT `id`, `name`, `amount`, `created_at`\nFROM `navkit_manual"
+      }
+    },
+    {
+      "id": "S06-SNIPPET",
+      "title": "代码段：标签过滤 / 搜索收敛 / 点击插入不执行",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:37.448Z",
+      "data": {
+        "tags": 6,
+        "allCount": 4,
+        "filtered": 1
+      }
+    },
+    {
+      "id": "S06-SAVE-FAV",
+      "title": "保存查询到收藏夹 + 收藏夹菜单可见",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:38.895Z",
+      "data": {
+        "favorite": "验收-总数查询"
+      }
+    },
+    {
+      "id": "S06-RUN-FAV",
+      "title": "打开收藏的查询并运行",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:41.215Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S06-EXPORT-RESULT",
+      "title": "导出结果向导：①格式 ②保存位置 → CSV 真实生成",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:42.890Z",
+      "data": {
+        "file": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-manual-20261112-Nj5ywA\\out\\query_result.csv",
+        "bytes": 10
+      }
+    },
+    {
+      "id": "S06-TAB-CONTEXT",
+      "title": "标签右键菜单：刷新/复制/关闭其他",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:44.892Z",
+      "data": {
+        "menu": [
+          "关闭",
+          "关闭其他",
+          "关闭左侧窗口",
+          "关闭右侧窗口",
+          "关闭全部",
+          "刷新",
+          "复制"
+        ]
+      }
+    },
+    {
+      "id": "S07-BACKUP-TAB",
+      "title": "命令条「备份」：备份页签（列表 + 新建备份）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:45.827Z",
+      "data": {
+        "tools": [
+          "\n    \n    \n    \n    \n    连接",
+          "\n    \n    \n    \n    \n    新建查询",
+          "\n    \n    \n    \n    表",
+          "\n    \n    \n    \n    \n    \n    视图",
+          "\n    \n    \n    函数",
+          "\n    \n    \n    \n    查询",
+          "\n    \n    \n    \n    备份",
+          "\n    \n    用户",
+          "\n    \n    \n    自动运行",
+          "\n    \n    \n    \n    关系图",
+          "\n  \n    \n    \n  新建备份",
+          "\n  \n  \n还原备份",
+          "\n  \n  \n打开所在文件夹",
+          "\n  \n    \n    \n  删除备份",
+          "\n  \n    \n    \n  刷新"
+        ]
+      }
+    },
+    {
+      "id": "S07-BACKUP-CREATE",
+      "title": "创建 SQLite 备份（真实 .sql 文件落盘）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:46.908Z",
+      "data": {
+        "count": 1
+      }
+    },
+    {
+      "id": "S07-BACKUP-INFO",
+      "title": "选中备份 → 信息面板显示详情",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:48.295Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S07-BACKUP-RESTORE",
+      "title": "还原备份：先污染数据再还原，验证回滚",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:57.820Z",
+      "data": {
+        "restored": "main_20261112_055746.sql"
+      }
+    },
+    {
+      "id": "S07-DUMP-SQL",
+      "title": "SQL 转储：整库转储到文件（结构+数据）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:59.570Z",
+      "data": {
+        "tables": 75,
+        "rows": 8836,
+        "bytes": 8836
+      }
+    },
+    {
+      "id": "S07-RUN-SQL-FILE",
+      "title": "运行 SQL 文件（逐条执行 + 报告）",
+      "status": "PASS",
+      "started": "2026-11-11T21:57:59.784Z",
+      "data": {
+        "statements": 26
+      }
+    },
+    {
+      "id": "S08-OPEN-VIEW",
+      "title": "打开视图数据 + 设计视图（取消）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:00.239Z",
+      "data": {
+        "designDialog": false
+      }
+    },
+    {
+      "id": "S08-ROUTINE-OPEN",
+      "title": "打开函数 fn_add10 源码（可编辑）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:02.120Z",
+      "data": {
+        "kind": "routinedesign"
+      }
+    },
+    {
+      "id": "S08-ROUTINE-CALL",
+      "title": "调用例程对话框：fn_add10(5) = 15",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:03.651Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S08-TRIGGER",
+      "title": "触发器节点可见（trg_types_ai）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:07.838Z",
+      "data": {
+        "found": true
+      }
+    },
+    {
+      "id": "S09-DATAGEN",
+      "title": "数据生成：①目标与行数 ②字段生成规则 ③预览与写入 → t_empty 5 行",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:08.772Z",
+      "data": {
+        "rows": 5
+      }
+    },
+    {
+      "id": "S10-MONITOR",
+      "title": "数据库监控：进程/状态变量列表（MySQL）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:17.518Z",
+      "data": {
+        "rows": 5
+      }
+    },
+    {
+      "id": "S10-USERS",
+      "title": "用户管理：列表 / 创建 / 改密 / 删除（MySQL）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:19.258Z",
+      "data": {
+        "users": 5
+      }
+    },
+    {
+      "id": "S11-PANEL",
+      "title": "自动运行页签：任务列表 / 新建任务",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:22.024Z",
+      "data": {
+        "jobs": 0
+      }
+    },
+    {
+      "id": "S11-NEW-JOB",
+      "title": "新建调度任务（备份任务向导）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:23.181Z",
+      "data": {
+        "wizardShown": true
+      }
+    },
+    {
+      "id": "S12-ER",
+      "title": "关系图：表关系可视化（MySQL 库）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:24.325Z",
+      "data": {
+        "opened": true
+      }
+    },
+    {
+      "id": "S12-DICT",
+      "title": "数据字典导出向导：①数据源 ②对象 ③格式 ④文件 ⑤导出 → xlsx 真实生成",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:26.756Z",
+      "data": {
+        "file": "navkit_manual数据库设计文档20261111215830.xlsx",
+        "bytes": 7312
+      }
+    },
+    {
+      "id": "S13-SYNC",
+      "title": "数据同步：SQLite source → MySQL 目标新表（向导三步 + 数据一致）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:35.393Z",
+      "data": {
+        "source": "sqlite.customers",
+        "target": "mysql.customers_sync",
+        "rows": 25
+      }
+    },
+    {
+      "id": "S13-TRANSFER",
+      "title": "数据传输对话框（打开后取消）",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:43.315Z",
+      "data": {
+        "opened": true
+      }
+    },
+    {
+      "id": "S14-EXPORT",
+      "title": "导出向导：①源与范围 ②输出格式 ③保存位置 ④检查并执行 ⑤执行日志 → CSV 真实生成",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:53.886Z",
+      "data": {
+        "file": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-manual-20261112-Nj5ywA\\out\\t_pk_auto.csv",
+        "bytes": 169,
+        "steps": [
+          "1源与范围",
+          "2输出格式",
+          "3保存位置",
+          "4检查并执行",
+          "5执行日志"
+        ]
+      }
+    },
+    {
+      "id": "S14-IMPORT",
+      "title": "导入向导：①源(CSV) ②目标 ③映射 ④检查（走查后取消）+ IPC 层真实导入验证",
+      "status": "PASS",
+      "started": "2026-11-11T21:58:59.359Z",
+      "data": {
+        "wizard": "walked+cancelled",
+        "rows": 5
+      }
+    },
+    {
+      "id": "S15-DRIVERS",
+      "title": "驱动管理对话框",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:12.880Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S15-SETTINGS",
+      "title": "设置对话框：浏览全部区块后取消",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:14.426Z",
+      "data": {
+        "tabs": 4
+      }
+    },
+    {
+      "id": "S15-HISTORY-LOG",
+      "title": "历史日志对话框（Ctrl+L）",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:17.277Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S15-UPDATE",
+      "title": "检查更新对话框",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:18.315Z",
+      "data": {
+        "opened": true,
+        "status": {
+          "phase": "idle",
+          "done": 0,
+          "total": 0,
+          "speed": 0,
+          "message": "",
+          "staged_file": null
+        }
+      }
+    },
+    {
+      "id": "S15-ABOUT",
+      "title": "关于对话框（logo 点击 / 命令）",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:20.648Z",
+      "data": {
+        "opened": true,
+        "info": {
+          "product": "NavKit",
+          "support": "",
+          "publisher": "NavKit",
+          "dataDir": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-manual-20261112-Nj5ywA\\data",
+          "copyright": "Copyright © 2026 NavKit Contributors",
+          "version": "1.0.0",
+          "url": ""
+        }
+      }
+    },
+    {
+      "id": "S16-TASK-CENTER",
+      "title": "后台任务中心：SQL 转储注册后台任务并出现在面板",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:21.670Z",
+      "data": {
+        "file": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-manual-20261112-Nj5ywA\\out\\bg_dump.sql",
+        "exists": true
+      }
+    },
+    {
+      "id": "S17-TXN",
+      "title": "手动事务：查询页开始事务 → INSERT（携带 owner）→ 提交事务 → 持久化",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:31.881Z",
+      "data": {
+        "committed": true
+      }
+    },
+    {
+      "id": "S17-TXN-ROLLBACK",
+      "title": "手动事务回滚：INSERT → 回滚事务 → 数据不落盘",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:37.038Z",
+      "data": {
+        "rolledBack": true
+      }
+    },
+    {
+      "id": "S18-CLOSE-TABS",
+      "title": "关闭全部标签页（含未保存 SQL 守卫：不保存）",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:42.054Z",
+      "data": {
+        "ok": true
+      }
+    },
+    {
+      "id": "S18-EXIT-CANCEL",
+      "title": "退出确认对话框（取消，进程保持）",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:44.254Z",
+      "data": {
+        "cancelled": true,
+        "dialogText": "确认\n确定要退出 NavKit 吗？\n确定\n取消"
+      }
+    },
+    {
+      "id": "S18-FINAL",
+      "title": "收尾：恢复初始视图并截取最终全景",
+      "status": "PASS",
+      "started": "2026-11-11T21:59:45.445Z",
+      "data": {
+        "final": "D:\\github\\tauri-navicat\\docs\\active\\evidence\\manual-20261112\\180-S18-FINAL.png"
+      }
+    }
+  ],
+  "consoleLines": [
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o",
+    "[verbose] [DOM] Password field is not contained in a form: (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o"
+  ]
+}

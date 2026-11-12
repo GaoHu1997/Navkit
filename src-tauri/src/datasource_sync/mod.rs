@@ -1,5 +1,5 @@
 //! 数据源配置同步：只包含 ConnectionConfig、分组、顺序与删除记录。
-//! 所有秘密及预览快照均留在 Rust；本机状态与恢复记录使用本机 AES 密钥。
+//! 密码、口令及预览快照留在 Rust；请求头供设置页回显，本机状态与恢复记录使用本机 AES 密钥。
 mod crypto;
 mod merge;
 mod webdav;
@@ -39,6 +39,7 @@ pub struct ConfigView {
     pub password_set: bool,
     pub passphrase_set: bool,
     pub headers_set: bool,
+    pub headers: String,
     pub last_sync: Option<String>,
 }
 
@@ -148,6 +149,7 @@ impl SecretConfig {
             password_set: !self.password.is_empty(),
             passphrase_set: !self.passphrase.is_empty(),
             headers_set: !self.headers.trim().is_empty(),
+            headers: self.headers.clone(),
             last_sync: self.last_sync.clone(),
         }
     }

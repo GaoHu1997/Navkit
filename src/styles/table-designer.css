@@ -1,0 +1,100 @@
+.table-designer { min-height: 0; color: var(--text-primary); font-size: var(--fs-12); }
+.table-designer .designer-tabs { min-height: 32px; overflow-x: auto; }
+.table-designer .designer-tab { flex: 0 0 auto; height: 32px; line-height: normal; background: transparent; }
+.table-designer .designer-body { padding: 8px; }
+.table-designer input:not([type=checkbox]), .table-designer select,
+.table-designer button:not(.designer-tab), .table-plan-dialog input,
+.table-plan-dialog select, .table-plan-dialog button { box-sizing: border-box; min-height: 26px; height: 26px; font: inherit; }
+.table-designer input:not([type=checkbox]), .table-designer select, .table-designer textarea,
+.table-plan-dialog input { border: 1px solid var(--border); border-radius: 2px; background: var(--bg-surface); color: var(--text-primary); padding: 3px 6px; }
+.table-designer input[type=checkbox] { width: 14px; height: 14px; margin: 0; accent-color: var(--accent-500); }
+.table-designer textarea { box-sizing: border-box; min-height: 94px; width: 100%; resize: vertical; font: inherit; }
+.table-designer :is(input, select, textarea, button, summary):focus-visible,
+.table-plan-dialog :is(input, select, textarea, button, pre):focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
+.table-designer :disabled { color: var(--text-tertiary); background: var(--bg-subtle); cursor: not-allowed; }
+.table-designer .designer-grid { table-layout: auto; width: 100%; min-width: 0; }
+/* 字段页列多，保留横向滚动宽度；索引/外键/检查/触发器按内容自适应 */
+.table-designer .designer-grid.wide { min-width: 980px; }
+.table-designer .designer-grid th { text-align: left; }
+.table-designer .designer-grid :is(td, th) { padding: 4px; vertical-align: middle; }
+.table-designer .designer-grid input:not([type=checkbox]) { width: 100%; min-width: 64px; }
+.table-designer .designer-grid td:nth-child(1) { min-width: 140px; }
+.table-designer .designer-grid.wide td:nth-child(2) { min-width: 180px; }
+.table-designer .designer-grid.wide td:nth-child(7) { min-width: 150px; }
+.table-designer .designer-grid.wide td:nth-child(11) { min-width: 170px; }
+/* 类型 / 默认值单元格：单行内联；选择框与（自定义 / 表达式）输入并排，不再上下堆叠 */
+.table-designer .designer-type, .table-designer .designer-default { display: flex; gap: 4px; align-items: center; }
+.table-designer .designer-type select { flex: 1 1 110px; min-width: 0; width: auto; }
+.table-designer .designer-type input { flex: 1 1 100px; min-width: 0; }
+.table-designer .designer-default select { flex: 0 0 110px; min-width: 0; width: auto; }
+.table-designer .designer-default input { flex: 1 1 auto; min-width: 0; }
+/* 列表页操作列：只放一个删除按钮，窄列 */
+.table-designer .designer-grid .designer-op { white-space: nowrap; width: 1%; }
+.table-designer .designer-grid .designer-op .btn { min-width: 0; padding: 0 10px; }
+/* 主键行：区别于普通索引行 */
+.table-designer .designer-grid tr.designer-pk td { background: var(--bg-subtle); }
+.table-designer .designer-grid tr.designer-pk td:first-child { white-space: nowrap; }
+.table-designer .designer-deleted { opacity: .6; text-decoration: line-through; }
+.table-designer .designer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.table-designer .designer-actions strong { margin-right: auto; font-size: inherit; }
+.table-designer .designer-check { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; white-space: nowrap; }
+.table-designer .designer-check-bare { justify-content: center; }
+/* 主键钥匙图标：替代复选框，选中态高亮 */
+.table-designer .designer-key { min-width: 28px; padding: 0 4px; border: 1px solid transparent; border-radius: 4px; background: transparent; font-size: 14px; line-height: 1; filter: grayscale(1); opacity: .55; cursor: pointer; }
+.table-designer .designer-key:hover { background: var(--bg-hover); opacity: .85; }
+.table-designer .designer-key.active { filter: none; opacity: 1; background: color-mix(in srgb, var(--accent-500) 14%, transparent); border-color: var(--accent-500); }
+.table-designer .designer-key:disabled { opacity: .35; cursor: not-allowed; }
+/* 字段页底部：当前字段属性面板（默认值 / 自增 / 无符号 / 填充零） */
+.table-designer .designer-field-props { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 22px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.table-designer .designer-field-props:empty { display: none; }
+.table-designer .designer-field-props .designer-props-title { flex: 0 0 100%; font-weight: 600; }
+.table-designer .designer-field-props .designer-control { margin-bottom: 0; }
+.table-designer .designer-field-props .designer-default { display: flex; gap: 4px; align-items: center; min-width: 360px; }
+.table-designer .designer-field-props .designer-props-flags { display: flex; gap: 16px; align-items: center; }
+/* 索引字段顺序编辑器：字段 / 排序 / 上移 / 删除 + 添加字段 */
+.table-designer .designer-index-cols { display: flex; flex-direction: column; gap: 4px; min-width: 260px; }
+.table-designer .designer-index-col-row { display: flex; gap: 4px; align-items: center; }
+.table-designer .designer-index-col-row select { flex: 0 1 auto; min-width: 0; }
+.table-designer .designer-index-col-row .designer-mini { flex: 0 0 auto; padding: 0 6px; min-width: 0; }
+.table-designer .designer-add-col { align-self: flex-start; padding: 0 8px; }
+.table-designer .designer-control, .table-plan-dialog .designer-control { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin-bottom: 10px; max-width: 720px; }
+.table-designer .designer-options .designer-control { flex-direction: row; align-items: center; gaps: 0; }
+.table-designer .designer-options .designer-control > span { flex: 0 0 140px; color: var(--text-secondary); }
+.table-designer .designer-options .designer-control > :is(input, select, textarea) { flex: 1 1 auto; max-width: 560px; }
+.table-designer .designer-control > span { color: var(--text-secondary); }
+.table-designer .designer-control small { color: var(--text-tertiary); line-height: 1.5; }
+.table-designer .designer-status { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 6px 10px; color: var(--text-secondary); background: var(--bg-subtle); }
+.table-designer .designer-notice, .table-plan-dialog .designer-notice { border: 1px solid var(--border); padding: 8px; line-height: 1.6; background: var(--bg-subtle); white-space: pre-line; }
+.table-designer .designer-sql, .table-plan-dialog .designer-sql { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 52vh; border: 1px solid var(--border); padding: 10px; font-family: var(--font-mono, monospace); line-height: 1.5; tab-size: 2; }
+.table-plan-dialog .dialog-body { overflow: auto; max-height: 72vh; }
+
+/* 设计器页签统一为分段按钮：字段与索引 / 外键 / 触发器视觉一致，
+   不再让当前页签用下划线单独强调。 */
+.table-designer .designer-tabs {
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+}
+.table-designer .designer-tab {
+  height: 26px;
+  line-height: 24px;
+  padding: 0 var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  color: var(--text-secondary);
+  background: transparent;
+  font-weight: 400;
+}
+.table-designer .designer-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.table-designer .designer-tab.active {
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 0;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}

@@ -112,6 +112,33 @@ pub fn backup_dir(conn_id: &str, schema: &str) -> PathBuf {
 
 static KEY_LOCK: Mutex<()> = Mutex::new(());
 
+/// Check all local encrypted asset families before first-use key creation.
+/// Unreadable or redirected directories cannot prove that a replacement key is safe.
+fn encrypted_assets_exist(root: &Path) -> anyhow::Result<bool> {
+    let directories = [root.to_path_buf(), root.join("models"), root.join("runtime-profiles"), root.join("scheduler")];
+    let mut observed = 0usize;
+    for directory in directories {
+        let metadata = match fs::symlink_metadata(&directory) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() { anyhow::bail!("本机加密资产目录不可核验，已拒绝生成替代密钥"); }
+        #[cfg(windows)] {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 { anyhow::bail!("本机加密资产目录发生重定向，已拒绝生成替代密钥"); }
+        }
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            observed += 1;
+            if observed > 32768 { anyhow::bail!("本机加密资产核验超限，已拒绝生成替代密钥"); }
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.ends_with(".enc") || name.ends_with(".enc.bak") || name.ends_with(".pending") { return Ok(true); }
+        }
+    }
+    Ok(false)
+}
+
 /// 解密时绝不生成密钥；损坏的密钥也绝不被随机新密钥覆盖。
 fn master_key_at(dir: &Path, create: bool) -> anyhow::Result<Zeroizing<[u8; 32]>> {
     let _guard = KEY_LOCK
@@ -126,8 +153,8 @@ fn master_key_at(dir: &Path, create: bool) -> anyhow::Result<Zeroizing<[u8; 32]>
         }
         Ok(_) => anyhow::bail!("本机加密密钥损坏，已拒绝覆盖密钥"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && create => {
-            if dir.join("datasource_sync.enc").exists() {
-                anyhow::bail!("已有加密同步状态但本机密钥缺失，已拒绝生成替代密钥");
+            if encrypted_assets_exist(dir)? {
+                anyhow::bail!("已有本机加密文件但本机密钥缺失，已拒绝生成替代密钥");
             }
             fs::create_dir_all(dir)?;
             let mut key = Zeroizing::new([0u8; 32]);
@@ -242,7 +269,7 @@ pub struct Store {
     connection_state: Mutex<ConnectionsState>,
     connection_gate: Arc<RwLock<()>>,
     root: PathBuf,
-    favorites: Mutex<Vec<Favorite>>,
+    favorites: Mutex<FavoritesState>,
     recent: Mutex<Vec<RecentItem>>,
 }
 
@@ -252,6 +279,115 @@ struct ConnectionsState {
     revision: u64,
     disk_hash: Option<[u8; 32]>,
     load_error: Option<String>,
+}
+
+#[derive(Default)]
+struct FavoritesState {
+    items: Vec<Favorite>,
+    load_error: Option<String>,
+}
+
+#[cfg(test)]
+mod saved_query_tests {
+    use super::*;
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("navkit-saved-query-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap(); Self(root)
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            assert!(self.0.is_absolute() && self.0.parent() == Some(std::env::temp_dir().as_path()));
+            assert!(self.0.file_name().unwrap().to_string_lossy().starts_with("navkit-saved-query-"));
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    fn favorite(id: &str, schema: Option<&str>) -> Favorite {
+        Favorite { id: id.into(), name: "同名查询".into(), sql: "SELECT '原文';\r\n-- 保留".into(), connection_id: Some("c".into()), schema: schema.map(str::to_string), timestamp: 42 }
+    }
+    #[test]
+    fn legacy_query_assignment_keeps_id_sql_and_survives_restart() {
+        let fixture = Fixture::new();
+        let legacy = br#"{"items":[{"id":"legacy","name":"old","sql":"SELECT 1;\r\n","connection_id":"c","timestamp":9}]}"#;
+        fs::write(fixture.0.join("favorites.json"), legacy).unwrap();
+        let store = Store::load_at(&fixture.0);
+        let mut query = store.favorites()[0].clone();
+        assert!(query.schema.is_none()); assert_eq!(query.timestamp, 9);
+        query.schema = Some("db1".into());
+        store.add_favorite(query.clone()).unwrap();
+        store.add_favorite(query.clone()).unwrap();
+        let loaded = Store::load_at(&fixture.0).favorites();
+        assert_eq!(loaded.len(), 1); assert_eq!(loaded[0].id, "legacy");
+        assert_eq!(loaded[0].sql, "SELECT 1;\r\n"); assert_eq!(loaded[0].schema.as_deref(), Some("db1"));
+    }
+    #[test]
+    fn saving_requires_connection_and_database_without_changing_disk_or_memory() {
+        let fixture = Fixture::new(); let store = Store::empty_at(&fixture.0);
+        store.add_favorite(favorite("saved", Some("one"))).unwrap();
+        let path = fixture.0.join("favorites.json"); let bytes = fs::read(&path).unwrap();
+        for connection_id in [None, Some(""), Some(" "), Some("c")] {
+            for schema in [None, Some(""), Some(" "), Some("one")] {
+                if connection_id == Some("c") && schema == Some("one") { continue; }
+                let mut query = favorite("invalid", schema);
+                query.connection_id = connection_id.map(str::to_string);
+                assert!(store.add_favorite(query).unwrap_err().contains("请选择连接和数据库"));
+                assert_eq!(store.favorites().len(), 1); assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+        }
+        let mut moved = favorite("saved", Some("two")); moved.sql = "SELECT moved".into();
+        assert!(store.add_favorite(moved).is_err()); assert_eq!(fs::read(&path).unwrap(), bytes);
+        let mut moved = favorite("saved", Some("one")); moved.connection_id = Some("other".into());
+        assert!(store.add_favorite(moved).is_err()); assert_eq!(fs::read(&path).unwrap(), bytes);
+        let loaded = Store::load_at(&fixture.0).favorites();
+        assert_eq!(loaded.len(), 1); assert_eq!(loaded[0].id, "saved"); assert_eq!(loaded[0].schema.as_deref(), Some("one"));
+    }
+    #[test]
+    fn stable_id_updates_and_cross_database_names_stay_separate() {
+        let fixture = Fixture::new(); let store = Store::empty_at(&fixture.0);
+        store.add_favorite(favorite("a", Some("one"))).unwrap();
+        store.add_favorite(favorite("b", Some("two"))).unwrap();
+        let mut edited = favorite("a", Some("one")); edited.sql = "SELECT 2".into();
+        store.add_favorite(edited).unwrap();
+        assert!(store.add_favorite(favorite("duplicate", Some("one"))).is_err());
+        let loaded = Store::load_at(&fixture.0).favorites();
+        assert_eq!(loaded.len(), 2); assert_eq!(loaded.iter().find(|f| f.id == "a").unwrap().sql, "SELECT 2");
+        assert_eq!(loaded.iter().find(|f| f.id == "b").unwrap().sql, favorite("b", Some("two")).sql);
+        store.remove_favorite("a").unwrap(); assert_eq!(Store::load_at(&fixture.0).favorites()[0].id, "b");
+    }
+    #[test]
+    fn failed_save_and_delete_do_not_publish_memory_and_can_retry() {
+        let fixture = Fixture::new(); let store = Store::empty_at(&fixture.0);
+        store.add_favorite(favorite("a", Some("one"))).unwrap();
+        let path = fixture.0.join("favorites.json");
+        let retained = fixture.0.join("retained.json");
+        let original = fs::read(&path).unwrap();
+        fs::rename(&path, &retained).unwrap(); fs::create_dir(&path).unwrap();
+        assert!(store.add_favorite(favorite("b", Some("two"))).is_err());
+        assert!(store.remove_favorite("a").is_err());
+        assert_eq!(store.favorites().len(), 1); assert_eq!(store.favorites()[0].id, "a");
+        assert_eq!(fs::read(&retained).unwrap(), original);
+        fs::remove_dir(&path).unwrap(); fs::rename(&retained, &path).unwrap();
+        store.add_favorite(favorite("b", Some("two"))).unwrap();
+        assert_eq!(Store::load_at(&fixture.0).favorites().len(), 2);
+    }
+    #[test]
+    fn corrupt_file_and_conflicting_ids_are_never_overwritten() {
+        let fixture = Fixture::new(); let path = fixture.0.join("favorites.json");
+        for bytes in [b"broken-json".to_vec(), serde_json::to_vec(&FavoritesFile { items: vec![favorite("a", None), favorite("a", Some("db"))] }).unwrap()] {
+            fs::write(&path, &bytes).unwrap(); let store = Store::load_at(&fixture.0);
+            assert!(store.add_favorite(favorite("new", Some("db"))).is_err());
+            assert!(store.remove_favorite("a").is_err()); assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn concurrent_favorite_writes_keep_both_records() {
+        let fixture = Fixture::new(); let store = Arc::new(Store::empty_at(&fixture.0));
+        let handles: Vec<_> = (0..8).map(|i| { let store = store.clone(); std::thread::spawn(move || store.add_favorite(favorite(&format!("q{i}"), Some(&format!("db{i}")))).unwrap()) }).collect();
+        for handle in handles { handle.join().unwrap(); }
+        assert_eq!(Store::load_at(&fixture.0).favorites().len(), 8);
+    }
 }
 
 #[derive(Clone)]
@@ -274,7 +410,7 @@ impl Store {
     }
 
     pub fn load_at(root: &Path) -> Self {
-        let settings = read_json::<AppSettings>(&root.join("config.json")).unwrap_or_default();
+        let settings = read_execution_settings(&root.join("config.json")).unwrap_or_default();
         let mut connection_state = ConnectionsState::default();
         match read_bytes_limited(&root.join("connections.json"), 16 * 1024 * 1024) {
             Ok(bytes) => {
@@ -292,14 +428,25 @@ impl Store {
                 connection_state.load_error = Some("连接配置文件不可读，已拒绝同步或覆盖".into())
             }
         }
-        let ff = read_json::<FavoritesFile>(&root.join("favorites.json")).unwrap_or_default();
+        let favorites = match fs::read(root.join("favorites.json")) {
+            Ok(bytes) => match serde_json::from_slice::<FavoritesFile>(&bytes) {
+                Ok(file) => {
+                    let mut ids = std::collections::HashSet::new();
+                    let duplicate = file.items.iter().any(|f| f.id.is_empty() || !ids.insert(f.id.clone()));
+                    FavoritesState { items: file.items, load_error: duplicate.then(|| "收藏 ID 冲突，已拒绝覆盖原文件".into()) }
+                }
+                Err(_) => FavoritesState { items: vec![], load_error: Some("收藏文件解析失败，已拒绝覆盖原文件".into()) },
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => FavoritesState::default(),
+            Err(_) => FavoritesState { items: vec![], load_error: Some("收藏文件不可读取，已拒绝覆盖原文件".into()) },
+        };
         let rf = read_json::<RecentFile>(&root.join("recent.json")).unwrap_or_default();
         Store {
             settings: Mutex::new(settings),
             connection_state: Mutex::new(connection_state),
             connection_gate: Arc::new(RwLock::new(())),
             root: root.to_path_buf(),
-            favorites: Mutex::new(ff.items),
+            favorites: Mutex::new(favorites),
             recent: Mutex::new(rf.items),
         }
     }
@@ -311,10 +458,13 @@ impl Store {
             connection_state: Mutex::new(ConnectionsState::default()),
             connection_gate: Arc::new(RwLock::new(())),
             root: root.to_path_buf(),
-            favorites: Mutex::new(vec![]),
+            favorites: Mutex::new(FavoritesState::default()),
             recent: Mutex::new(vec![]),
         }
     }
+
+    /// 本机密文资产必须使用与连接配置相同的真实数据根目录。
+    pub fn data_root(&self) -> &Path { &self.root }
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
@@ -342,10 +492,27 @@ impl Store {
         self.settings.lock().unwrap().clone()
     }
 
-    pub fn set_settings(&self, s: AppSettings) {
+    pub fn set_settings(&self, s: AppSettings) -> Result<(), String> {
+        s.validate_execution_settings().map_err(|e| e.to_string())?;
         let mut g = self.settings.lock().unwrap();
+        let path = self.root.join("config.json");
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let disk: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "设置文件损坏，拒绝覆盖")?;
+                if !disk.is_object() || disk.get("settings_version").and_then(|v| v.as_u64()).is_some_and(|v| v > 2) { return Err("设置文件版本不支持，拒绝覆盖".into()); }
+                // 迁移备份只在第一次显式保存时产生，读旧不会改盘。
+                if disk.get("settings_version").is_none() && !self.root.join("config.v1.backup.json").exists() {
+                    atomic_write(&self.root.join("config.v1.backup.json"), &bytes).map_err(|_| "设置升级备份失败")?;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(_) => return Err("设置文件不可读，拒绝覆盖".into()),
+        }
+        write_json_checked(&path, &s).map_err(|_| "设置保存失败，内存未改变")?;
+        let verified: AppSettings = read_json(&path).ok_or("设置保存后的读回校验失败")?;
+        if serde_json::to_value(&verified).ok() != serde_json::to_value(&s).ok() { return Err("设置读回不一致，内存未改变".into()); }
         *g = s;
-        write_json(&config_path(), &*g);
+        Ok(())
     }
 
     pub fn connections(&self) -> Vec<ConnectionConfig> {
@@ -536,16 +703,49 @@ impl Store {
     }
 
     pub fn favorites(&self) -> Vec<Favorite> {
-        self.favorites.lock().unwrap().clone()
+        self.favorites.lock().unwrap().items.clone()
     }
 
-    pub fn save_favorites(&self, items: Vec<Favorite>) {
-        {
-            let mut f = self.favorites.lock().unwrap();
-            *f = items;
-        }
-        let items = self.favorites.lock().unwrap().clone();
-        write_json(&favorites_path(), &FavoritesFile { items });
+    pub fn checked_favorites(&self) -> Result<Vec<Favorite>, String> {
+        let state = self.favorites.lock().unwrap();
+        if let Some(error) = &state.load_error { return Err(error.clone()); }
+        Ok(state.items.clone())
+    }
+
+    /// 收藏专属事务：锁内准备，真实落盘后才发布内存快照。
+    fn update_favorites(&self, update: impl FnOnce(&mut Vec<Favorite>) -> Result<(), String>) -> Result<Vec<Favorite>, String> {
+        let mut state = self.favorites.lock().unwrap();
+        if let Some(error) = &state.load_error { return Err(error.clone()); }
+        let mut items = state.items.clone();
+        update(&mut items)?;
+        write_json_checked(&self.root.join("favorites.json"), &FavoritesFile { items: items.clone() })
+            .map_err(|e| format!("收藏写入失败，原记录已保留：{e}"))?;
+        state.items = items.clone();
+        Ok(items)
+    }
+
+    pub fn add_favorite(&self, favorite: Favorite) -> Result<Vec<Favorite>, String> {
+        self.update_favorites(|items| {
+            if favorite.id.is_empty() || favorite.name.trim().is_empty() { return Err("查询 ID 和名称不能为空".into()); }
+            if favorite.connection_id.as_deref().map_or(true, |value| value.trim().is_empty()) || favorite.schema.as_deref().map_or(true, |value| value.trim().is_empty()) {
+                return Err("保存查询前请选择连接和数据库".into());
+            }
+            if let Some(previous) = items.iter().find(|f| f.id == favorite.id) {
+                if previous.connection_id.as_deref().is_some_and(|value| !value.trim().is_empty()) && previous.schema.as_deref().is_some_and(|value| !value.trim().is_empty()) && (previous.connection_id != favorite.connection_id || previous.schema != favorite.schema) {
+                    return Err("查询所属的连接或数据库已变化，请重新打开或另存为".into());
+                }
+            }
+            if items.iter().any(|f| f.id != favorite.id && f.name == favorite.name && f.connection_id == favorite.connection_id && f.schema == favorite.schema) {
+                return Err("此连接和数据库中已有同名查询".into());
+            }
+            items.retain(|f| f.id != favorite.id);
+            items.insert(0, favorite);
+            Ok(())
+        })
+    }
+
+    pub fn remove_favorite(&self, id: &str) -> Result<Vec<Favorite>, String> {
+        self.update_favorites(|items| { items.retain(|f| f.id != id); Ok(()) })
     }
 
     pub fn recent(&self) -> Vec<RecentItem> {
@@ -571,6 +771,20 @@ impl Store {
         list.clear();
         write_json(&recent_path(), &RecentFile { items: Vec::new() });
     }
+}
+
+/// v1 的 query 值原本用于连接/池/锁；只迁移内存，保留扩展字段与旧文件。
+fn read_execution_settings(path: &Path) -> Option<AppSettings> {
+    let mut value: serde_json::Value = read_json(path)?;
+    let object = value.as_object_mut()?;
+    if !object.contains_key("settings_version") {
+        let old = object.get("query_timeout_secs").and_then(|v| v.as_u64()).unwrap_or(30);
+        for key in ["connect_timeout_secs", "pool_acquire_timeout_secs", "sqlite_busy_timeout_secs"] {
+            object.entry(key).or_insert_with(|| serde_json::json!(old.max(1)));
+        }
+        object.insert("settings_version".into(), serde_json::json!(2));
+    }
+    serde_json::from_value(value).ok()
 }
 
 /// 读取 JSON 文件。
@@ -922,17 +1136,33 @@ fn compact_sql_log_at(path: &Path) {
     }
 }
 
-/// 追加一条 SQL 执行日志；文件超过 8MB 时先压缩。
+/// 追加一条 SQL 执行日志；兼容单条调用方。
 pub fn append_sql_log_at(path: &Path, entry: &crate::models::SqlLogEntry) {
-    if fs::metadata(path).map(|m| m.len()).unwrap_or(0) > SQL_LOG_COMPACT_BYTES {
-        compact_sql_log_at(path);
-    }
-    use std::io::Write;
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        if let Ok(line) = serde_json::to_string(entry) {
-            let _ = writeln!(f, "{}", line);
+    append_sql_logs_at(path, std::slice::from_ref(entry));
+}
+
+/// 一次打开/缓冲写出一个有界批次；按原来的逐条字节边界压缩，保持保留策略。
+/// 不缓存跨调用文件句柄，clear/replace 后不会写入已删除的旧文件。
+pub(crate) fn append_sql_logs_at(path: &Path, entries: &[crate::models::SqlLogEntry]) {
+    let mut bytes = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut output: Option<std::io::BufWriter<fs::File>> = None;
+    for entry in entries {
+        if bytes > SQL_LOG_COMPACT_BYTES {
+            if let Some(mut writer) = output.take() {
+                if writer.flush().is_err() { return; }
+            }
+            compact_sql_log_at(path);
+            bytes = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         }
+        let Ok(line) = serde_json::to_string(entry) else { continue };
+        if output.is_none() {
+            let Ok(file) = fs::OpenOptions::new().create(true).append(true).open(path) else { return };
+            output = Some(std::io::BufWriter::with_capacity(64 * 1024, file));
+        }
+        if writeln!(output.as_mut().unwrap(), "{}", line).is_err() { return; }
+        bytes = bytes.saturating_add(line.len() as u64 + 1);
     }
+    if let Some(mut writer) = output { let _ = writer.flush(); }
 }
 
 /// 读取 SQL 执行日志（最新优先，最多 limit 条，过滤 30 天前的旧记录）。
@@ -999,6 +1229,40 @@ pub fn connection_name_map(conns: &[ConnectionConfig]) -> HashMap<String, String
 }
 
 #[cfg(test)]
+mod key_asset_tests {
+    use super::*;
+    #[test]
+    fn lost_key_never_replaces_nested_assets_or_pending_commit() {
+        for asset in ["models/model.enc", "models/model.enc.bak", "runtime-profiles/profile.enc", "runtime-profiles/save.pending", "scheduler/state.enc", "scheduler/template.enc.bak"] {
+            let root = std::env::temp_dir().join(format!("navkit-key-assets-{}", uuid::Uuid::new_v4()));
+            let path = root.join(asset);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"original ciphertext").unwrap();
+            let store = Store::empty_at(&root);
+            assert!(store.ensure_encryption_key().unwrap_err().to_string().contains("拒绝生成替代密钥"), "{asset}");
+            assert!(encrypt_password_at(&root, "new password").is_err(), "{asset}");
+            assert!(!root.join("key.bin").exists());
+            assert_eq!(fs::read(&path).unwrap(), b"original ciphertext");
+            fs::remove_dir_all(&root).unwrap();
+        }
+    }
+    #[test]
+    fn first_use_creates_one_key_and_invalid_key_is_preserved() {
+        let root = std::env::temp_dir().join(format!("navkit-new-key-{}", uuid::Uuid::new_v4()));
+        let store = Store::empty_at(&root);
+        store.ensure_encryption_key().unwrap();
+        let original = fs::read(root.join("key.bin")).unwrap();
+        assert_eq!(original.len(), 32);
+        store.ensure_encryption_key().unwrap();
+        assert_eq!(fs::read(root.join("key.bin")).unwrap(), original);
+        fs::write(root.join("key.bin"), b"bad original key").unwrap();
+        assert!(store.ensure_encryption_key().is_err());
+        assert_eq!(fs::read(root.join("key.bin")).unwrap(), b"bad original key");
+        fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod sql_log_tests {
     use super::*;
     use crate::models::SqlLogEntry;
@@ -1006,8 +1270,8 @@ mod sql_log_tests {
     fn entry(ts: &str, sql: &str) -> SqlLogEntry {
         SqlLogEntry {
             ts: ts.into(), connection_id: "c1".into(), connection_name: "本地 MySQL".into(),
-            kind: "mysql".into(), database: "shop".into(), sql: sql.into(), ok: true,
-            elapsed_ms: 42, rows: 3, message: String::new(), origin: "query".into(),
+            kind: "mysql".into(), database: "shop".into(), sql: sql.into(), namespace: String::new(), parameters: Vec::new(), ok: true,
+            elapsed_ms: 42, rows: 3, message: String::new(), origin: "query".into(), operation_id: None, execution_state: None,
         }
     }
 
@@ -1025,6 +1289,24 @@ mod sql_log_tests {
         clear_sql_log_at(&path);
         assert!(read_sql_log_at(&path, 10).is_empty());
         assert!(!path.exists());
+    }
+
+
+    #[test]
+    fn batch_append_matches_single_append_across_compaction_and_clear() {
+        let root = std::env::temp_dir().join(format!("navkit-log-batch-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let single = root.join("single.jsonl"); let batch = root.join("batch.jsonl");
+        let seed = entry("2099-01-01 00:00:00", &"x".repeat(SQL_LOG_COMPACT_BYTES as usize));
+        append_sql_log_at(&single, &seed); append_sql_log_at(&batch, &seed);
+        let entries: Vec<_> = (0..8).map(|i| entry("2099-01-02 00:00:00", &format!("SELECT {i} /* 中文 */"))).collect();
+        for value in &entries { append_sql_log_at(&single, value); }
+        append_sql_logs_at(&batch, &entries);
+        assert_eq!(fs::read(&single).unwrap(), fs::read(&batch).unwrap());
+        clear_sql_log_at(&batch);
+        append_sql_logs_at(&batch, &entries[..2]);
+        assert_eq!(read_sql_log_at(&batch, 100).len(), 2);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

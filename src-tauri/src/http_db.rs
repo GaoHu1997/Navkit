@@ -33,16 +33,38 @@ pub struct HttpColumn {
 }
 
 /// HTTP 适配器统一接口。
+#[path = "jdbc_mutation.rs"]
+pub mod relational;
+
 #[async_trait]
 pub trait HttpAdapter: Send + Sync {
+    /// Only the certified SQL tunnel exposes owned cancellation/drain to C1.
+    fn tunnel_runtime(&self) -> Option<std::sync::Arc<crate::http_tunnel::TunnelRuntime>> { None }
+    async fn shutdown(&self) {}
     /// Stateful JDBC adapters select namespaces within one serialized live session.
     fn shares_session_namespace(&self) -> bool { false }
+    /// PL-20: only a certified relational adapter can override these methods.
+    /// Ordinary REST/MQ adapters MUST remain unsupported, not a SQL fallback.
+    async fn relational_capabilities(&self) -> Result<relational::JdbcCapabilities> {
+        bail!("UNSUPPORTED_CAPABILITY: this adapter has no certified relational mutation channel")
+    }
+    async fn relational_metadata(&self, _object: &relational::JdbcObjectId) -> Result<relational::JdbcMetadataSnapshot> {
+        bail!("UNSUPPORTED_CAPABILITY: this adapter has no complete relational metadata snapshot")
+    }
+    async fn apply_row_plan(&self, _plan: &relational::JdbcRowPlan) -> Result<relational::JdbcMutationOutcome> {
+        bail!("UNSUPPORTED_CAPABILITY: this adapter cannot execute an owned typed row plan")
+    }
     /// 连通性验证，返回版本串。
     async fn ping(&self) -> Result<String>;
     /// 顶级容器（树：连接下的「数据库」层），返回 (名称, 描述)。
     async fn containers(&self) -> Result<Vec<(String, String)>>;
     /// 容器内的对象（「表」层）。
     async fn objects(&self, container: &str) -> Result<Vec<String>>;
+    /// 可选：对象类型分类（(名称, "table" | "view")）。支持视图区分的关系型
+    /// 适配器（H2 / JDBC 等）实现此方法；未实现返回 None，调用方按全部表处理。
+    async fn object_types(&self, _container: &str) -> Result<Option<Vec<(String, String)>>> {
+        Ok(None)
+    }
     /// 浏览对象数据（分页）。
     async fn rows(
         &self,
@@ -2200,6 +2222,8 @@ impl HttpDb {
         let database = if req.kind.id() == "h2" || adapter.shares_session_namespace() { String::new() } else { req.database.clone() };
         Ok(Self { kind: req.kind.clone(), database, version, adapter: std::sync::Arc::from(adapter) })
     }
+    pub(crate) fn tunnel_runtime(&self) -> Option<std::sync::Arc<crate::http_tunnel::TunnelRuntime>> { self.adapter.tunnel_runtime() }
+    pub(crate) async fn shutdown(&self) { self.adapter.shutdown().await; }
     pub(crate) fn shares_session_namespace(&self) -> bool {
         self.kind.id() == "h2" || self.adapter.shares_session_namespace()
     }
@@ -2211,6 +2235,17 @@ impl HttpDb {
     /// 真实列元数据（若适配器提供）。
     pub(crate) async fn table_columns(&self, container: &str, object: &str) -> Result<Option<Vec<HttpColumn>>> {
         self.adapter.table_columns(container, object).await
+    }
+    /// Adapter-side C2 evidence; the caller still owns activity/read-only/plan admission.
+    pub(crate) async fn relational_capabilities(&self) -> Result<relational::JdbcCapabilities> {
+        self.adapter.relational_capabilities().await
+    }
+    pub(crate) async fn relational_metadata(&self, object: &relational::JdbcObjectId) -> Result<relational::JdbcMetadataSnapshot> {
+        self.adapter.relational_metadata(object).await
+    }
+    pub(crate) async fn apply_row_plan(&self, plan: &relational::JdbcRowPlan) -> Result<relational::JdbcMutationOutcome> {
+        if plan.read_only { bail!("READ_ONLY_VIOLATION: effective connection is read-only"); }
+        self.adapter.apply_row_plan(plan).await
     }
     pub async fn connect(kind: DbKind, req: &ConnectionRequest) -> Result<Self> {
         let meta = kind
@@ -2344,6 +2379,21 @@ impl HttpDb {
     /// 容器内对象（树：表层）。
     pub async fn objects(&self, container: &str) -> Result<Vec<String>> {
         self.adapter.objects(container).await
+    }
+
+    /// 容器内对象（含类型分类）：适配器支持视图区分时按类型返回，否则全部按表。
+    pub async fn objects_with_types(&self, container: &str) -> Result<Vec<(String, crate::models::ObjectType)>> {
+        let Some(pairs) = self.adapter.object_types(container).await? else {
+            return Ok(self.adapter.objects(container).await?
+                .into_iter().map(|n| (n, crate::models::ObjectType::Table)).collect());
+        };
+        Ok(pairs.into_iter()
+            .map(|(name, ty)| (name, if ty.eq_ignore_ascii_case("view") {
+                crate::models::ObjectType::View
+            } else {
+                crate::models::ObjectType::Table
+            }))
+            .collect())
     }
 
     /// 浏览对象数据。

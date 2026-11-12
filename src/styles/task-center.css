@@ -1,0 +1,178 @@
+/* ============================================================================
+   任务中心面板（标题栏任务图标弹层）—— 令牌与 base.css :root 一致
+   ========================================================================== */
+
+.task-center {
+  position: fixed;
+  z-index: 900;
+  width: 340px;
+  max-height: 460px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-12);
+}
+
+.task-center-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.task-center-title {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.task-center-count {
+  font-size: var(--fs-11);
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.task-center-clear {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-accent, var(--accent-600));
+  font-size: var(--fs-11);
+  padding: 2px 6px;
+  border-radius: var(--r-2);
+  cursor: pointer;
+}
+.task-center-clear:hover { background: var(--bg-hover); }
+.task-center-clear:disabled { color: var(--text-disabled); cursor: default; background: transparent; }
+
+.task-center-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.task-center-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-12);
+}
+
+/* 任务行 */
+.task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: var(--r-2);
+  cursor: pointer;
+  color: var(--text);
+  font-size: var(--fs-12);
+}
+.task-row:hover { background: var(--bg-hover); }
+.task-row.is-running { cursor: pointer; }
+.task-row.is-running:hover { background: var(--bg-hover); }
+.task-row.is-error .task-row-title { color: var(--danger-600); }
+
+.task-row-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--text-secondary);
+}
+.task-row-icon svg { width: 16px; height: 16px; }
+
+.task-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.task-row-meta {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-row.is-success .task-row-meta { color: var(--ok-600); }
+.task-row.is-error .task-row-meta,
+.task-row.is-error .task-row-error { color: var(--danger-600); }
+.task-row.is-cancelled .task-row-meta { color: var(--text-disabled); }
+
+.task-row-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--n-150);
+  overflow: hidden;
+}
+.task-row-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-500);
+  border-radius: var(--r-full);
+  transition: width 150ms var(--ease-out);
+}
+
+.task-row-error {
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-row-side {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.task-row-time {
+  font-size: 10px;
+  color: var(--text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 标题栏任务图标徽标 */
+.titlebar-tools .tb-icon { position: relative; }
+.task-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: var(--r-full);
+  background: var(--accent-500);
+  color: #fff;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}

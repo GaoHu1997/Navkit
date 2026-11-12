@@ -1,4 +1,4 @@
-/** 单表 SELECT 构造：仅使用真实元数据白名单，不接受 SQL 表达式。 */
+/** 单表 SELECT 构造：仅使用真实元数据白名单，不接受 SQL 表达式；支持 IN / NOT IN 列表过滤与多字段排序。 */
 import { kindMeta } from "./dbcatalog";
 import type { TableSchema } from "./types";
 
@@ -30,13 +30,29 @@ export function defaultQueryDialect(kind: string): QueryDialect | "" {
   // 通用 ODBC / JDBC 桥接不知道目标方言，必须由用户明确选择。
   return "";
 }
-export type QueryFilterOperator = "=" | "<>" | ">" | ">=" | "<" | "<=" | "LIKE" | "IS NULL" | "IS NOT NULL";
-export interface QueryFilter { column: string; operator: QueryFilterOperator; value: string; valueKind: "text" | "number" | "boolean"; }
+export type QueryFilterOperator = "=" | "<>" | ">" | ">=" | "<" | "<=" | "LIKE" | "NOT LIKE" | "IN" | "NOT IN" | "IS NULL" | "IS NOT NULL";
+export interface QueryFilter {
+  column: string;
+  operator: QueryFilterOperator;
+  value: string;
+  valueKind: "text" | "number" | "boolean";
+  /** 与上一条条件的连接方式；首条忽略，缺省 AND。 */
+  join?: "AND" | "OR";
+}
+export interface QueryFilterGroup { join?: "AND" | "OR"; filters: QueryFilter[] }
 export interface QueryBuilderSpec {
   dialect: QueryDialect; schema: string; table: string; columns: string[]; filters: QueryFilter[];
   orderBy: string; descending: boolean; limit: number;
+  /** 多字段排序（可选）；提供非空数组时优先于 orderBy / descending，旧字段保持兼容。 */
+  orderByRules?: { column: string; descending: boolean }[];
+  /** 与表筛选一致：行内括号条件组，组间 AND / OR。提供时优先于平铺 filters。 */
+  filterGroups?: QueryFilterGroup[];
 }
 export const MAX_QUERY_LIMIT = 100000;
+
+/** 有限数字字面量：十进制，可带符号 / 小数点 / 指数。 */
+const NUMBER_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 export function buildSelectQuery(structure: TableSchema, spec: QueryBuilderSpec): string {
   if (!QUERY_DIALECTS.some(d => d.value === spec.dialect)) throw new Error("请选择目标数据库的 SQL 方言。");
   if (!spec.table || spec.table !== structure.table) throw new Error("目标表结构已改变，请重新加载。");
@@ -51,7 +67,17 @@ export function buildSelectQuery(structure: TableSchema, spec: QueryBuilderSpec)
   };
   if (!spec.columns.length) throw new Error("请至少选择一个输出字段。");
   if (new Set(spec.columns).size !== spec.columns.length) throw new Error("输出字段不能重复。");
-  if (spec.filters.length > 20) throw new Error("最多支持 20 个 AND 过滤条件。");
+  const filters = spec.filterGroups ? spec.filterGroups.flatMap(group => group.filters) : spec.filters;
+  if (filters.length > 20) throw new Error("最多支持 20 个过滤条件。");
+  const join = (value: string | undefined): "AND" | "OR" => {
+    if (value !== undefined && value !== "AND" && value !== "OR") throw new Error("不支持的条件连接方式。");
+    return value ?? "AND";
+  };
+  for (const group of spec.filterGroups ?? []) {
+    join(group.join);
+    if (!group.filters.length) throw new Error("条件组不能为空。");
+  }
+  for (const filter of filters) join(filter.join);
   const textLiteral = (value: string) => {
     if (value.length > 8192 || value.includes("\0")) throw new Error("过滤值不能包含 NUL，且不能超过 8192 字符。");
     // MySQL 的 NO_BACKSLASH_ESCAPES 与 PostgreSQL 的 standard_conforming_strings
@@ -65,28 +91,59 @@ export function buildSelectQuery(structure: TableSchema, spec: QueryBuilderSpec)
     if (spec.dialect === "postgres") return `E'${escaped.replace(/\\/g, "\\\\")}'`;
     return `${spec.dialect === "mssql" ? "N" : ""}'${escaped}'`;
   };
-  const filters = spec.filters.map(filter => {
+  const numberLiteral = (value: string, name: string): string => {
+    const raw = value.trim();
+    if (!NUMBER_PATTERN.test(raw) || !Number.isFinite(Number(raw))) throw new Error(`「${name}」的过滤值必须是有限数字。`);
+    return raw;
+  };
+  const booleanLiteral = (value: string): string => {
+    if (!["true", "false"].includes(value.toLowerCase())) throw new Error("布尔值请填写 true 或 false。");
+    const isTrue = value.toLowerCase() === "true";
+    return spec.dialect === "access" ? (isTrue ? "-1" : "0") : ["mssql", "oracle", "sqlite"].includes(spec.dialect) ? (isTrue ? "1" : "0") : (isTrue ? "TRUE" : "FALSE");
+  };
+  // IN / NOT IN：值为逗号分隔列表，逐项按 valueKind 生成字面量（文本加引号、数字 / 布尔不加）。
+  const inList = (field: string, filter: QueryFilter): string => {
+    const items = filter.value.split(",").map(item => item.trim()).filter(item => item.length > 0);
+    if (!items.length) throw new Error(`「${filter.column}」的 ${filter.operator} 过滤请填写至少一个值（逗号分隔）。`);
+    const literals = items.map(item => {
+      if (filter.valueKind === "number") return numberLiteral(item, filter.column);
+      if (filter.valueKind === "boolean") return booleanLiteral(item);
+      return textLiteral(item);
+    });
+    return `${field} ${filter.operator} (${literals.join(", ")})`;
+  };
+  const expression = (filter: QueryFilter): string => {
     const field = column(filter.column);
-    if (!["=", "<>", ">", ">=", "<", "<=", "LIKE", "IS NULL", "IS NOT NULL"].includes(filter.operator)) throw new Error("不支持的过滤运算符。");
+    if (!["=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "IN", "NOT IN", "IS NULL", "IS NOT NULL"].includes(filter.operator)) throw new Error("不支持的过滤运算符。");
     if (["IS NULL", "IS NOT NULL"].includes(filter.operator)) return `${field} ${filter.operator}`;
+    if (["IN", "NOT IN"].includes(filter.operator)) return `${inList(field, filter)}`;
     let value: string;
-    if (filter.valueKind === "number") {
-      value = filter.value.trim();
-      if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) throw new Error(`「${filter.column}」的过滤值必须是有限数字。`);
-    } else if (filter.valueKind === "boolean") {
-      if (!["true", "false"].includes(filter.value.toLowerCase())) throw new Error("布尔值请填写 true 或 false。");
-      const isTrue = filter.value.toLowerCase() === "true";
-      value = spec.dialect === "access" ? (isTrue ? "-1" : "0") : ["mssql", "oracle", "sqlite"].includes(spec.dialect) ? (isTrue ? "1" : "0") : (isTrue ? "TRUE" : "FALSE");
-    } else if (filter.valueKind === "text") value = textLiteral(filter.value);
+    if (filter.valueKind === "number") value = numberLiteral(filter.value, filter.column);
+    else if (filter.valueKind === "boolean") value = booleanLiteral(filter.value);
+    else if (filter.valueKind === "text") value = textLiteral(filter.value);
     else throw new Error("不支持的过滤值类型。");
-    if (filter.operator === "LIKE" && filter.valueKind !== "text") throw new Error("LIKE 过滤请使用文本值类型（% / _ 为通配符）。");
+    if (["LIKE", "NOT LIKE"].includes(filter.operator) && filter.valueKind !== "text") throw new Error("LIKE 过滤请使用文本值类型（% / _ 为通配符）。");
     return `${field} ${filter.operator} ${value}`;
-  });
+  };
+  const flatConditions = (items: QueryFilter[]) => items.map((filter, index) => (index ? join(filter.join) + " " : "") + expression(filter));
+  const whereParts = spec.filterGroups
+    ? spec.filterGroups.map((group, index) => (index ? join(group.join) + " " : "") + "(" + flatConditions(group.filters).join(" ") + ")")
+    : flatConditions(spec.filters);
   const top = ["mssql", "access"].includes(spec.dialect) ? `TOP ${spec.limit} ` : spec.dialect === "firebird" ? `FIRST ${spec.limit} ` : "";
   const owner = spec.schema && !["access", "firebird"].includes(spec.dialect) ? `${identifier(spec.schema)}.` : "";
   let sql = `SELECT ${top}${spec.columns.map(column).join(", ")}\nFROM ${owner}${identifier(spec.table)}`;
-  if (filters.length) sql += `\nWHERE ${filters.join("\n  AND ")}`;
-  if (spec.orderBy) sql += `\nORDER BY ${column(spec.orderBy)} ${spec.descending ? "DESC" : "ASC"}`;
+  if (whereParts.length) sql += `\nWHERE ${whereParts.join("\n  ")}`;
+  // 多字段排序优先；未提供时回退到旧的单字段 orderBy / descending。
+  const orderRules = spec.orderByRules?.length ? spec.orderByRules : spec.orderBy ? [{ column: spec.orderBy, descending: spec.descending }] : [];
+  if (orderRules.length) {
+    const seen = new Set<string>();
+    const parts = orderRules.map(rule => {
+      if (seen.has(rule.column)) throw new Error(`排序字段「${rule.column}」重复。`);
+      seen.add(rule.column);
+      return `${column(rule.column)} ${rule.descending ? "DESC" : "ASC"}`;
+    });
+    sql += `\nORDER BY ${parts.join(", ")}`;
+  }
   if (["oracle", "db2", "ansi"].includes(spec.dialect)) sql += `\nFETCH FIRST ${spec.limit} ROWS ONLY`;
   else if (!["mssql", "access", "firebird"].includes(spec.dialect)) sql += `\nLIMIT ${spec.limit}`;
   return `${sql};`;

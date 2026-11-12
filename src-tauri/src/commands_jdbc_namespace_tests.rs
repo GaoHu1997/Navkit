@@ -8,7 +8,7 @@ async fn generic_jdbc_session_namespaces_binary_paging_and_close_are_real() {
     assert!(root.starts_with(std::env::temp_dir()));
     assert!(root.file_name().unwrap().to_string_lossy().starts_with("navkit-jdbc-command-tests-"));
     let jar = std::env::var("NAVKIT_H2_JAR").expect("official H2 JAR");
-    let state = AppState { store: Store::load(), registry: Arc::new(DbRegistry::default()), manual_transactions: Default::default(), activity: Default::default() };
+    let state = AppState { store: Store::load(), registry: Arc::new(DbRegistry::default()), manual_transactions: Default::default(), executions: Default::default(), mutations: Default::default(), connection_runtime: Default::default(), activity: Default::default(), query_results: Default::default() };
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let id = format!("jdbc-command-{suffix}");
     let driver_id = format!("driver-{suffix}");

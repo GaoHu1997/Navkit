@@ -1,0 +1,459 @@
+/* ============================================================================
+   关系图对话框（表结构图 / 工程 ER 图）—— 令牌同 base.css :root
+   ========================================================================== */
+
+.er-dialog {
+  width: min(1280px, 80vw);
+  height: min(860px, 80vh);
+  display: flex;
+  flex-direction: column;
+}
+.er-dialog .dialog-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 画布与建模关系面板左右分栏 */
+.er-workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+/* 工具栏 */
+.er-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-chrome);
+}
+.er-select {
+  height: var(--h-control);
+  max-width: 180px;
+  font-size: var(--fs-12);
+}
+.er-search {
+  height: var(--h-control);
+  width: 220px;
+  font-size: var(--fs-12);
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--n-50);
+}
+.er-search:focus { outline: 2px solid var(--accent-500); outline-offset: -1px; }
+
+.er-mode-group {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+.er-mode-btn {
+  height: var(--h-control);
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.er-mode-btn:hover { background: var(--bg-hover); }
+.er-mode-btn.active {
+  background: var(--accent-500);
+  color: #fff;
+  font-weight: 600;
+}
+
+.er-tool-btn {
+  height: var(--h-control);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.er-tool-btn:hover { background: var(--bg-hover); color: var(--text); }
+.er-tool-btn.icon { width: var(--h-control); padding: 0; }
+.er-tool-btn svg { width: 14px; height: 14px; }
+
+.er-stats {
+  margin-left: auto;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 画布 */
+.er-canvas {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle, var(--n-200) 1px, transparent 1px) 0 0 / 22px 22px,
+    var(--n-50);
+  cursor: grab;
+}
+.er-canvas.panning { cursor: grabbing; }
+
+.er-viewport {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+.er-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+}
+.er-edge {
+  fill: none;
+  stroke: var(--accent-400);
+  stroke-width: 1.6;
+  opacity: 0.65;
+}
+.er-edge.highlight {
+  stroke: var(--accent-600);
+  stroke-width: 2.6;
+  opacity: 1;
+}
+.er-card-badge text {
+  font-size: 11px;
+  font-weight: 700;
+  fill: var(--accent-600);
+  font-family: var(--font-mono);
+}
+
+/* 表卡片 */
+.er-card {
+  position: absolute;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-12);
+  overflow: hidden;
+  user-select: none;
+}
+.er-card.selected {
+  border-color: var(--accent-500);
+  box-shadow: 0 0 0 3px var(--ring), var(--shadow-2);
+}
+.er-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--accent-50);
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: move;
+}
+.er-card-icon { display: inline-flex; }
+.er-card-icon svg { width: 14px; height: 14px; }
+.er-card-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.er-card-count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--n-100);
+  border-radius: var(--r-full);
+  padding: 1px 6px;
+  font-variant-numeric: tabular-nums;
+}
+.er-card-body { max-height: 240px; overflow: hidden; }
+.er-card-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  color: var(--n-700);
+}
+.er-card-row:nth-child(even) { background: var(--n-25); }
+.er-col-icon { display: inline-flex; width: 12px; }
+.er-col-icon svg { width: 11px; height: 11px; }
+.er-col-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.er-col-type {
+  flex: 0 0 auto;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+/* 提示角标 */
+.er-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-2);
+  padding: 4px 8px;
+  pointer-events: none;
+}
+
+/* 加载 / 错误覆盖层 */
+.er-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(247, 248, 250, 0.92);
+  color: var(--text-secondary);
+  font-size: var(--fs-13);
+  z-index: 5;
+}
+.er-overlay.error { color: var(--danger-600); }
+.er-overlay[hidden] { display: none; }
+
+/* 建模关系面板 */
+.er-rel-panel {
+  flex: 0 0 264px;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-chrome);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.er-rel-panel.collapsed { flex-basis: 40px; }
+.er-rel-panel.collapsed .er-rel-head { justify-content: center; padding: 10px 4px; }
+.er-rel-panel.collapsed .er-rel-title { display: none; }
+.er-rel-panel.collapsed .er-rel-meta,
+.er-rel-panel.collapsed .er-rel-actions,
+.er-rel-panel.collapsed .er-rel-list { display: none; }
+
+.er-rel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.er-rel-title { font-weight: 600; font-size: var(--fs-13); }
+.er-rel-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--r-2);
+}
+.er-rel-toggle:hover { background: var(--bg-hover); }
+
+.er-rel-meta {
+  padding: 8px 12px;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+.er-rel-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+.er-rel-actions .btn { flex: 1; min-width: 0; font-size: var(--fs-11); }
+
+.er-rel-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 8px 8px;
+}
+.er-rel-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+  padding: 8px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.er-rel-item-title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.er-rel-item-target {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.er-rel-item-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.er-rel-select {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-control);
+  font-size: var(--fs-11);
+}
+.er-rel-remove {
+  border: 0;
+  background: transparent;
+  color: var(--text-disabled);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--r-2);
+}
+.er-rel-remove:hover { background: var(--danger-50); color: var(--danger-600); }
+
+/* 工程 ER 图元素 */
+.er-eng-entity {
+  fill: var(--accent-100);
+  stroke: var(--accent-600);
+  stroke-width: 1.6;
+}
+.er-eng-entity-text {
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--accent-700);
+  font-family: var(--font-mono);
+}
+.er-eng-attr {
+  fill: var(--ok-50);
+  stroke: var(--ok-500);
+  stroke-width: 1.3;
+}
+.er-eng-attr.pk {
+  fill: var(--warn-50);
+  stroke: var(--warn-500);
+  stroke-width: 1.8;
+}
+.er-eng-attr + text,
+.er-edges text {
+  font-size: 11px;
+  fill: var(--text);
+  font-family: var(--font-mono);
+}
+.er-eng-attr-line {
+  stroke: var(--ok-500);
+  stroke-width: 1.1;
+  opacity: 0.6;
+}
+.er-eng-rel-line {
+  stroke: var(--danger-500);
+  stroke-width: 1.4;
+  opacity: 0.75;
+}
+.er-eng-diamond {
+  fill: var(--danger-100);
+  stroke: var(--danger-500);
+  stroke-width: 1.4;
+}
+.er-eng-diamond-text {
+  font-size: 10px;
+  fill: var(--danger-600);
+}
+
+/* ============================================================================
+   右侧表设计器（替换原「建模关系」面板）
+   ========================================================================== */
+.er-inspector {
+  flex: 0 0 720px;
+  min-width: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.er-insp-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.er-insp-title { font-weight: 600; font-size: var(--fs-13); white-space: nowrap; }
+.er-insp-message {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.er-insp-message[data-tone="error"] { color: var(--danger-600); }
+.er-insp-message[data-tone="success"] { color: var(--success-600, #1f7a45); }
+.er-insp-delete {
+  flex: 0 0 auto;
+  height: var(--h-control);
+  padding: 0 8px;
+  border: 1px solid var(--danger-200, #f0c2c2);
+  background: var(--bg-surface);
+  color: var(--danger-600);
+  border-radius: var(--r-2);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.er-insp-delete:hover { background: var(--danger-50); }
+.er-insp-body { flex: 1; min-height: 0; overflow: auto; }
+.er-insp-empty { color: var(--text-tertiary); font-size: var(--fs-12); padding: 16px; line-height: 1.6; }
+.er-inspector .table-designer .designer-grid.wide { min-width: 700px; }
+
+.er-tool-btn.primary { background: var(--accent-500); border-color: var(--accent-500); color: #fff; font-weight: 600; }
+.er-tool-btn.primary:hover { background: var(--accent-600); color: #fff; }
+.er-tool-btn .er-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .28);
+  font-size: 10px;
+}
+.er-tool-btn .er-badge[hidden] { display: none; }

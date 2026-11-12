@@ -1,0 +1,1990 @@
+[cwd: resolvedFrom="D:\\github\\tauri-navicat"; cwdSource="workingDirectory"]
+{
+  "evidence_type": "CURRENT_RUN_CTYPES_ACTUAL_WINDOWS_ODBC_MANAGER_EXISTING_FACADE_DUCKDB",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "root": "C:\\Users\\gaohu\\AppData\\Local\\Temp\\navkit-odbc-binary-probe-i0ed68jf",
+  "driver_sha256": "c78f15e37ddbf4006df9261ecd93b01c2be792288043ab715f2e0ae0c1b7beef",
+  "backend_sha256": "9fa507ac3a43d0664c0e5214ba34551e9ea26a17f71415b3ffe18cc698fae563",
+  "calls": [
+    {
+      "function": "SQLAllocHandle(ENV)",
+      "return": 0
+    },
+    {
+      "function": "SQLSetEnvAttr(ODBC3)",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(DBC)",
+      "return": 0
+    },
+    {
+      "function": "SQLDriverConnectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(ENV)",
+      "return": 0
+    },
+    {
+      "function": "SQLSetEnvAttr(ODBC3)",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(DBC)",
+      "return": 0
+    },
+    {
+      "function": "SQLDriverConnectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(ENV)",
+      "return": 0
+    },
+    {
+      "function": "SQLSetEnvAttr(ODBC3)",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(DBC)",
+      "return": 0
+    },
+    {
+      "function": "SQLDriverConnectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(ENV)",
+      "return": 0
+    },
+    {
+      "function": "SQLSetEnvAttr(ODBC3)",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(DBC)",
+      "return": 0
+    },
+    {
+      "function": "SQLDriverConnectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLDescribeColW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLAllocHandle(STMT)",
+      "return": 0
+    },
+    {
+      "function": "SQLExecDirectW",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    },
+    {
+      "function": "SQLFetch",
+      "return": 0
+    }
+  ],
+  "profiles": [
+    {
+      "profile": "odbc",
+      "columns": [
+        {
+          "index": 1,
+          "name": "ID",
+          "sql_type_code": 4,
+          "column_size": 10,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "INT32"
+        },
+        {
+          "index": 2,
+          "name": "PAYLOAD",
+          "sql_type_code": -3,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 3,
+          "name": "hex(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 4,
+          "name": "typeof(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        }
+      ],
+      "rows": {
+        "SQL_C_BINARY": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 13,
+              "is_null": false,
+              "bytes_hex": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ],
+        "SQL_C_CHAR": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 49,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7830315C7837465C7838305C7846455C784646415C7843335C7841395C7846305C7839465C7839395C783832",
+              "text_utf8": "\\x00\\x01\\x7F\\x80\\xFE\\xFFA\\xC3\\xA9\\xF0\\x9F\\x99\\x82"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ]
+      },
+      "binary_type_exposed": true,
+      "exact_binary_roundtrip": true,
+      "status": "PASS"
+    },
+    {
+      "profile": "oracle",
+      "columns": [
+        {
+          "index": 1,
+          "name": "ID",
+          "sql_type_code": 4,
+          "column_size": 10,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "INT32"
+        },
+        {
+          "index": 2,
+          "name": "PAYLOAD",
+          "sql_type_code": -3,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 3,
+          "name": "hex(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 4,
+          "name": "typeof(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        }
+      ],
+      "rows": {
+        "SQL_C_BINARY": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 13,
+              "is_null": false,
+              "bytes_hex": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ],
+        "SQL_C_CHAR": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 49,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7830315C7837465C7838305C7846455C784646415C7843335C7841395C7846305C7839465C7839395C783832",
+              "text_utf8": "\\x00\\x01\\x7F\\x80\\xFE\\xFFA\\xC3\\xA9\\xF0\\x9F\\x99\\x82"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ]
+      },
+      "binary_type_exposed": true,
+      "exact_binary_roundtrip": true,
+      "status": "PASS"
+    },
+    {
+      "profile": "dameng",
+      "columns": [
+        {
+          "index": 1,
+          "name": "ID",
+          "sql_type_code": 4,
+          "column_size": 10,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "INT32"
+        },
+        {
+          "index": 2,
+          "name": "PAYLOAD",
+          "sql_type_code": -3,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 3,
+          "name": "hex(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 4,
+          "name": "typeof(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        }
+      ],
+      "rows": {
+        "SQL_C_BINARY": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 13,
+              "is_null": false,
+              "bytes_hex": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ],
+        "SQL_C_CHAR": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 49,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7830315C7837465C7838305C7846455C784646415C7843335C7841395C7846305C7839465C7839395C783832",
+              "text_utf8": "\\x00\\x01\\x7F\\x80\\xFE\\xFFA\\xC3\\xA9\\xF0\\x9F\\x99\\x82"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ]
+      },
+      "binary_type_exposed": true,
+      "exact_binary_roundtrip": true,
+      "status": "PASS"
+    },
+    {
+      "profile": "db2",
+      "columns": [
+        {
+          "index": 1,
+          "name": "ID",
+          "sql_type_code": 4,
+          "column_size": 10,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "INT32"
+        },
+        {
+          "index": 2,
+          "name": "PAYLOAD",
+          "sql_type_code": -3,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 3,
+          "name": "hex(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        },
+        {
+          "index": 4,
+          "name": "typeof(PAYLOAD)",
+          "sql_type_code": 12,
+          "column_size": 8000,
+          "scale": 0,
+          "nullable": 2,
+          "type_name_return": 0,
+          "type_name": "VARCHAR"
+        }
+      ],
+      "rows": {
+        "SQL_C_BINARY": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 13,
+              "is_null": false,
+              "bytes_hex": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "00FF1080"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ],
+        "SQL_C_CHAR": [
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "31",
+              "text_utf8": "1"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "32",
+              "text_utf8": "2"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": -1,
+              "is_null": true,
+              "bytes_hex": null
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "33",
+              "text_utf8": "3"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 0,
+              "is_null": false,
+              "bytes_hex": "",
+              "text_utf8": ""
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "34",
+              "text_utf8": "4"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 49,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7830315C7837465C7838305C7846455C784646415C7843335C7841395C7846305C7839465C7839395C783832",
+              "text_utf8": "\\x00\\x01\\x7F\\x80\\xFE\\xFFA\\xC3\\xA9\\xF0\\x9F\\x99\\x82"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 26,
+              "is_null": false,
+              "bytes_hex": "3030303137463830464546463431433341394630394639393832",
+              "text_utf8": "00017F80FEFF41C3A9F09F9982"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          },
+          {
+            "id": {
+              "return": 0,
+              "length_indicator": 1,
+              "is_null": false,
+              "bytes_hex": "35",
+              "text_utf8": "5"
+            },
+            "payload": {
+              "return": 0,
+              "length_indicator": 16,
+              "is_null": false,
+              "bytes_hex": "5C7830305C7846465C7831305C783830",
+              "text_utf8": "\\x00\\xFF\\x10\\x80"
+            },
+            "backend_hex": {
+              "return": 0,
+              "length_indicator": 8,
+              "is_null": false,
+              "bytes_hex": "3030464631303830",
+              "text_utf8": "00FF1080"
+            },
+            "backend_type": {
+              "return": 0,
+              "length_indicator": 4,
+              "is_null": false,
+              "bytes_hex": "424C4F42",
+              "text_utf8": "BLOB"
+            }
+          }
+        ]
+      },
+      "binary_type_exposed": true,
+      "exact_binary_roundtrip": true,
+      "status": "PASS"
+    }
+  ],
+  "cleanup": {
+    "handle_releases": [
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 2,
+        "return": 0
+      },
+      {
+        "handle_type": 1,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 2,
+        "return": 0
+      },
+      {
+        "handle_type": 1,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 2,
+        "return": 0
+      },
+      {
+        "handle_type": 1,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 3,
+        "return": 0
+      },
+      {
+        "handle_type": 2,
+        "return": 0
+      },
+      {
+        "handle_type": 1,
+        "return": 0
+      }
+    ],
+    "dsn_deleted": [
+      "NBProbe_279ad2b1acd2449dba714d1c",
+      "NBProbe_922e2f61f1eb4f01a60ea81b",
+      "NBProbe_b23c4752405948e4a863f9d0",
+      "NBProbe_a74f7611bad84c06972755b1"
+    ],
+    "success": true,
+    "disconnects": [
+      {
+        "profile": "odbc",
+        "return": 0
+      },
+      {
+        "profile": "oracle",
+        "return": 0
+      },
+      {
+        "profile": "dameng",
+        "return": 0
+      },
+      {
+        "profile": "db2",
+        "return": 0
+      }
+    ],
+    "directory_removed": true
+  },
+  "status": "PASS"
+}
+
+[exit code: 0]

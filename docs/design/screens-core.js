@@ -539,24 +539,21 @@ export function tableScreen() {
 /* ============================================================ Logo 规范 */
 
 export function logoSpecScreen() {
-  const gLayers = [
-    { cy: 21.9, top: "#5b86ff", bot: "#3a5ce8", stroke: "#3556dc" },
-    { cy: 16.0, top: "#ffffff", bot: "#eaf1ff", stroke: "#9fb9e0" },
-    { cy: 10.1, top: "#5ee7f5", bot: "#22c8e0", stroke: "#1cb4cc" },
-  ]
-    .map(
-      (l, i) =>
-        `<path d="M16 ${l.cy - 6.05}L28.8 ${l.cy}L16 ${l.cy + 6.05}L3.2 ${l.cy}Z" fill="url(#lgGrad${i})" stroke="${l.stroke}" stroke-width="0.9" stroke-linejoin="round" filter="url(#lgShadow)"/>`,
-    )
-    .join("");
-  const gDefs = [21.9, 16.0, 10.1]
-    .map((cy, i) => {
-      const l = [{ top: "#5b86ff", bot: "#3a5ce8" }, { top: "#ffffff", bot: "#eaf1ff" }, { top: "#5ee7f5", bot: "#22c8e0" }][i];
-      return `<linearGradient id="lgGrad${i}" x1="16" y1="${cy - 6.05}" x2="16" y2="${cy + 6.05}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${l.top}"/><stop offset="1" stop-color="${l.bot}"/></linearGradient>`;
-    })
-    .join("");
+  // 三色取自品牌色卡：Pastel Rainbow · 冰青 / Celestial Sea · 青瓷、雾蓝
+  const LOGO_LAYERS = [
+    { cy: 21.9, top: "#9db1d5", bot: "#778eba", stroke: "#677ca6" },
+    { cy: 16.0, top: "#cae6dd", bot: "#a9c9c3", stroke: "#91aead" },
+    { cy: 10.1, top: "#baf8fe", bot: "#97dce7", stroke: "#82becc" },
+  ];
+  const gLayers = LOGO_LAYERS.map(
+    (l, i) =>
+      `<path d="M16 ${l.cy - 6.05}L28.8 ${l.cy}L16 ${l.cy + 6.05}L3.2 ${l.cy}Z" fill="url(#lgGrad${i})" stroke="${l.stroke}" stroke-width="0.9" stroke-linejoin="round" filter="url(#lgShadow)"/>`,
+  ).join("");
+  const gDefs = LOGO_LAYERS.map((l, i) => {
+    return `<linearGradient id="lgGrad${i}" x1="16" y1="${l.cy - 6.05}" x2="16" y2="${l.cy + 6.05}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${l.top}"/><stop offset="1" stop-color="${l.bot}"/></linearGradient>`;
+  }).join("");
   const grid16 = `<svg width="192" height="192" viewBox="0 0 32 32" style="background:var(--bg-sunken);border-radius:8px">
-    <defs>${gDefs}<filter id="lgShadow" x="-30%" y="-30%" width="160%" height="175%" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="0.9" stdDeviation="0.9" flood-color="#0a1c5c" flood-opacity="0.22"/></filter></defs>
+    <defs>${gDefs}<filter id="lgShadow" x="-30%" y="-30%" width="160%" height="175%" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="0.9" stdDeviation="0.9" flood-color="#2a3759" flood-opacity="0.22"/></filter></defs>
     ${Array.from({ length: 31 }, (_, i) => `<line x1="${i + 1}" y1="0" x2="${i + 1}" y2="32" stroke="var(--n-200)" stroke-width="0.03"/>`).join("")}
     ${Array.from({ length: 31 }, (_, i) => `<line x1="0" y1="${i + 1}" x2="32" y2="${i + 1}" stroke="var(--n-200)" stroke-width="0.03"/>`).join("")}
     ${gLayers}
@@ -564,7 +561,7 @@ export function logoSpecScreen() {
 
   return screen(
     "Logo 规范 · 等距数据层",
-    "抽象图形（无字母）：三层等距菱形透明悬浮堆叠（青顶 / 白中 / 靛蓝底），无背景容器，每层带同族加深细描边保证任意底色上的轮廓",
+    "抽象图形（无字母）：三层等距菱形透明悬浮堆叠（冰青顶 / 青瓷中 / 雾蓝底），无背景容器，每层带同族加深细描边保证任意底色上的轮廓",
     `<div class="window" style="padding:24px;gap:20px;overflow:auto;background:var(--bg-app)">
       <div class="triple">
         <div class="specimen" style="text-align:center">
@@ -607,8 +604,8 @@ export function logoSpecScreen() {
         <div class="specimen-label">配色与禁忌</div>
           <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--text-secondary);line-height:1.6">
             <div>· 无背景容器：透明底，直接叠在任意底色 / 壁纸 / 标题栏上，不引入色块</div>
-            <div>· 图形三色：顶层青 <code style="font-family:var(--font-mono)">#5ee7f5 → #22c8e0</code> / 中层白 <code style="font-family:var(--font-mono)">#ffffff → #eaf1ff</code> / 底层靛蓝 <code style="font-family:var(--font-mono)">#5b86ff → #3a5ce8</code></div>
-            <div>· 同族描边（无容器必需）：顶层 <code style="font-family:var(--font-mono)">#1cb4cc</code> / 中层 <code style="font-family:var(--font-mono)">#9fb9e0</code> / 底层 <code style="font-family:var(--font-mono)">#3556dc</code>，保证白色中层在浅底、青色顶层在深底都有轮廓</div>
+            <div>· 图形三色：顶层冰青 <code style="font-family:var(--font-mono)">#baf8fe → #97dce7</code>（基色 #a9f6fe） / 中层青瓷 <code style="font-family:var(--font-mono)">#cae6dd → #a9c9c3</code>（基色 #bde0d5） / 底层雾蓝 <code style="font-family:var(--font-mono)">#9db1d5 → #778eba</code>（基色 #849dcb）</div>
+            <div>· 同族描边（无容器必需）：顶层 <code style="font-family:var(--font-mono)">#82becc</code> / 中层 <code style="font-family:var(--font-mono)">#91aead</code> / 底层 <code style="font-family:var(--font-mono)">#677ca6</code>，保证浅色中层在浅底、冰青顶层在深底都有轮廓</div>
             <div>· 无字母依赖；单色场景用单色版（三层轮廓），禁止给主版整体改色</div>
             <div>· 最小尺寸 16px；≤24px 描边与投影自动加粗加深，以保住层间分隔</div>
             <div>· 禁止拉伸、旋转、加回背景板或改描边为异色；深色底一律用单色版而非改色主版</div>

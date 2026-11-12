@@ -99,14 +99,16 @@ test("确认后切页和准备期间模式变化均取消开始，不偷换数�
   assert(f.notices.some(([, message]) => /原数据库|页面/.test(message)));
 });
 
-test("表数据待编辑不开始；干净表必须创建独立查询并准备真实元数据", async () => {
+test("表数据待编辑不开始；干净表事务直接绑定表数据页（不跳转查询页）", async () => {
   const f = fixture(); f.context.kind = "table"; f.context.pendingEdits = true;
   assert.equal(await f.controller.begin(), false);
   assert.deepEqual(operations(f), []);
   f.context.pendingEdits = false;
   assert.equal(await f.controller.begin(), true);
-  assert.deepEqual(operations(f), [["create-query", "c1", "main"], ["start", "c1", "main", "q-new"]]);
-  assert.equal(f.controller.status("c1").owner, "q-new");
+  // 需求「开始事务可直接在表格中可视化操作」：事务所有者就是当前表数据页，
+  // 不再创建独立查询页；prepare 后以表页身份开启真实事务。
+  assert.deepEqual(operations(f), [["start", "c1", "main", "q1"]]);
+  assert.equal(f.controller.status("c1").owner, "q1");
   assert.equal(await f.controller.finish(false), true);
 });
 

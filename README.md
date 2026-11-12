@@ -5,11 +5,10 @@
 
 > 说明：应用图标、功能图标均为原创绘制（内联 SVG），产品标识为 NavKit，
 > 不含任何第三方商业软件的资源。
-> 例外：各数据源的连接图标使用**官方品牌 logo**（统一取自开源数据库客户端
-> [t8y2/dbx](https://github.com/t8y2/dbx) 的官方 logo 资源集，如 MySQL 海豚、PostgreSQL Slonik、
+> 例外：各数据源的连接图标使用**官方品牌 logo**（统一取自各厂商公开的品牌资源集，如 MySQL 海豚、PostgreSQL Slonik、
 > Oracle 标志、MongoDB 叶片等 101 种，素材存于 tools/db_art/，经 tools/gen_dbicons.py 生成），
 > 不使用自绘品牌图形；彩色=已连接 / 灰色=未连接，**规划中（适配器未提供）的数据源图标固定置灰**。
-> 例外：Apache Druid（dbx 未收录）保留 Apache 官方标志；「自定义 ODBC」为通用连接类型、无品牌标志。
+> 例外：Apache Druid（未收录于统一资源集）保留 Apache 官方标志；「自定义 ODBC」为通用连接类型、无品牌标志。
 
 ---
 
@@ -52,16 +51,15 @@ npm run tauri:dev       # 使用 /index.html
 - SQL 提示读取当前连接/模式的真实表、视图与字段，识别 FROM/JOIN、别名和限定名；选区优先执行，无选区执行全文。选中 SQL 可右键运行，也可 Shift+F10 打开菜单、Esc 关闭。查询页不再提供「文本」显示格式操作。
 - 查询创建工具按真实表 / 视图结构选择字段、AND 条件、排序及行数，生成对应方言 SELECT 预览；确认后只插入光标 / 替换选区，不自动执行，不覆盖整篇 SQL。切表异步请求、预览失效及跨标签回写均有保护。
 - 手动事务由原生 SQLite / MySQL 协议 / PostgreSQL 协议持有真实事务连接，绑定查询页与数据库 / 模式；开始、提交、回滚、关闭连接或退出均有明确确认。错误后只允许回滚，其它自动提交写入工具停用；SQLite 仅 main，MySQL 要求当前库全部表为 InnoDB，写入仅支持无触发器的当前库单表 DML。事务内仅支持 SELECT/WITH 与 DML，解释计划需先结束事务。
-- 表数据 / 当前可见查询结果可生成柱状图或折线图；使用创建时真实快照，不重查数据库、不写库。最多绘制 200 行有效数值，NULL / 空白 / 非数值不伪造为零；提供逐点原始数据替代内容，关闭后不保存图表定义。顶部图表入口仍隐藏。
 - 结构页字段上下移动对原生 MySQL / MariaDB 既有字段启用：保留 SHOW CREATE 的完整列定义，保存前复核模式与定义，一次最小 ALTER 并读取真实顺序确认。不能与其它字段修改混合；只读、ODBC 与不支持物理重排列的方言提供禁用原因，不靠重建表冒充排序。
 - 查询执行目前不支持中断正在运行的语句，「停止」明确禁用；执行期间不能切换连接/数据库，以避免结果归属错误。
 - 同步 / 生成对 SQLite 仅支持 main 命名空间，拒绝附加库 / temp 同名阴影以防误写；自定义 ODBC 和未支持的工具协议会明确反馈，不冒充成功。
 - CSV/JSON/SQL 导入导出；表数据同步支持仅结构/仅数据/二者、列名与类型映射、主键差异比较及增量插入/更新。SQLite、MySQL、PostgreSQL 的 3 个同构/6 个异构方向已完成本轮真实 108 场景；SQL Server/TDS、ClickHouse 与四种 ODBC profile 另完成 42 个状态化协议模拟场景，不算对应厂商实库或默认 JDBC 路线认证。详见[本轮完整动态测试报告](<tools/acceptance/sync/TEST-REPORT-2026-11-07.md>)、[复现说明](<tools/acceptance/sync/README.md>)及[实库逐场景记录](<tools/acceptance/sync/live-report.json>)。
 - MySQL DDL 会自动提交，重建目标表不可整体回滚；取消在数据库操作之间协作执行，不强制终止正在执行的语句。SQL Server/ClickHouse/ODBC 当前通用同步通道不承诺事务回滚；ClickHouse 标准 UPDATE 增量更新在写入前明确拒绝，可关闭更新仅插入缺失行。
 - 数据生成、服务器只读监控、日志检索以及详细对象元数据。
-- 自定义驱动支持本机 64 位 ODBC 已安装驱动、DSN、可信原生 DLL，以及真实 Java sidecar 加载 JDBC JAR；**JAR 不作为原生 DLL 加载**。JDBC / H2 需要 Java 11+ 和 source compiler，严格匹配原包、必需依赖、厂商类、SPI 与 URL。当前原件清单含 31 套完整包（28 套官方来源、3 套明确标注的 dbx 固定提交原件），覆盖 34 个类型。15 套官方包专项与其余 8 组 Java 11/17 专项分别保留，不把闭端口拒连、驱动 ready 当作厂商服务器认证。Access、H2、DuckDB 另有真实本地 SQL；BigQuery 有真实 OAuth HTTP 拒绝，Spanner 有真实 gRPC 拒绝。详见[当前原件及依赖清单](<tools/acceptance/simulation/driver-registry-final-20261107.json>)与[完整验收说明](<tools/acceptance/simulation/README.md>)。
+- 自定义驱动支持本机 64 位 ODBC 已安装驱动、DSN、可信原生 DLL，以及真实 Java sidecar 加载 JDBC JAR；**JAR 不作为原生 DLL 加载**。JDBC / H2 需要 Java 11+ 和 source compiler，严格匹配原包、必需依赖、厂商类、SPI 与 URL。当前原件清单含 31 套完整包（28 套官方来源、3 套明确标注的第三方固定版本原件），覆盖 34 个类型。15 套官方包专项与其余 8 组 Java 11/17 专项分别保留，不把闭端口拒连、驱动 ready 当作厂商服务器认证。Access、H2、DuckDB 另有真实本地 SQL；BigQuery 有真实 OAuth HTTP 拒绝，Spanner 有真实 gRPC 拒绝。详见[当前原件及依赖清单](<tools/acceptance/simulation/driver-registry-final-20261107.json>)与[完整验收说明](<tools/acceptance/simulation/README.md>)。
 - 原有十种规划数据源已接入实际协议：Druid、H2、DynamoDB、Cassandra、NebulaGraph、Kafka、RocketMQ、MQTT、ZooKeeper、etcd。不同产品、TLS/认证能力与实库验证状态不得混为一谈；详见[原生适配使用与边界](<tools/acceptance/datasources/NATIVE_ADAPTERS.md>)。
-- 新建连接卡片原标签位置提供驱动状态和直接下载。**31 套原件、34 个类型的完整生产桌面流程已通过 71 项检查**，包括实际点击下载、单次 IPC、完整包/依赖校验、选中项和焦点保留。H2 / DuckDB / Access 还执行真实 SQL。Caché / SUNDB / OSCAR 下载来源明确为 dbx 固定提交，非厂商官网；ArgoDB 使用官方 QuarkDriver 而非 Inceptor，托管模式仅空凭据 auth=noSasl。Salesforce / HBase 新增内置 REST，无需数据库驱动；含 SOQL/CRUD 或 scanner/二进制读写的状态化实适配器测试。当前目录为 66 个内置类型、34 个可下载类型及 2 个需显式目标的通用入口，不捏造通用 ODBC/JDBCX 的唯一驱动。详见[最终桌面记录](<tools/acceptance/simulation/desktop-final-verified-20261107/report.json>)及[获取范围和限制](<tools/acceptance/simulation/driver-download-limitations-20261107.md>)。
+- 新建连接卡片原标签位置提供驱动状态和直接下载。**31 套原件、34 个类型的完整生产桌面流程已通过 71 项检查**，包括实际点击下载、单次 IPC、完整包/依赖校验、选中项和焦点保留。H2 / DuckDB / Access 还执行真实 SQL。Caché / SUNDB / OSCAR 下载来源明确为第三方固定版本，非厂商官网；ArgoDB 使用官方 QuarkDriver 而非 Inceptor，托管模式仅空凭据 auth=noSasl。Salesforce / HBase 新增内置 REST，无需数据库驱动；含 SOQL/CRUD 或 scanner/二进制读写的状态化实适配器测试。当前目录为 66 个内置类型、34 个可下载类型及 2 个需显式目标的通用入口，不捏造通用 ODBC/JDBCX 的唯一驱动。详见[最终桌面记录](<tools/acceptance/simulation/desktop-final-verified-20261107/report.json>)及[获取范围和限制](<tools/acceptance/simulation/driver-download-limitations-20261107.md>)。
 - [全目录逐项验收](<tools/acceptance/simulation/README.md>) 的完整历史快照覆盖全部 102 项：8 项实库参考、94 项状态化协议/兼容模拟，0 失败、0 缺项；[逐项报告](<tools/acceptance/simulation/coverage-report.md>)保留每项方式与限制。后续完整 JDBC 下载及 Salesforce/HBase 原生 REST 有独立增量证据，**不把早期 ODBC 合同测试倒算为新默认 JDBC/REST 路线全量重跑**。最终 Rust 普通回归 259 通过、0 失败、23 项按条件 ignored；UI 166 通过。协议模拟、ODBC 测试代理及同家族复用不算对应厂商实库认证；[历史实库矩阵](<tools/acceptance/datasources/README.md>)单独保留。
 - [最终证据校验脚本](<tools/acceptance/simulation/create-run-record-final-20261107.mjs>)已实际退出 0，生成 `result=PASS` 的[机器运行记录](<tools/acceptance/simulation/run-record-final-20261107.json>)；交付摘要见[验收报告](<tools/acceptance/simulation/final-acceptance-20261107.md>)。该结果对应固定程序与各自哈希快照；同期同步模块和 dist 后续改动单独记录，不将固定程序验收冒充整个最新工作区的新测试。
 - Windows 未注册 DLL 加载需要唯一临时用户 DSN，仅保存 Driver 路径，连接建立或失败后清理。此为纯便携存储以外的明确临时注册表例外，不永久安装驱动，不写机器级 ODBC，不保存明文密码到 DSN。
@@ -116,12 +114,12 @@ Ribbon       44px   彩色图标 + 标签，选中块 #E3EDFD
 
 - 菜单栏：`文件 编辑 查看 收藏夹 工具`，右侧固定项 `数据源同步 选项`；
   查询标签页激活时追加「查询」菜单，含 Windows 加速键
-- Ribbon：连接·新建查询｜表·视图·函数·查询·备份｜用户·自动运行·模型，
+- Ribbon：连接·新建查询｜表·视图·函数·查询·备份｜用户·自动运行，
   「新建查询」「备份」后有竖分隔线；「连接」直接打开新建连接，
-  「用户」直接打开用户管理页；「其它」「图表」暂隐藏
+  「用户」直接打开用户管理页；「其它」暂隐藏
 - 标签页工具栏随标签类型变化：
-  - 表数据页：开始事务 / 文本 / 筛选 / 排序 / 列 / 导入 / 导出 / 数据生成 / 创建图表
-  - 查询页：保存 / 查询创建工具 / 美化 SQL / 代码段 / 导出结果 / 创建图表
+  - 表数据页：文本 / 筛选 / 排序 / 导入 / 导出 / 数据生成 / 设置（可见列）
+  - 查询页：开始事务 / 保存 / 查询创建工具 / 美化 SQL / 代码段 / 导出结果
   - 表设计器：保存 / 添加字段 / 插入字段 / 删除字段 / 主键 / 上移 / 下移
 - 网格底栏：首页 / 上一页 / 页码输入框 / 下一页 / 末页 / 更多 + 视图切换
 - 状态栏：左侧连接图标 + 连接名、对象图标 + 对象名；右侧 `第 N 条记录（共 M 条）于第 P 页`
@@ -146,12 +144,10 @@ Ribbon       44px   彩色图标 + 标签，选中块 #E3EDFD
 | 8 | 工具（服务器信息、数据传输、SQL 转储） | `src-tauri/src/transfer.rs` |
 | 9 | 备份 / 还原（整库转储为 SQL：结构 + 数据 + 视图；备份列表、新建/还原/删除备份、打开所在文件夹） | `src/dialogs/BackupDialog.ts`、`src-tauri/src/transfer.rs` `dump_database`、`commands.rs` |
 | 10 | 用户管理（MySQL 协议族读 `mysql.user` 真实数据；建户 / 删户 / 改密码） | `UsersTabView`、`commands.rs`、`src/dialogs/UserDialog.ts` |
-| 11 | 模型（活库 ER 关系图：表 / 字段 / 主键 / 外键连线，缩放平移适应窗口） | `src/ui/ModelCanvas.ts`、`ModelTabView` |
-| 12 | 视图设计器（读取定义 → 编辑 → `CREATE OR REPLACE VIEW` 真实保存） | `SqlDesignTabView`、`commands.rs` `get_view_definition` |
-| 13 | 函数 / 存储过程（源码查看与整体重建） | `commands.rs` `get_routine_definition` |
-| 14 | 图表（查询 / 表结果绘制柱状 / 折线 / 饼图） | `src/dialogs/ChartDialog.ts` |
-| 15 | 自动运行（任务保存 / 到期自动执行 / 立即运行 / 运行历史，任务存 `data/jobs.json`） | `ScheduleTabView`、`commands.rs` `run_job_now` |
-| 16 | 通用（最近打开、收藏夹、设置、全中文界面） | `SettingsDialog.ts` / `storage.rs` |
+| 11 | 视图设计器（读取定义 → 编辑 → `CREATE OR REPLACE VIEW` 真实保存） | `SqlDesignTabView`、`commands.rs` `get_view_definition` |
+| 12 | 函数 / 存储过程（源码查看与整体重建） | `commands.rs` `get_routine_definition` |
+| 13 | 自动运行（任务保存 / 到期自动执行 / 立即运行 / 运行历史，任务存 `data/jobs.json`） | `ScheduleTabView`、`commands.rs` `run_job_now` |
+| 14 | 通用（最近打开、收藏夹、设置、全中文界面） | `SettingsDialog.ts` / `storage.rs` |
 
 已接入的数据库协议示例（不等于每个产品已完成实库验收；实际结果见[全目录实库报告](<tools/acceptance/datasources/README.md>)）：
 
@@ -204,55 +200,32 @@ Ribbon       44px   彩色图标 + 标签，选中块 #E3EDFD
 
 ```
 tauri-navicat/
-├── build.ps1                     一键构建脚本
-├── index.html                    Vite 入口
-├── preview.html                  浏览器预览入口（模拟 IPC）
-├── package.json
-├── vite.config.ts
-├── tsconfig.json
-├── public/
-│   ├── preview.html              浏览器预览页
-│   └── preview-bootstrap.js      预览用 IPC 桩
-├── src/
-│   ├── main.ts                   入口
-│   ├── core/
-│   │   ├── types.ts              前后端共用类型
-│   │   ├── api.ts                IPC 桥接
-│   │   ├── dbcatalog.ts          数据源目录
-│   │   └── App.ts                主控制器（菜单命令、标签页、视图）
-│   ├── ui/
-│   │   ├── MenuBar.ts            菜单栏 / 下拉 / 子菜单 / 右键菜单
-│   │   ├── menu.ts               菜单树定义
-│   │   ├── Ribbon.ts             Ribbon 工具栏
-│   │   ├── TreePanel.ts          连接树
-│   │   ├── TabStrip.ts           标签页条
-│   │   ├── DataGrid.ts           手写虚拟滚动数据网格
-│   │   ├── SqlEditor.ts          CodeMirror 6 SQL 编辑器
-│   │   ├── icons.ts              内联 SVG 图标集
-│   │   └── Dialog.ts             对话框框架 + 表单控件
-│   ├── dialogs/
-│   │   ├── ConnectionDialog.ts   新建 / 编辑连接
-│   │   ├── SettingsDialog.ts     选项 / 关于 / 服务器信息 / 收藏夹
-│   │   └── ImportExportDialog.ts 导入 / 导出 / 数据传输 / SQL 转储向导
-│   └── styles/base.css           像素规格样式表
-├── src-tauri/
-│   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   ├── build.rs
-│   ├── icons/                    应用图标（原创，make_original_icon.py 生成）
-│   └── src/
-│       ├── main.rs
-│       ├── lib.rs                Tauri 入口
-│       ├── models.rs             数据模型
-│       ├── error.rs              可序列化错误类型
-│       ├── storage.rs            便携存储 + AES-256-GCM
-│       ├── db.rs                 连接池 + SQL 执行
-│       ├── values.rs             行值统一解码
-│       ├── schema.rs             元数据 / 表结构 / 分页 / 行编辑
-│       ├── transfer.rs           导入 / 导出 / 传输 / 转储
-│       └── commands.rs           IPC 命令层
-└── tools/                        图标生成与开发辅助脚本
+├── src/                        前端（原生 TypeScript，无框架）
+│   ├── core/                   主控制器、IPC 桥接、状态机
+│   ├── ui/                     原生组件（网格、编辑器、树、菜单、图标）
+│   ├── dialogs/                对话框
+│   └── styles/base.css         像素规格样式表
+├── src-tauri/src/              后端 Rust（Tauri 2）
+│   ├── commands.rs             IPC 命令层
+│   ├── db.rs / storage.rs      连接池、便携存储与 AES-256-GCM
+│   ├── execution*.rs           统一执行门禁、授权、预算、取消
+│   ├── mutation.rs             受控写入（typed 绑定 / CAS / 读回）
+│   ├── catalog.rs / schema.rs  元数据与对象目录
+│   ├── transfer.rs             导入导出 / 传输 / 转储
+│   └── *_tests.rs              模块内回归测试
+├── bridge/http-tunnel/         JDBC sidecar 网关（Java）
+├── tools/                      测试与辅助脚本（acceptance 数据夹具不入库）
+├── testdata/                   轻量测试夹具
+└── docs/                       文档，按生命周期分三条线
+    ├── completed/              只有结果：PRODUCT-STATE.md
+    ├── active/                 进行中任务书、测试轮次、证据日志
+    ├── planned/                尚未开工的计划
+    └── design/                 设计系统、界面规格、UI 原型（常驻）
 ```
+
+源码文件清单不在这里维护——它会随代码漂移。某项能力的代码入口以
+[产品状态文档](<docs/completed/PRODUCT-STATE.md>) 为准，文档维护规则见
+[文档索引](<docs/README.md>) 与 skill `.agents/skills/docs-lifecycle/SKILL.md`。
 
 ---
 

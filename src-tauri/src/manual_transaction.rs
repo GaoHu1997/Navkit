@@ -19,7 +19,7 @@ enum Handle {
     Mysql(sqlx::Transaction<'static, sqlx::MySql>),
     Postgres(sqlx::Transaction<'static, sqlx::Postgres>),
 }
-struct Session { status: ManualTransactionStatus, handle: Handle, kind: DbKind }
+struct Session { history:crate::sql_history::Context, status: ManualTransactionStatus, handle: Handle, kind: DbKind, principal: Option<String>, unknown: bool, mysql_pool: Option<sqlx::MySqlPool>, pg_pool: Option<sqlx::PgPool> }
 
 #[derive(Default)]
 pub struct Registry {
@@ -66,6 +66,26 @@ impl Registry {
         }
         Ok(OrdinaryLease { _lifecycle: lifecycle, _slots: guards })
     }
+    /// 保活只尝试取得现有空闲租约；竞争或手动事务存在时立即跳过。
+    /// 取得部分连接后若失败，所有已持有 guard 随返回释放，不排队探测。
+    pub async fn try_ordinary(&self, ids: &[&str]) -> Result<Option<OrdinaryLease>> {
+        let lifecycle = match self.lifecycle.clone().try_read_owned() {
+            Ok(guard) => guard,
+            Err(_) => return Ok(None),
+        };
+        let mut ids = ids.to_vec(); ids.sort_unstable(); ids.dedup();
+        let mut guards = Vec::with_capacity(ids.len());
+        for id in ids {
+            let slot = self.slots.lock().entry(id.into()).or_default().clone();
+            let guard = match slot.try_lock_owned() {
+                Ok(guard) => guard,
+                Err(_) => return Ok(None),
+            };
+            if guard.is_some() { return Ok(None); }
+            guards.push(guard);
+        }
+        Ok(Some(OrdinaryLease { _lifecycle: lifecycle, _slots: guards }))
+    }
     pub async fn close_all(&self) -> Result<OwnedRwLockWriteGuard<()>> {
         let lifecycle = self.lifecycle.clone().write_owned().await;
         let slots: Vec<_> = self.slots.lock().values().cloned().collect();
@@ -73,7 +93,7 @@ impl Registry {
         for slot in slots {
             let mut slot = slot.lock().await;
             if let Some(session) = slot.take() {
-                if let Err(e) = finish_handle(session.handle, false).await { error = Some(e); }
+                if let Err(e) = close_session(session).await { error = Some(e); }
             }
         }
         if let Some(error) = error { return Err(error); }
@@ -84,39 +104,90 @@ impl Lease {
     pub fn status(&self) -> ManualTransactionStatus {
         self.slot.as_ref().map(|s| s.status.clone()).unwrap_or_default()
     }
+    /// 当前会话的连接类型（会话不存在时 None）；用于按方言构造行变更 SQL。
+    pub fn db_kind(&self) -> Option<crate::models::DbKind> {
+        self.slot.as_ref().map(|s| s.kind.clone())
+    }
     pub fn require_inactive(&self) -> Result<()> {
         if self.slot.is_some() { bail!("此连接存在手动查询事务，请先提交或回滚事务再执行其它查询、数据工具或连接操作"); }
         Ok(())
     }
     pub async fn start(&mut self, conn: &Db, kind: DbKind, schema: String, owner: String) -> Result<ManualTransactionStatus> {
+    let __sql_history_context = crate::sql_history::db_context(conn);
+    crate::sql_history::scope(__sql_history_context, async {
         self.require_inactive()?;
         if owner.trim().is_empty() { bail!("手动事务必须绑定查询标签页所有者"); }
         let handle = match conn {
             Db::Sqlite(pool) => {
                 if !schema.is_empty() && schema != "main" { bail!("SQLite 手动查询事务仅支持 main"); }
-                let mut tx = pool.begin().await?;
-                let attached = sqlx::query("PRAGMA database_list").fetch_all(&mut *tx).await?;
+                let mut connection = pool.acquire().await?;
+                let attached = crate::sql_history::query("PRAGMA database_list").fetch_all(&mut *connection).await?;
                 if attached.iter().any(|row| sqlx::Row::get::<String, _>(row, "name") != "main" && sqlx::Row::get::<String, _>(row, "name") != "temp") {
                     bail!("SQLite 手动事务连接包含附加数据库，无法安全绑定 main");
                 }
-                let temporary: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM temp.sqlite_master").fetch_one(&mut *tx).await?;
+                let temporary: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM temp.sqlite_master").fetch_one(&mut *connection).await?;
                 if temporary != 0 { bail!("SQLite 手动事务连接包含临时对象，请清理临时对象或重开连接"); }
+                // 预审拒绝不销毁既有池状态；只有真实事务拥有的连接才隔离复用。
+                connection.close_on_drop();
+                let tx = sqlx::Transaction::begin(connection, None).await?;
                 Handle::Sqlite(tx)
             }
             Db::Mysql(pool) => {
-                let mut tx = pool.begin().await?;
+                let mut connection = pool.acquire().await?; connection.close_on_drop();
+                let mut tx = sqlx::Transaction::begin(connection, None).await?;
                 // Non-transactional tables make a rollback promise false; fail closed.
-                let unsupported: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND COALESCE(ENGINE,'') <> 'InnoDB'")
+                let unsupported: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND COALESCE(ENGINE,'') <> 'InnoDB'")
                     .fetch_one(&mut *tx).await?;
                 if unsupported != 0 { bail!("MySQL 选定数据库包含非 InnoDB 数据表，无法保证手动事务回滚"); }
                 Handle::Mysql(tx)
             }
-            Db::Postgres(pool) => Handle::Postgres(pool.begin().await?),
+            Db::Postgres(pool) => {
+                let mut connection = pool.acquire().await?; connection.close_on_drop();
+                Handle::Postgres(sqlx::Transaction::begin(connection, None).await?)
+            },
             _ => bail!("手动查询事务仅支持 SQLx 原生 SQLite / MySQL / PostgreSQL 协议连接，其它驱动不支持"),
         };
         let status = ManualTransactionStatus { active: true, schema, owner, failed: false };
-        *self.slot = Some(Session { status: status.clone(), handle, kind });
+        *self.slot = Some(Session { history:crate::sql_history::current_context(), status: status.clone(), handle, kind, principal: None, unknown: false,
+            mysql_pool: if let Db::Mysql(pool) = conn { Some(pool.clone()) } else { None },
+            pg_pool: if let Db::Postgres(pool) = conn { Some(pool.clone()) } else { None } });
         Ok(status)
+    
+    }).await
+}
+    pub fn bind_principal(&mut self, principal: &str) { if let Some(s) = self.slot.as_mut() { s.principal = Some(principal.into()); } }
+    pub fn require_principal(&self, principal: &str) -> Result<()> {
+        if self.slot.as_ref().is_some_and(|s| s.principal.as_deref().is_some_and(|p| p != principal)) { bail!("手动事务属于其它调用窗口"); } Ok(())
+    }
+    pub async fn execute_controlled(&mut self, owner: Option<&str>, schema: &str, sql: &str, entry: &Arc<crate::execution::Entry>) -> Result<Option<(crate::error::CmdResult<MultiResult>, bool)>> {
+        self.require_principal(&entry.binding.principal)?;
+        let Some(session) = self.slot.as_mut() else {
+            if owner.is_some() { bail!("该查询的手动事务已经结束，请刷新事务状态"); } return Ok(None);
+        };
+        // SQLite 的空命名空间等价 main：前端表页归一为 main 后，执行请求可能仍带空串
+        // （旧调用点/受控执行默认值），两者必须视为同一命名空间（BUG-R1-014）。
+        let same_namespace = schema == session.status.schema
+            || (session.kind.protocol() == crate::models::Protocol::Sqlite
+                && matches!((schema, session.status.schema.as_str()),
+                    ("" | "main", "main") | ("main", "")));
+        if owner != Some(session.status.owner.as_str()) || !same_namespace {
+            bail!(format!("执行页/命名空间与手动事务不匹配（页面 schema={schema:?}，事务 schema={:?}，owner={owner:?}/{:?}，same_ns={same_namespace}）", session.status.schema, session.status.owner));
+        }
+        if session.status.failed { bail!("手动事务已失败，只允许明确回滚"); }
+        let mut context=session.history.clone();context.operation_id=Some(entry.id.clone());context.origin="query".into();
+        crate::sql_history::scope(context,async {
+        let statements = checked_statements(sql)?;
+        if session.kind.is_mysql_family() { validate_mysql_targets(&mut session.handle, &statements).await?; }
+        let sql = statements.join(";\n");
+        let (result, confirmed) = match &mut session.handle {
+            Handle::Sqlite(tx) => crate::execution::sqlite_run(&mut **tx, &sql, entry, false).await,
+            Handle::Mysql(tx) => crate::execution::mysql_run(&mut **tx, session.mysql_pool.as_ref().expect("MySQL pool"), &sql, entry).await,
+            Handle::Postgres(tx) => crate::execution::pg_run(&mut **tx, session.pg_pool.as_ref().expect("PG pool"), &sql, entry, true).await,
+        };
+        if result.is_err() || entry.stopping() { session.status.failed = true; }
+        if entry.stopping() && !confirmed { session.unknown = true; }
+        Ok(Some((result.map_err(crate::error::AppError::from), confirmed)))
+        }).await
     }
     pub async fn execute(&mut self, owner: Option<&str>, schema: &str, sql: &str) -> Result<Option<MultiResult>> {
         let Some(session) = self.slot.as_mut() else {
@@ -124,13 +195,18 @@ impl Lease {
             return Ok(None);
         };
         if owner != Some(session.status.owner.as_str()) { bail!("此连接的手动事务属于其它查询标签页，请先结束事务"); }
-        if schema != session.status.schema { bail!("手动事务期间不能切换数据库/模式"); }
+        // 与 execute_controlled 一致：SQLite 空命名空间等价 main（BUG-R1-014）。
+        let same_namespace = schema == session.status.schema
+            || (session.kind.protocol() == crate::models::Protocol::Sqlite
+                && matches!((schema, session.status.schema.as_str()),
+                    ("" | "main", "main") | ("main", "")));
+        if !same_namespace { bail!("手动事务期间不能切换数据库/模式"); }
         if session.status.failed { bail!("手动事务已失败，只能回滚，不能继续执行或提交"); }
-        let result = async {
+        let result = crate::sql_history::scope(session.history.clone(),async {
             let statements = checked_statements(sql)?;
             if session.kind.is_mysql_family() { validate_mysql_targets(&mut session.handle, &statements).await?; }
             execute_handle(&mut session.handle, &statements).await
-        }.await;
+        }).await;
         match result {
             Ok(result) => Ok(Some(result)),
             Err(error) => { session.status.failed = true; Err(error) }
@@ -141,13 +217,27 @@ impl Lease {
         if owner != session.status.owner { bail!("只能由手动事务所属查询标签页提交或回滚"); }
         if commit && session.status.failed { bail!("手动事务已失败，只能回滚，不能提交"); }
         let session = self.slot.take().expect("validated transaction");
+        if session.unknown {
+            // 应用不再显式提交/回滚；SQLx Drop 可能尽力回滚，close_on_drop 禁止回池。
+            // 没有回滚回执，销毁不能当作已回滚。
+            drop(session);
+            bail!("停止未确认，异常事务物理连接已隔离/销毁；回滚效果未知，请验证数据库状态");
+        }
         finish_handle(session.handle, commit).await?;
         Ok(ManualTransactionStatus::default())
     }
     pub async fn close(&mut self) -> Result<()> {
-        if let Some(session) = self.slot.take() { finish_handle(session.handle, false).await?; }
+        if let Some(session) = self.slot.take() { close_session(session).await?; }
         Ok(())
     }
+}
+async fn close_session(session: Session) -> Result<()> {
+    if session.unknown {
+        // 离页/全局退出与显式 finish 相同：不追加应用回滚；SQLx Drop 尽力清理且不回池。
+        drop(session);
+        bail!("停止未确认，异常事务物理连接已隔离/销毁；回滚效果未知，请验证数据库状态");
+    }
+    finish_handle(session.handle, false).await
 }
 async fn finish_handle(handle: Handle, commit: bool) -> Result<()> {
     macro_rules! finish { ($tx:expr) => { if commit { $tx.commit().await?; } else { $tx.rollback().await?; } }; }
@@ -157,7 +247,7 @@ async fn finish_handle(handle: Handle, commit: bool) -> Result<()> {
 
 /// SQL lexer used only as a fail-closed transaction policy, not an SQL rewriting parser.
 /// Preserve quoted identifiers for target checks; hide strings/comments; split outside them.
-fn tokenize(sql: &str) -> Result<Vec<Vec<String>>> {
+pub(crate) fn tokenize(sql: &str) -> Result<Vec<Vec<String>>> {
     let chars: Vec<char> = sql.chars().collect();
     let mut all = Vec::new(); let mut tokens = Vec::new(); let mut token = String::new(); let mut i = 0;
     while i < chars.len() {
@@ -252,11 +342,11 @@ async fn validate_mysql_targets(handle: &mut Handle, statements: &[String]) -> R
         if tokens.get(at+1).is_some_and(|t| matches!(t.as_str(), "." | "," | "JOIN")) { bail!("MySQL 手动事务仅支持当前库单表写入，不支持跨库或多表修改"); }
         if tokens[0] == "DELETE" && tokens.get(1).map(String::as_str) != Some("FROM") { bail!("MySQL 手动事务仅支持 DELETE FROM 单表形式"); }
         if tokens.iter().any(|t| t == "JOIN") || tokens[0] == "UPDATE" && tokens[..tokens.iter().position(|t| t == "SET").unwrap_or(tokens.len())].iter().any(|t| t == ",") { bail!("MySQL 手动事务不支持多表修改"); }
-        let unsafe_targets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) = LOWER(?) AND (TABLE_TYPE <> 'BASE TABLE' OR COALESCE(ENGINE,'') <> 'InnoDB')")
+        let unsafe_targets: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) = LOWER(?) AND (TABLE_TYPE <> 'BASE TABLE' OR COALESCE(ENGINE,'') <> 'InnoDB')")
             .bind(&name).fetch_one(&mut **tx).await?;
-        let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) = LOWER(?) AND TABLE_TYPE = 'BASE TABLE'")
+        let existing: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) = LOWER(?) AND TABLE_TYPE = 'BASE TABLE'")
             .bind(&name).fetch_one(&mut **tx).await?;
-        let triggers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = DATABASE() AND LOWER(EVENT_OBJECT_TABLE) = LOWER(?)")
+        let triggers: i64 = crate::sql_history::query_scalar("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = DATABASE() AND LOWER(EVENT_OBJECT_TABLE) = LOWER(?)")
             .bind(&name).fetch_one(&mut **tx).await?;
         if existing == 0 || unsafe_targets != 0 || triggers != 0 { bail!("MySQL 手动事务写入目标必须是无触发器的已验证 InnoDB 单表"); }
     }
@@ -265,22 +355,100 @@ async fn validate_mysql_targets(handle: &mut Handle, statements: &[String]) -> R
 fn columns(names: Vec<String>, types: Vec<String>) -> Vec<ResultColumn> {
     names.into_iter().enumerate().map(|(i, name)| ResultColumn { name, data_type: types.get(i).cloned().unwrap_or_default(), nullable: true, primary_key: false, auto_increment: false }).collect()
 }
+
+/// 手动事务内的图形化行变更（网格「开始事务」后的可视化编辑提交）。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ManualMutationOp {
+    Update {
+        table: String,
+        changes: Vec<(String, Option<String>)>,
+        keys: Vec<(String, Option<String>)>,
+        old_values: Vec<(String, Option<String>)>,
+    },
+    Insert {
+        table: String,
+        columns: Vec<String>,
+        values: Vec<Option<String>>,
+    },
+    Delete {
+        table: String,
+        keys: Vec<(String, Option<String>)>,
+        old_values: Vec<(String, Option<String>)>,
+    },
+}
+
+/// 把结构化行变更编译为方言 SQL（标识符与字面量统一走 db 层引用，杜绝拼接注入）。
+pub fn build_manual_mutation_sql(kind: &DbKind, schema: &str, ops: &[ManualMutationOp]) -> Result<Vec<String>> {
+    use crate::schema::where_condition;
+    let mut statements = Vec::with_capacity(ops.len());
+    for op in ops {
+        match op {
+            ManualMutationOp::Update { table, changes, keys, old_values } => {
+                let full = validate_table(kind, schema, table)?;
+                if changes.is_empty() { bail!("更新缺少变更列"); }
+                let sets: Vec<String> = changes.iter()
+                    .map(|(col, val)| format!("{} = {}", db::quote_ident(kind, col), match val { Some(s) => db::quote_literal(s), None => "NULL".into() }))
+                    .collect();
+                let mut conds: Vec<String> = keys.iter().map(|(c, v)| where_condition(kind, c, v)).collect();
+                if conds.is_empty() {
+                    conds = old_values.iter().map(|(c, v)| where_condition(kind, c, v)).collect();
+                }
+                if conds.is_empty() { bail!("缺少主键条件，无法在事务中更新该行"); }
+                statements.push(format!("UPDATE {} SET {} WHERE {}", full, sets.join(", "), conds.join(" AND ")));
+            }
+            ManualMutationOp::Insert { table, columns, values } => {
+                let full = validate_table(kind, schema, table)?;
+                // 空列插入使用 DEFAULT VALUES（SQLite/PG 支持；MySQL 用 () VALUES ()）
+                if columns.is_empty() {
+                    statements.push(match kind.protocol() {
+                        crate::models::Protocol::Mysql => format!("INSERT INTO {} () VALUES ()", full),
+                        _ => format!("INSERT INTO {} DEFAULT VALUES", full),
+                    });
+                    continue;
+                }
+                if columns.len() != values.len() { bail!("插入列与值数量不一致"); }
+                let cols: Vec<String> = columns.iter().map(|c| db::quote_ident(kind, c)).collect();
+                let vals: Vec<String> = values.iter().map(|v| match v { Some(s) => db::quote_literal(s), None => "NULL".into() }).collect();
+                statements.push(format!("INSERT INTO {} ({}) VALUES ({})", full, cols.join(", "), vals.join(", ")));
+            }
+            ManualMutationOp::Delete { table, keys, old_values } => {
+                let full = validate_table(kind, schema, table)?;
+                let mut conds: Vec<String> = keys.iter().map(|(c, v)| where_condition(kind, c, v)).collect();
+                if conds.is_empty() {
+                    conds = old_values.iter().map(|(c, v)| where_condition(kind, c, v)).collect();
+                }
+                if conds.is_empty() { bail!("缺少主键条件，无法在事务中删除该行"); }
+                statements.push(format!("DELETE FROM {} WHERE {}", full, conds.join(" AND ")));
+            }
+        }
+    }
+    Ok(statements)
+}
+
+/// 校验并限定行变更的目标表名（拒绝空名 / 分号 / NUL，统一加方言限定）。
+fn validate_table(kind: &DbKind, schema: &str, table: &str) -> Result<String> {
+    if table.trim().is_empty() || table.contains([';', '\0']) {
+        bail!("行变更目标表名无效");
+    }
+    Ok(db::qualified(kind, schema, table))
+}
 async fn execute_handle(handle: &mut Handle, statements: &[String]) -> Result<MultiResult> {
     let start = std::time::Instant::now(); let mut sets = Vec::new(); let mut messages = Vec::new();
     macro_rules! execute {
         ($tx:expr, $values:path) => {
             for statement in statements {
                 let conn = &mut **$tx;
-                let describe = conn.describe(statement).await?;
+                let describe = crate::sql_history::describe(&mut *conn,statement).await?;
                 let names: Vec<_> = describe.columns().iter().map(|c| c.name().to_string()).collect();
                 let types: Vec<_> = describe.columns().iter().map(|c| c.type_info().name().to_string()).collect();
                 if !names.is_empty() {
-                    let rows = sqlx::query(statement).fetch_all(&mut *conn).await?;
+                    let rows = crate::sql_history::query(statement).fetch_all(&mut *conn).await?;
                     let rows: Vec<_> = rows.iter().map(|row| $values(row, names.len())).collect();
                     let total = rows.len() as u64;
                     sets.push(ResultSet { columns: columns(names, types), rows, affected: 0, elapsed_ms: 0, ok: true, message: String::new(), has_rows: true, primary_keys: vec![], total });
                 } else {
-                    let affected = sqlx::query(statement).execute(&mut *conn).await?.rows_affected();
+                    let affected = crate::sql_history::query(statement).execute(&mut *conn).await?.rows_affected();
                     messages.push(format!("{} 行受影响（尚未提交）", affected));
                     sets.push(ResultSet { columns: vec![], rows: vec![], affected, elapsed_ms: 0, ok: true, message: String::new(), has_rows: false, primary_keys: vec![], total: 0 });
                 }
@@ -288,7 +456,7 @@ async fn execute_handle(handle: &mut Handle, statements: &[String]) -> Result<Mu
         }
     }
     match handle { Handle::Sqlite(tx) => execute!(tx, crate::values::sqlite_row_values), Handle::Mysql(tx) => execute!(tx, crate::values::my_row_values), Handle::Postgres(tx) => execute!(tx, crate::values::pg_row_values) }
-    Ok(MultiResult { sets, messages, elapsed_ms: start.elapsed().as_millis() as u64 })
+    Ok(MultiResult { sets, messages, elapsed_ms: start.elapsed().as_millis() as u64, spool_id: None })
 }
 #[cfg(test)]
 mod tests {
@@ -301,7 +469,7 @@ mod tests {
             let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path).create_if_missing(true)
                 .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal).busy_timeout(std::time::Duration::from_secs(2));
             let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(3).connect_with(options.clone()).await.unwrap();
-            sqlx::query("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL)").execute(&pool).await.unwrap();
+            crate::sql_history::query("CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT NOT NULL)").execute(&pool).await.unwrap();
             let observer = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(options).await.unwrap();
             Self { db: Db::Sqlite(pool), observer, path, registry: Registry::default() }
         }
@@ -311,13 +479,42 @@ mod tests {
         async fn execute(&self, sql: &str) -> Result<MultiResult> {
             self.registry.lease("db").await.execute(Some("tab-a"), "main", sql).await.map(Option::unwrap)
         }
-        async fn count(&self) -> i64 { sqlx::query_scalar("SELECT COUNT(*) FROM items").fetch_one(&self.observer).await.unwrap() }
+        async fn count(&self) -> i64 { crate::sql_history::query_scalar("SELECT COUNT(*) FROM items").fetch_one(&self.observer).await.unwrap() }
         async fn cleanup(self) {
             drop(self.registry.close_all().await.unwrap());
             if let Db::Sqlite(pool) = self.db { pool.close().await; }
             self.observer.close().await;
-            std::fs::remove_file(self.path).unwrap();
+            // Windows 下连接池句柄释放可能滞后于 close().await；清理失败不应伪装成断言失败。
+            let _ = std::fs::remove_file(&self.path);
         }
+    }
+    #[tokio::test]
+    async fn idle_probe_lease_never_waits_and_releases_partial_acquisition() {
+        let registry = Registry::default();
+        let busy = registry.ordinary(&["b"]).await.unwrap();
+        assert!(registry.try_ordinary(&["b", "a", "a"]).await.unwrap().is_none());
+        let partial = registry.try_ordinary(&["a"]).await.unwrap().expect("a must not remain locked after b was busy");
+        drop(partial); drop(busy);
+        let acquired = registry.try_ordinary(&["a", "b"]).await.unwrap().unwrap();
+        assert!(registry.try_ordinary(&["a"]).await.unwrap().is_none());
+        drop(acquired);
+        let exclusive = registry.lifecycle.clone().write_owned().await;
+        assert!(registry.try_ordinary(&["a"]).await.unwrap().is_none());
+        drop(exclusive);
+        assert!(registry.try_ordinary(&["a"]).await.unwrap().is_some());
+    }
+    #[tokio::test]
+    async fn idle_probe_skips_active_transaction_without_touching_it() {
+        let f = Fixture::new().await;
+        f.start().await;
+        f.execute("INSERT INTO items VALUES(1,'pending')").await.unwrap();
+        assert!(f.registry.try_ordinary(&["db"]).await.unwrap().is_none());
+        assert!(f.registry.lease("db").await.status().active);
+        assert_eq!(f.count().await, 0);
+        f.registry.lease("db").await.finish("tab-a", false).await.unwrap();
+        assert!(f.registry.try_ordinary(&["db"]).await.unwrap().is_some());
+        assert_eq!(f.count().await, 0);
+        f.cleanup().await;
     }
     #[tokio::test]
     async fn manual_transaction_cross_requests_read_own_writes_commit_and_visibility() {
@@ -392,11 +589,11 @@ mod tests {
     #[tokio::test]
     async fn manual_transaction_refuses_pooled_temporary_and_attached_objects() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TEMP TABLE shadow(id INTEGER)").execute(&pool).await.unwrap();
+        crate::sql_history::query("CREATE TEMP TABLE shadow(id INTEGER)").execute(&pool).await.unwrap();
         let db = Db::Sqlite(pool.clone()); let registry = Registry::default();
         assert!(registry.lease("db").await.start(&db,DbKind::of("sqlite"),"main".into(),"tab".into()).await.is_err());
-        sqlx::query("DROP TABLE temp.shadow").execute(&pool).await.unwrap();
-        sqlx::query("ATTACH DATABASE ':memory:' AS auxiliary").execute(&pool).await.unwrap();
+        crate::sql_history::query("DROP TABLE temp.shadow").execute(&pool).await.unwrap();
+        crate::sql_history::query("ATTACH DATABASE ':memory:' AS auxiliary").execute(&pool).await.unwrap();
         assert!(registry.lease("db").await.start(&db,DbKind::of("sqlite"),"main".into(),"tab".into()).await.is_err());
         pool.close().await;
     }
@@ -420,7 +617,7 @@ mod tests {
         registry.lease("owned").await.execute(Some("tab"),"main","INSERT INTO items VALUES(1,'drop')").await.unwrap();
         drop(registry);
         // Acquiring/using a pooled connection flushes SQLx's drop-rollback queue.
-        if let Db::Sqlite(pool) = &f.db { sqlx::query("SELECT 1").fetch_one(pool).await.unwrap(); }
+        if let Db::Sqlite(pool) = &f.db { crate::sql_history::query("SELECT 1").fetch_one(pool).await.unwrap(); }
         assert_eq!(f.count().await,0);
         f.cleanup().await;
     }

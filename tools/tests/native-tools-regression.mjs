@@ -72,6 +72,12 @@ try {
   assert.deepEqual(completion.__schemas__, ["main"]);
   assert.deepEqual(completion.users, ["id", "display_name"]);
   assert.deepEqual(completion.active_users, ["id", "display_name"]);
+  // 备注协议：SQLite 无表/字段备注能力，但真实类型必须随候选返回。
+  assert.equal(completion.__meta__.version, 2);
+  assert.equal(completion.__meta__.relations.users.columns_known, true);
+  assert.equal(completion.__meta__.relations.active_users.kind, "view");
+  assert.equal(completion.__meta__.columns.users.id.type, "INTEGER");
+  assert.equal(completion.__meta__.columns.users.id.comment, null);
   ok("SQL提示：原生读取表、视图、真实字段和模式");
   const sync = await invoke("run_sync", { opts: {
     task_id: null, source_connection: "source", source_schema: "main", source_table: "users",

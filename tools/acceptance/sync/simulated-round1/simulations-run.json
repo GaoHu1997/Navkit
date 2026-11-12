@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "run_id": "68a4d48a-10e7-4ef8-9015-f7d6079d7ea0",
+  "timestamp_utc": "2026-11-07T03:30:05.059Z",
+  "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",
+  "status": "SIMULATED_SYNC_FAIL",
+  "vendor_server_status": "NOT_TESTED",
+  "vendor_real_pass": 0,
+  "source_hashes": {
+    "src-tauri/src/sync.rs": "1c0ceaadde625b7f94b4c334b0c37965f57768a84aaf72df336572a51668ac44",
+    "src-tauri/src/transfer.rs": "961271156ece86291961030a3b1fa11e573722b9c46bc6f95d589b118172dcf2",
+    "src-tauri/src/mssql.rs": "fe8d0b9938c18146c547734c718d104f73f1fc844f53e244f83684367ca5f136",
+    "src-tauri/src/schema.rs": "ea518de894a687607472d9da4ad3b6bf2f660d3e8eab5442a5004ea67744f3f8",
+    "src-tauri/src/db.rs": "217dec741db49d58cc5a5d176febe3eebeddb97512da9cd228fecadb847e0758",
+    "src-tauri/tests/e2e_sync_simulated.rs": "f986a9d870e22d518ddabf1dbf8e459b7f4d5ece3c8d080ab19238c20a1295df",
+    "src-tauri/tests/support/sync_simulated/mod.rs": "baeb399642c08cfb3fb97d95d4dcaf912ba4fca22dd44c5de623e334fdb1148f",
+    "src-tauri/tests/support/sync_simulated/tds_sync_server.py": "d481f5a7c62ee1291a99c7e7442dc9460e6385a4a61f578e3bbd6c19ec48d6be",
+    "src-tauri/tests/support/sync_simulated/clickhouse_sync_server.py": "ae5710fadccc7bba7ab439350173a14f0fe17fa8e67bdcd240d990d5d2852204",
+    "tools/acceptance/simulation/native/tds_server.py": "17e49e85eefeda6de0f0b630738d6af859fbad94f9ed9074e23c1e3ac6e2bca9",
+    "tools/acceptance/sync/run-simulations.mjs": "05e08a88e9b0b4ccddd69fc5ec5dda6731854b8fd4c22008c7fc2867af2cc64b"
+  },
+  "runtime": {
+    "platform": "win32",
+    "arch": "x64",
+    "node": "v24.8.0"
+  },
+  "executions": [
+    {
+      "label": "odbc-oracle",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_FAIL",
+      "report": "odbc-oracle.json",
+      "exit_code": 101,
+      "elapsed_ms": 12827,
+      "counts": {
+        "pass": 4,
+        "fail": 1
+      },
+      "cleanup_success": true,
+      "errors": [
+        {
+          "name": "sqlite_to_odbc_lossless_binary",
+          "status": "SIMULATED_SYNC_FAIL",
+          "error": "binary bytes must survive NUL/non-UTF8: source=[[Some(\"1\"), Some(\"0x00FF1080\")]], target=[[Some(\"1\"), Some(\"\\\\x00\\\\xFF\\\\x10\\\\x80\")]]"
+        }
+      ]
+    },
+    {
+      "label": "odbc-dameng",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_FAIL",
+      "report": "odbc-dameng.json",
+      "exit_code": 101,
+      "elapsed_ms": 4343,
+      "counts": {
+        "pass": 4,
+        "fail": 1
+      },
+      "cleanup_success": true,
+      "errors": [
+        {
+          "name": "sqlite_to_odbc_lossless_binary",
+          "status": "SIMULATED_SYNC_FAIL",
+          "error": "binary bytes must survive NUL/non-UTF8: source=[[Some(\"1\"), Some(\"0x00FF1080\")]], target=[[Some(\"1\"), Some(\"\\\\x00\\\\xFF\\\\x10\\\\x80\")]]"
+        }
+      ]
+    },
+    {
+      "label": "odbc-db2",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--test",
+        "e2e_sync_simulated",
+        "sync_simulated_odbc",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "SIMULATED_SYNC_FAIL",
+      "report": "odbc-db2.json",
+      "exit_code": 101,
+      "elapsed_ms": 3586,
+      "counts": {
+        "pass": 5,
+        "fail": 1
+      },
+      "cleanup_success": true,
+      "errors": [
+        {
+          "name": "sqlite_to_odbc_lossless_binary",
+          "status": "SIMULATED_SYNC_FAIL",
+          "error": "binary bytes must survive NUL/non-UTF8: source=[[Some(\"1\"), Some(\"0x00FF1080\")]], target=[[Some(\"1\"), Some(\"\\\\x00\\\\xFF\\\\x10\\\\x80\")]]"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "suites": 3,
+    "pass": 13,
+    "fail": 3,
+    "vendor_real_pass": 0
+  },
+  "limitations": [
+    "Stateful simulations are not vendor database certification",
+    "Case counts are scenario bundles, not Rust test counts or individual SQL calls",
+    "Outer managed executor must cancel a native driver that never returns; incomplete cleanup is never a PASS"
+  ],
+  "source_hashes_after": {
+    "src-tauri/src/sync.rs": "1c0ceaadde625b7f94b4c334b0c37965f57768a84aaf72df336572a51668ac44",
+    "src-tauri/src/transfer.rs": "961271156ece86291961030a3b1fa11e573722b9c46bc6f95d589b118172dcf2",
+    "src-tauri/src/mssql.rs": "fe8d0b9938c18146c547734c718d104f73f1fc844f53e244f83684367ca5f136",
+    "src-tauri/src/schema.rs": "ea518de894a687607472d9da4ad3b6bf2f660d3e8eab5442a5004ea67744f3f8",
+    "src-tauri/src/db.rs": "217dec741db49d58cc5a5d176febe3eebeddb97512da9cd228fecadb847e0758",
+    "src-tauri/tests/e2e_sync_simulated.rs": "f986a9d870e22d518ddabf1dbf8e459b7f4d5ece3c8d080ab19238c20a1295df",
+    "src-tauri/tests/support/sync_simulated/mod.rs": "baeb399642c08cfb3fb97d95d4dcaf912ba4fca22dd44c5de623e334fdb1148f",
+    "src-tauri/tests/support/sync_simulated/tds_sync_server.py": "d481f5a7c62ee1291a99c7e7442dc9460e6385a4a61f578e3bbd6c19ec48d6be",
+    "src-tauri/tests/support/sync_simulated/clickhouse_sync_server.py": "ae5710fadccc7bba7ab439350173a14f0fe17fa8e67bdcd240d990d5d2852204",
+    "tools/acceptance/simulation/native/tds_server.py": "17e49e85eefeda6de0f0b630738d6af859fbad94f9ed9074e23c1e3ac6e2bca9",
+    "tools/acceptance/sync/run-simulations.mjs": "05e08a88e9b0b4ccddd69fc5ec5dda6731854b8fd4c22008c7fc2867af2cc64b"
+  },
+  "source_unchanged_during_run": true,
+  "finished_utc": "2026-11-07T03:30:25.831Z"
+}

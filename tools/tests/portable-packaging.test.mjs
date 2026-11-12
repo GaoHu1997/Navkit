@@ -37,3 +37,13 @@ test('portable packaging updates executable without deleting connections, encryp
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('installer/portable package does not bundle downloadable drivers or the Java runtime', () => {
+  const conf = JSON.parse(readFileSync(join(root, 'src-tauri/tauri.conf.json'), 'utf8'));
+  assert.equal(conf.bundle.active, false, 'bundle.active 必须为 false：便携分发，不生成安装包');
+  assert.deepEqual(conf.bundle.resources ?? [], [], 'bundle.resources 必须为空，避免把需下载的驱动/运行时打进安装包');
+
+  const build = readFileSync(join(root, 'build.ps1'), 'utf8');
+  assert.doesNotMatch(build, /managed-drivers/i, '便携包不应复制 data/managed-drivers（运行期按需下载）');
+  assert.doesNotMatch(build, /data[\\/]runtime/i, '便携包不应复制 data/runtime（Java 运行时按需一键安装）');
+});

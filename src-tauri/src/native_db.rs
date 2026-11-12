@@ -12,7 +12,7 @@ impl Params {
  }
  pub fn get(&self,k:&str)->Option<&str>{self.values.get(k).map(String::as_str)}
  pub fn bool(&self,k:&str,default:bool)->bool {self.get(k).map(|v|match v.trim().to_ascii_lowercase().as_str(){"true"|"1"|"yes"|"require"|"required"|"verify-ca"|"verify-full"=>true,"false"|"0"|"no"|"disable"|"disabled"=>false,_=>default}).unwrap_or(default)}
- pub fn no_tls(&self,kind:&str)->Result<()> {if ["ssl","tls","sslmode","ssl-mode"].iter().any(|k|self.get(k).is_some_and(|v|!matches!(v.trim().to_ascii_lowercase().as_str(),"false"|"0"|"no"|"disable"|"disabled"|""))){Err(anyhow!("{kind} 适配器当前不支持 TLS；拒绝降级为明文"))}else{Ok(())}}
+ pub fn no_tls(&self,kind:&str)->Result<()> {let tls=crate::native_tls::parse(&serde_json::to_string(&self.values)?)?;if tls.enabled{Err(anyhow!("{kind} 适配器当前不支持 TLS；拒绝降级为明文"))}else{Ok(())}}
 }
 pub(crate) fn cell(v:&serde_json::Value)->Option<String>{if v.is_null(){None}else{Some(v.as_str().map(str::to_owned).unwrap_or_else(||v.to_string()))}}
 pub(crate) fn text_bytes(b:&[u8])->String {String::from_utf8(b.to_vec()).unwrap_or_else(|_|{use base64::Engine;format!("base64:{}",base64::engine::general_purpose::STANDARD.encode(b))})}

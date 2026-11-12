@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +10,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
+
+use crate::models::Protocol;
+use crate::transfer_stream::{CsvStream, JsonStream, TransferLimits};
+use futures::TryStreamExt;
+
+#[path = "transfer_output.rs"] mod transfer_output;
+#[path = "transfer_export_cursor.rs"] mod transfer_export_cursor;
+#[path = "transfer_sql_reader.rs"] mod transfer_sql_reader;
+use transfer_output::{FileEncoder, StagedOutput};
+use transfer_sql_reader::PreparedScript;
 
 use crate::db::{qualified, quote_ident, Db};
 use crate::models::{DbKind, DumpOptions, ExportOptions, ImportOptions, TransferOptions};
@@ -40,26 +50,10 @@ fn text_encoding(encoding: &str) -> Result<&'static encoding_rs::Encoding> {
 }
 
 fn write_text(path: &str, encoding: &str, content: &str) -> Result<()> {
-    let enc = text_encoding(encoding)?;
-    let bytes = if encoding.eq_ignore_ascii_case("latin1") || encoding.eq_ignore_ascii_case("iso-8859-1") {
-        content.chars().map(|c| u8::try_from(c as u32).map_err(|_| anyhow!("内容不能以 ISO-8859-1 无损保存"))).collect::<Result<Vec<_>>>()?
-    } else {
-        let (bytes, _, errors) = enc.encode(content);
-        if errors { bail!("内容不能以 {} 无损保存", encoding); }
-        bytes.into_owned()
-    };
     ensure_writable(path)?;
-    // Write beside the destination, then replace it only after a complete successful export.
-    let temp = Path::new(path).with_file_name(format!(".navkit-export-{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
-        let mut f = File::options().write(true).create_new(true).open(&temp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        std::fs::rename(&temp, path).context("无法替换导出文件（文件可能正在使用）")?;
-        Ok(())
-    })();
-    if result.is_err() { let _ = std::fs::remove_file(&temp); }
-    result
+    let stage=StagedOutput::new(path)?;let mut writer=stage.encoder(encoding)?;
+    writer.write_all(content.as_bytes())?;writer.finish()?.get_ref().sync_all()?;
+    stage.publish(||Ok(()))
 }
 
 /// CSV 字段转义。
@@ -73,6 +67,21 @@ fn csv_escape(value: &str, delimiter: char) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// NULL 使用 \\N；文本的首个反斜线再转义一次，避免与字面值混淆。
+fn csv_cell(value: Option<&str>, delimiter: char) -> String {
+    match value {
+        None => csv_escape("\\N", delimiter),
+        Some(s) if s.starts_with('\\') => csv_escape(&format!("\\{s}"), delimiter),
+        Some(s) => csv_escape(s, delimiter),
+    }
+}
+
+fn csv_value(value: String) -> Option<String> {
+    if value == "\\N" { None }
+    else if value.starts_with("\\\\") { Some(value[1..].to_owned()) }
+    else { Some(value) }
 }
 
 /// 导出表数据为 CSV。
@@ -97,11 +106,7 @@ pub fn export_csv(
     for row in rows {
         let cells: Vec<String> = row
             .iter()
-            .map(|v| match v {
-                Some(s) if s == "\\N" => "\\\\N".to_string(),
-                Some(s) => csv_escape(s, delim),
-                None => "\\N".to_string(),
-            })
+            .map(|v| csv_cell(v.as_deref(), delim))
             .collect();
         out.push_str(&cells.join(&delim.to_string()));
         out.push_str("\r\n");
@@ -178,13 +183,25 @@ fn parse_csv(content: &str, delimiter: char, has_header: bool) -> Result<(Vec<St
 
 /// CSV / JSON / SQL imports share validation, mapping and a single target transaction.
 pub async fn import_csv(db: &Db, kind: DbKind, opts: &ImportOptions) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     run_import_data(db, &kind, opts, &[], None).await
+
+    }).await
 }
 pub async fn import_json(db: &Db, kind: DbKind, opts: &ImportOptions) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     run_import_data(db, &kind, opts, &[], None).await
+
+    }).await
 }
 pub async fn import_sql(db: &Db, kind: DbKind, opts: &ImportOptions) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     run_import_data(db, &kind, opts, &[], None).await
+
+    }).await
 }
 
 /// 数据传输：把源表的结构与数据复制到目标。
@@ -206,7 +223,8 @@ pub async fn transfer(
         target_table: opts.target_table.clone(), mode: mode.into(),
         write_mode: if opts.drop_existing { "recreate" } else { "append" }.into(),
         sync_mode: "full".into(), incremental_update: false,
-        create_target: opts.create_target, columns: vec![], where_clause: opts.where_clause.clone(),
+        create_target: opts.create_target, columns: vec![], key_columns: Vec::new(), delete_missing: false,
+        where_clause: opts.where_clause.clone(),
     };
     Ok(crate::sync::synchronize(source, source_kind, target, target_kind, &sync_opts).await?.rows)
 }
@@ -217,8 +235,26 @@ pub async fn dump(
     kind: &DbKind,
     opts: &DumpOptions,
 ) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if opts.structure_only && opts.data_only { bail!("仅结构与仅数据不能同时选择"); }
     protect_database_path(db, &opts.file).await?;
+    if let Some(definition)=transfer_export_cursor::view_definition(db,kind,&opts.schema,&opts.table).await? {
+        if opts.data_only {bail!("视图 SQL 转储只支持真实定义，不向视图生成 INSERT；导出视图数据请使用 CSV 或 JSON");}
+        ensure_writable(&opts.file)?;let stage=StagedOutput::new(&opts.file)?;
+        let definition=if opts.include_drop {
+            let full=if kind.protocol()==Protocol::Mssql {let identity=crate::object_identity::SqlServerObject::parse(&opts.schema,&opts.table)?;format!("{}.{}",quote_ident(kind,&identity.schema),quote_ident(kind,&identity.name))}else{qualified(kind,&opts.schema,&opts.table)};
+            format!("DROP VIEW IF EXISTS {full};\r\n{}{}",if kind.protocol()==Protocol::Mssql{"GO\r\n"}else{""},definition)
+        }else{definition};
+        ExportSink::view(&stage,kind,&opts.schema,&definition,"utf8")?;stage.publish(||Ok(()))?;return Ok(0);
+    }
+    if opts.data_only {
+        ensure_writable(&opts.file)?;
+        let stage = StagedOutput::new(&opts.file)?;
+        let count = transfer_export_cursor::append_dump_data(db, kind, &opts.schema, &opts.table, &stage).await?;
+        stage.publish(|| Ok(()))?;
+        return Ok(count);
+    }
     let schema = crate::schema::table_schema(db, kind.clone(), &opts.schema, &opts.table).await?;
     let full = qualified(&kind, &opts.schema, &opts.table);
     let mut out = String::new();
@@ -292,38 +328,18 @@ pub async fn dump(
         out.push_str("\r\n");
     }
 
-    let mut count = 0u64;
-    if !opts.structure_only {
-        let (names, rows) = crate::schema::fetch_all_rows(
-            db,
-            &kind,
-            &opts.schema,
-            &opts.table,
-            None,
-            None,
-        )
-        .await?;
-        let cols: Vec<String> = names.iter().map(|n| quote_ident(&kind, n)).collect();
-        for row in &rows {
-            let vals: Vec<String> = row
-                .iter()
-                .map(|v| match v {
-                    Some(s) => crate::db::quote_literal(s),
-                    None => "NULL".to_string(),
-                })
-                .collect();
-            out.push_str(&format!(
-                "INSERT INTO {} ({}) VALUES ({});\r\n",
-                full,
-                cols.join(", "),
-                vals.join(", ")
-            ));
-            count += 1;
-        }
-    }
-
-    write_text(&opts.file, "utf-8", &out)?;
+    ensure_writable(&opts.file)?;
+    let stage = StagedOutput::new(&opts.file)?;
+    let mut writer = stage.encoder("utf8")?;
+    writer.write_all(out.as_bytes())?;
+    writer.finish()?;
+    let count = if opts.structure_only { 0 } else {
+        transfer_export_cursor::append_dump_data(db, kind, &opts.schema, &opts.table, &stage).await?
+    };
+    stage.publish(|| Ok(()))?;
     Ok(count)
+
+    }).await
 }
 
 /// 整库备份：把 schema 下全部（或指定）表 / 视图转储为单个 SQL 文件。
@@ -331,20 +347,22 @@ pub async fn dump(
 /// 与单表 dump() 不同，备份文件按流式写入（BufWriter），
 /// 结构部分：MySQL 用 SHOW CREATE TABLE 的真实 DDL，
 /// SQLite 用 sqlite_master 里的原始 SQL，PostgreSQL 综合字段信息生成；
-/// 数据部分按每 100 行一条多值 INSERT 输出。
+/// 数据部分复用固定会话单 SELECT 游标，逐行有界写入同目录 stage。
 /// 返回 (数据行数, 文件字节数)。
 pub async fn dump_database(
     db: &Db,
     kind: &DbKind,
     schema: &str,
     tables: &[String],
+    routines: &[String],
     include_structure: bool,
     include_data: bool,
     path: &str,
     comment: &str,
 ) -> Result<(u64, u64)> {
-    use std::io::BufWriter;
-
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    ensure_writable(path)?;
     let all = crate::schema::list_tables(db, kind.clone(), schema).await?;
     let wanted: Vec<&(String, crate::models::ObjectType)> = if tables.is_empty() {
         // 表在前、视图在后，保证还原顺序
@@ -360,8 +378,8 @@ pub async fn dump_database(
             .collect()
     };
 
-    let file = File::create(path).with_context(|| format!("无法创建文件: {}", path))?;
-    let mut w = BufWriter::new(file);
+    let stage=StagedOutput::new(path)?;
+    let mut w=stage.encoder("utf8")?;
     let mut bytes = 0u64;
     let mut rows_total = 0u64;
 
@@ -409,58 +427,44 @@ pub async fn dump_database(
                     if is_view { "视图" } else { "表" },
                     name
                 ));
-                chunk.push_str(&format!(
-                    "DROP {} IF EXISTS {};\r\n",
-                    if is_view { "VIEW" } else { "TABLE" },
-                    full
-                ));
+                if is_view {chunk.push_str("-- 真实视图定义：还原前请先具备依赖对象；不向视图生成 INSERT。\r\n");}
+                if is_view && kind.protocol()==Protocol::Mssql {
+                    let identity=crate::object_identity::SqlServerObject::parse(schema,name)?;
+                    chunk.push_str(&format!("USE {};\r\nGO\r\nDROP VIEW IF EXISTS {}.{};\r\nGO\r\n",quote_ident(kind,&identity.catalog),quote_ident(kind,&identity.schema),quote_ident(kind,&identity.name)));
+                }else{chunk.push_str(&format!("DROP {} IF EXISTS {};\r\n",if is_view{"VIEW"}else{"TABLE"},full));}
                 chunk.push_str(&sql);
                 if !sql.trim_end().ends_with(';') {
                     chunk.push(';');
                 }
                 chunk.push_str("\r\n\r\n");
+                if is_view && kind.protocol()==Protocol::Mssql {chunk.push_str("GO\r\n");}
                 w.write_all(chunk.as_bytes())?;
                 bytes += chunk.len() as u64;
             }
         }
 
         if include_data && !is_view {
-            let (names, rows) = crate::schema::fetch_all_rows(db, &kind, schema, name, None, None).await?;
-            if !names.is_empty() {
-                let cols: Vec<String> = names.iter().map(|n| quote_ident(&kind, n)).collect();
-                let mut buf = String::new();
-                for chunk in rows.chunks(100) {
-                    let mut vals_all = Vec::with_capacity(chunk.len());
-                    for row in chunk {
-                        let vals: Vec<String> = row
-                            .iter()
-                            .map(|v| match v {
-                                Some(s) => crate::db::quote_literal(s),
-                                None => "NULL".to_string(),
-                            })
-                            .collect();
-                        vals_all.push(format!("({})", vals.join(", ")));
-                    }
-                    buf.push_str(&format!(
-                        "INSERT INTO {} ({}) VALUES {};\r\n",
-                        full,
-                        cols.join(", "),
-                        vals_all.join(",\r\n  ")
-                    ));
-                    if buf.len() > 1 << 20 {
-                        w.write_all(buf.as_bytes())?;
-                        bytes += buf.len() as u64;
-                        buf.clear();
-                    }
-                }
-                if !buf.is_empty() {
-                    w.write_all(buf.as_bytes())?;
-                    bytes += buf.len() as u64;
-                }
-                w.write_all(b"\r\n")?;
-                bytes += 2;
-                rows_total += rows.len() as u64;
-            }
+            // try_clone 与原 writer 共享文件位置；先排空结构缓冲，再由游标接续写入。
+            w.flush()?;
+            let before = stage.file_clone()?.metadata()?.len();
+            let rows = transfer_export_cursor::append_dump_data(db, kind, schema, name, &stage).await?;
+            let added = stage.file_clone()?.metadata()?.len().checked_sub(before).ok_or_else(|| anyhow!("转储 stage 长度发生倒退"))?;
+            bytes = bytes.checked_add(added).ok_or_else(|| anyhow!("转储文件长度溢出"))?;
+            rows_total = rows_total.checked_add(rows).ok_or_else(|| anyhow!("转储行数溢出"))?;
+            w.write_all(b"\r\n")?;
+            bytes += 2;
+        }
+    }
+
+    // 例程身份先查真实目录；重复的名字只导出一次，同名函数/过程各自导出。
+    let mut exported_routines = HashSet::new();
+    for name in routines {
+        if name.is_empty() { bail!("ROUTINE_NAME_INVALID: 备份选择包含空例程名"); }
+        if !exported_routines.insert(name) { continue; }
+        for (keyword, ddl) in routine_ddls(db, kind, schema, name).await? {
+            let chunk = routine_dump_chunk(kind, schema, name, &keyword, &ddl)?;
+            w.write_all(chunk.as_bytes())?;
+            bytes += chunk.len() as u64;
         }
     }
 
@@ -480,9 +484,98 @@ pub async fn dump_database(
     }
     w.write_all(tail.as_bytes())?;
     bytes += tail.len() as u64;
-    w.flush()?;
+    w.finish()?.get_ref().sync_all()?;
+    stage.publish(||Ok(()))?;
 
     Ok((rows_total, bytes))
+
+    }).await
+}
+
+/// 取例程真实类型与定义；不存在/权限错误绝不当成成功的空备份。
+async fn routine_ddls(db: &Db, kind: &DbKind, schema: &str, name: &str) -> Result<Vec<(String, String)>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    match db {
+        Db::Mysql(pool) => crate::mysql_routines::definitions(pool, kind, schema, name).await,
+        Db::Postgres(pool) => {
+            let rows = crate::sql_history::query("SELECT pg_get_functiondef(p.oid) AS ddl, CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END AS kind FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.proname = $2 AND p.prokind IN ('f','p') ORDER BY p.oid")
+                .bind(schema).bind(name).fetch_all(pool).await?;
+            if rows.is_empty() { bail!("ROUTINE_NOT_FOUND: 例程 {schema}.{name} 不存在或不可见，备份未完成"); }
+            if rows.len() != 1 { bail!("ROUTINE_IDENTITY_REQUIRED: 同名 PostgreSQL 重载不能通过仅名字的备份契约完整还原，未导出随机对象"); }
+            let row = &rows[0];
+            let ddl: String = row.try_get("ddl")?;
+            if ddl.trim().is_empty() { bail!("ROUTINE_DEFINITION_UNREADABLE: 例程定义不可读取，备份未完成"); }
+            Ok(vec![(row.try_get("kind")?, ddl)])
+        }
+        _ => bail!("ROUTINE_ADAPTER_UNSUPPORTED: 当前协议没有可验证的例程备份读取器"),
+    }
+
+    }).await
+}
+
+fn routine_dump_chunk(kind: &DbKind, schema: &str, name: &str, keyword: &str, ddl: &str) -> Result<String> {
+    let routine = crate::mysql_routines::RoutineKind::parse(keyword)?;
+    if ddl.trim().is_empty() { bail!("ROUTINE_DEFINITION_UNREADABLE: 不允许生成空例程备份"); }
+    let mut chunk = format!("-- ---------------- 例程 {} ----------------\r\nDROP {} IF EXISTS {};\r\n", name.replace(['\r','\n'], " "), routine.keyword(), qualified(kind, schema, name));
+    if kind.is_mysql_family() {
+        // BEGIN/END 的内部分号不是分句边界；只用不出现在正文中的标点 delimiter，兼容客户端与还原词法器。
+        let mut n = 0u64;
+        let delimiter = loop {
+            let alphabet = b"!$%&?@^"; let mut ordinal = n; let mut suffix = String::new();
+            loop { suffix.push(alphabet[(ordinal % alphabet.len() as u64) as usize] as char); ordinal /= alphabet.len() as u64; if ordinal == 0 { break; } }
+            let value = format!("$${suffix}$$");
+            if value.len() > 16 { bail!("ROUTINE_DELIMITER_UNAVAILABLE: 无法生成有界、无冲突的例程分隔符"); }
+            if !ddl.contains(&value) { break value; } n += 1;
+        };
+        let statement = ddl.trim_end().strip_suffix(';').unwrap_or(ddl.trim_end());
+        chunk.push_str(&format!("DELIMITER {delimiter}\r\n{statement}{delimiter}\r\nDELIMITER ;\r\n\r\n"));
+    } else {
+        chunk.push_str(ddl);
+        if !ddl.trim_end().ends_with(';') { chunk.push(';'); }
+        chunk.push_str("\r\n\r\n");
+    }
+    Ok(chunk)
+}
+
+#[cfg(test)]
+mod routine_dump_tests {
+    use super::*;
+    use super::transfer_sql_reader::{ScriptDialect, SqlStatementReader};
+    #[test]
+    fn mysql_function_and_compound_procedure_are_complete_restore_statements() {
+        for (word, ddl) in [("FUNCTION", "CREATE FUNCTION fn_add10(x INT) RETURNS INT DETERMINISTIC RETURN x + 10"), ("PROCEDURE", "CREATE PROCEDURE p() BEGIN SELECT 'a;b'; SELECT 2; END;")] {
+            let text = routine_dump_chunk(&DbKind::of("mysql"), "test", "fixture", word, ddl).unwrap();
+            let mut parser = SqlStatementReader::new(std::io::Cursor::new(text), ScriptDialect::Mysql, 1024 * 1024);
+            let mut statements = Vec::new();
+            while let Some(statement) = parser.next_statement().unwrap() { statements.push(crate::db::strip_leading_comments(&statement.sql).trim().trim_end_matches(';').trim().to_string()); }
+            assert_eq!(statements.len(), 2);
+            assert!(statements[0].starts_with(&format!("DROP {word} IF EXISTS")));
+            assert_eq!(statements[1], ddl.trim_end_matches(';'));
+        }
+    }
+    #[tokio::test]
+    async fn routine_restore_parser_keeps_compound_ddl_and_rejects_invalid_input_before_send() {
+        let pool = sqlx::mysql::MySqlPoolOptions::new().connect_lazy("mysql://localhost/regression").unwrap();
+        let database = Db::Mysql(pool);
+        let text = routine_dump_chunk(&DbKind::of("mysql"), "regression", "p", "PROCEDURE", "CREATE PROCEDURE p() BEGIN SELECT 'a;b'; SELECT 2; END").unwrap();
+        let statements = script_statements(&database, &text).unwrap();
+        assert_eq!(statements.len(), 2);
+        assert!(statements[1].contains("SELECT 'a;b'; SELECT 2; END"));
+        assert!(!statements.iter().any(|sql| sql.starts_with("DELIMITER")));
+        assert!(script_statements(&database, "DELIMITER INVALID
+CREATE PROCEDURE p() BEGIN ENDINVALID").is_err());
+        assert_eq!(script_statements(&database, "SET NAMES utf8mb4; SET FOREIGN_KEY_CHECKS = 0; SET FOREIGN_KEY_CHECKS = 1;").unwrap().len(), 3);
+        for sql in ["SET autocommit=1", "USE other", "SET FOREIGN_KEY_CHECKS = 0; COMMIT", "SET NAMES utf8mb4 COLLATE evil"] { assert!(script_statements(&database, sql).is_err()); }
+        if let Db::Mysql(pool) = database { pool.close().await; }
+    }
+    #[test]
+    fn routine_delimiter_cannot_split_a_literal_or_emit_invalid_kind() {
+        let text = routine_dump_chunk(&DbKind::of("mariadb"), "test", "p", "PROCEDURE", "CREATE PROCEDURE p() BEGIN SELECT '$$!$$'; END").unwrap();
+        assert!(text.contains("DELIMITER $$$$$"));
+        assert!(routine_dump_chunk(&DbKind::of("mysql"), "test", "x", "TRIGGER", "SELECT 1").is_err());
+        assert!(routine_dump_chunk(&DbKind::of("mysql"), "test", "x", "FUNCTION", " ").is_err());
+    }
 }
 
 /// 取单个表 / 视图的 CREATE 语句（已含结尾分号前的全部内容）。
@@ -493,8 +586,11 @@ async fn table_ddl(
     name: &str,
     is_view: bool,
 ) -> Result<Option<String>> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     match db {
         Db::Mssql(_) => {
+            if is_view {return transfer_export_cursor::view_definition(db,kind,schema,name).await;}
             let needle = name.replace("'", "''");
             let (_, rows) = db
                 .generic_rows(&format!(
@@ -508,7 +604,7 @@ async fn table_ddl(
                 .filter(|x| !x.trim().is_empty()));
         }
         Db::Sqlite(pool) => {
-            let rows = sqlx::query(
+            let rows = crate::sql_history::query(
                 "SELECT sql FROM sqlite_master WHERE name = ? AND sql IS NOT NULL",
             )
             .bind(name)
@@ -525,7 +621,7 @@ async fn table_ddl(
             } else {
                 format!("SHOW CREATE TABLE {}", full)
             };
-            let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let Some(r) = rows.first() else {
                 return Ok(None);
             };
@@ -611,7 +707,7 @@ async fn table_ddl(
                     "SELECT pg_get_viewdef('{}'::regclass, true) AS def",
                     full.replace('\'', "''")
                 );
-                let rows = sqlx::query(&sql).fetch_all(pool).await?;
+                let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
                 let def = rows.first().and_then(|r| {
                     crate::values::pg_row_values(r, 1).first().cloned().flatten()
                 });
@@ -653,6 +749,8 @@ async fn table_ddl(
         }
         Db::Redis(_) | Db::Mongo(_) | Db::Http(_) => Ok(None),
     }
+
+    }).await
 }
 
 /// 去掉 MySQL 视图 DDL 中的 DEFINER 子句。
@@ -702,6 +800,127 @@ pub struct RestoreReport {
     pub steps: Vec<RestoreStep>,
 }
 
+/// 单批事务的语句条数上限与字节预算：达到任一上限即提交，避免一条长事务压住全部 DML。
+const SCRIPT_BATCH_STATEMENTS: usize = 1000;
+const SCRIPT_BATCH_BYTES: usize = 8 * 1024 * 1024;
+
+/// 只有连续 DML 进入批事务；DDL/SET/事务控制语句保持逐条自动提交，
+/// 这样「每条 DDL 立即生效」的既有可见语义不变，而大文件里成片的 INSERT 不再逐条刷盘。
+fn batchable_dml(sql: &str) -> bool {
+    let head: String = sql.trim_start().chars().take(8).collect::<String>().to_ascii_uppercase();
+    ["INSERT ", "INSERT(", "UPDATE ", "DELETE ", "REPLACE "].iter().any(|prefix| head.starts_with(prefix))
+}
+
+fn step_sql_short(statement: &str) -> String {
+    let mut short: String = statement.chars().take(500).collect();
+    if statement.chars().nth(500).is_some() { short.push_str(" …"); }
+    short.trim().to_string()
+}
+
+/// 在固定物理会话上逐条执行整段脚本：连续 DML 攒成批事务（每 1000 条 / 8 MiB 提交），
+/// 其它语句保持自动提交。这样既消除每条 INSERT 一次的隐式事务刷盘，又保留「DDL 立即生效」
+/// 的既有语义（MySQL DDL 会隐式结束事务，所以遇到非 DML 先提交，下一段 DML 再显式开启）。
+/// 批内失败回滚该批并写明回滚条数，已提交的更早批次保持原样。
+macro_rules! script_tx_body {
+    ($conn:ident, $begin:literal, $stmts:expr, $on_error:expr, $steps:ident) => {{
+        use sqlx::Executor;
+        let mut in_tx = false;
+        let mut batch_rows = 0usize;
+        let mut batch_bytes = 0usize;
+        let mut stopped = false;
+        for (i, statement) in $stmts.iter().enumerate() {
+            if stopped {
+                $steps.push(RestoreStep { index: i + 1, sql: String::new(), ok: false, affected: None, error: Some("前序语句失败，已终止".into()), skipped: true });
+                continue;
+            }
+            let short = step_sql_short(statement);
+            let dml = batchable_dml(statement);
+            if !dml && in_tx {
+                if let Err(error) = sqlx::Executor::execute(&mut $conn, sqlx::raw_sql("COMMIT")).await {
+                    return Err(anyhow!(error).context("脚本分批提交失败；提交结果未知，请核对目标数据后再重试"));
+                }
+                in_tx = false; batch_rows = 0; batch_bytes = 0;
+            }
+            if dml && (!in_tx || batch_rows >= SCRIPT_BATCH_STATEMENTS || batch_bytes.saturating_add(statement.len()) > SCRIPT_BATCH_BYTES) {
+                if in_tx {
+                    if let Err(error) = sqlx::Executor::execute(&mut $conn, sqlx::raw_sql("COMMIT")).await {
+                        return Err(anyhow!(error).context("脚本分批提交失败；提交结果未知，请核对目标数据后再重试"));
+                    }
+                }
+                if let Err(error) = sqlx::Executor::execute(&mut $conn, sqlx::raw_sql($begin)).await {
+                    return Err(anyhow!(error).context("无法为脚本 DML 开启批事务"));
+                }
+                in_tx = true; batch_rows = 0; batch_bytes = 0;
+            }
+            match sqlx::Executor::execute(&mut $conn, sqlx::raw_sql(statement.as_str())).await {
+                Ok(receipt) => {
+                    if in_tx && dml { batch_rows += 1; batch_bytes = batch_bytes.saturating_add(statement.len()); }
+                    $steps.push(RestoreStep { index: i + 1, sql: short, ok: true, affected: Some(receipt.rows_affected()), error: None, skipped: false });
+                }
+                Err(error) => {
+                    if is_fk_guard_stmt(statement) {
+                        $steps.push(RestoreStep { index: i + 1, sql: short, ok: true, affected: None, error: Some(format!("守卫语句已跳过：{error}")), skipped: true });
+                        continue;
+                    }
+                    let rolled_back = if in_tx {
+                        let rows = batch_rows + 1;
+                        in_tx = false;
+                        sqlx::Executor::execute(&mut $conn, sqlx::raw_sql("ROLLBACK")).await.ok().map(|_| rows)
+                    } else { None };
+                    batch_rows = 0; batch_bytes = 0;
+                    let message = match rolled_back {
+                        Some(rows) => format!("{error}（本批 {rows} 条 DML 已确认回滚；更早批次早已提交）"),
+                        None => format!("{error}"),
+                    };
+                    $steps.push(RestoreStep { index: i + 1, sql: short, ok: false, affected: None, error: Some(message), skipped: false });
+                    if $on_error { stopped = true; }
+                }
+            }
+        }
+        if in_tx {
+            sqlx::Executor::execute(&mut $conn, sqlx::raw_sql("COMMIT")).await
+                .map_err(|error| anyhow!(error).context("脚本末尾提交失败；提交结果未知，请核对目标数据后再重试"))?;
+        }
+    }};
+}
+
+/// 取一条专用物理连接执行脚本，结束后关闭；会话级守卫因此固定在同一个会话。
+macro_rules! script_with_connection {
+    ($pool:expr, $conn_ty:ty, $begin:literal, $stmts:expr, $on_error:expr, $steps:ident) => {{
+        use sqlx::Connection;
+        let options = (*$pool.connect_options()).clone();
+        let mut conn = <$conn_ty as Connection>::connect_with(&options).await?;
+        script_tx_body!(conn, $begin, $stmts, $on_error, $steps);
+        conn.close().await?;
+    }};
+}
+
+/// 其余通道（SQL Server / ClickHouse / ODBC）：逐条自动提交并如实说明不会回滚。
+macro_rules! script_loop_serial {
+    ($db:expr, $stmts:expr, $on_error:expr, $steps:ident) => {{
+        let mut stopped = false;
+        for (i, statement) in $stmts.iter().enumerate() {
+            if stopped {
+                $steps.push(RestoreStep { index: i + 1, sql: String::new(), ok: false, affected: None, error: Some("前序语句失败，已终止".into()), skipped: true });
+                continue;
+            }
+            let short = step_sql_short(statement);
+            match execute_one($db, statement).await {
+                Ok(affected) => $steps.push(RestoreStep { index: i + 1, sql: short, ok: true, affected, error: None, skipped: false }),
+                Err(err) => {
+                    if is_fk_guard_stmt(statement) {
+                        $steps.push(RestoreStep { index: i + 1, sql: short, ok: true, affected: None, error: Some(format!("守卫语句已跳过：{err}")), skipped: true });
+                        continue;
+                    }
+                    $steps.push(RestoreStep { index: i + 1, sql: short, ok: false, affected: None, error: Some(err.to_string()), skipped: false });
+                    if $on_error { stopped = true; }
+                }
+            }
+        }
+    }};
+}
+
+
 /// 逐条执行 SQL 文件并收集每条语句结果（还原备份的详细版）。
 ///
 /// 与 `restore_sql_file` 使用同一套外键守卫语义，区别是：
@@ -712,88 +931,87 @@ pub async fn restore_sql_file_detailed(
     _kind: &DbKind,
     path: &str,
 ) -> Result<RestoreReport> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("无法读取备份文件: {}", path))?;
-    let stmts: Vec<String> = crate::db::split_statements(&content)
-        .into_iter()
-        .map(|s| crate::db::strip_leading_comments(&s))
-        .filter(|s| !s.is_empty())
-        .collect();
+    let stmts = script_statements(db, &content)?;
 
     let mut steps: Vec<RestoreStep> = Vec::with_capacity(stmts.len());
-    let mut succeeded = 0usize;
-    let mut failed = 0usize;
-
-    for (i, t) in stmts.iter().enumerate() {
-        let mut sql_short: String = t.chars().take(500).collect();
-        if t.chars().count() > 500 {
-            sql_short.push_str(" …");
-        }
-        let sql_short = sql_short.trim().to_string();
-        let outcome = execute_one(db, t).await;
-        match outcome {
-            Ok(affected) => {
-                succeeded += 1;
-                steps.push(RestoreStep {
-                    index: i + 1,
-                    sql: sql_short,
-                    ok: true,
-                    affected,
-                    error: None,
-                    skipped: false,
-                });
-            }
-            Err(err) => {
-                if is_fk_guard_stmt(t) {
-                    steps.push(RestoreStep {
-                        index: i + 1,
-                        sql: sql_short,
-                        ok: true,
-                        affected: None,
-                        error: Some(format!("守卫语句已跳过：{err}")),
-                        skipped: true,
-                    });
-                    continue;
-                }
-                failed += 1;
-                steps.push(RestoreStep {
-                    index: i + 1,
-                    sql: sql_short,
-                    ok: false,
-                    affected: None,
-                    error: Some(err.to_string()),
-                    skipped: false,
-                });
-                // 失败即中止，避免半套数据落库
-                break;
-            }
-        }
+    match db {
+        Db::Sqlite(pool) => script_with_connection!(pool, sqlx::SqliteConnection, "BEGIN", &stmts, true, steps),
+        Db::Mysql(pool) => script_with_connection!(pool, sqlx::MySqlConnection, "START TRANSACTION", &stmts, true, steps),
+        Db::Postgres(pool) => script_with_connection!(pool, sqlx::PgConnection, "BEGIN", &stmts, true, steps),
+        _ => script_loop_serial!(db, &stmts, true, steps),
     }
+    let succeeded = steps.iter().filter(|step| step.ok && !step.skipped).count();
+    let failed = steps.iter().filter(|step| !step.ok && !step.skipped).count();
 
-    Ok(RestoreReport {
-        total: stmts.len(),
-        succeeded,
-        failed,
-        steps,
-    })
+    Ok(RestoreReport { total: stmts.len(), succeeded, failed, steps })
+
+    }).await
+}
+
+/// 运行 SQL 文件（任意路径，数据库右键「运行 SQL 文件」入口）。
+///
+/// 逐条执行并收集结果；`stop_on_error` 控制遇错终止（默认，保持数据一致性）
+/// 还是跳过错误继续执行后续语句。守卫语句（外键开关）失败时总是跳过。
+pub async fn run_sql_file_detailed(
+    db: &Db,
+    path: &str,
+    stop_on_error: bool,
+) -> Result<RestoreReport> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("无法读取 SQL 文件: {}", path))?;
+    let stmts = script_statements(db, &content)?;
+
+    let mut steps: Vec<RestoreStep> = Vec::with_capacity(stmts.len());
+    match db {
+        Db::Sqlite(pool) => script_with_connection!(pool, sqlx::SqliteConnection, "BEGIN", &stmts, stop_on_error, steps),
+        Db::Mysql(pool) => script_with_connection!(pool, sqlx::MySqlConnection, "START TRANSACTION", &stmts, stop_on_error, steps),
+        Db::Postgres(pool) => script_with_connection!(pool, sqlx::PgConnection, "BEGIN", &stmts, stop_on_error, steps),
+        _ => script_loop_serial!(db, &stmts, stop_on_error, steps),
+    }
+    let succeeded = steps.iter().filter(|step| step.ok && !step.skipped).count();
+    let failed = steps.iter().filter(|step| !step.ok && !step.skipped).count();
+
+    Ok(RestoreReport { total: stmts.len(), succeeded, failed, steps })
+
+    }).await
+}
+
+/// MySQL 客户端 DELIMITER 只控制本地分句，绝不发送给服务器。预读完整脚本，失败不发送 SQL。
+fn script_statements(db: &Db, content: &str) -> Result<Vec<String>> {
+    if matches!(db, Db::Mysql(_)) {
+        use transfer_sql_reader::{ScriptDialect, SqlStatementReader};
+        let mut reader = SqlStatementReader::for_backup_restore(std::io::Cursor::new(content), ScriptDialect::Mysql, 50 * 1024 * 1024);
+        let mut statements = Vec::new();
+        while let Some(statement) = reader.next_statement()? { statements.push(crate::db::strip_leading_comments(&statement.sql).trim().trim_end_matches(';').trim().to_string()); }
+        Ok(statements)
+    } else {
+        Ok(crate::db::split_statements(content).into_iter().map(|s| crate::db::strip_leading_comments(&s)).filter(|s| !s.is_empty()).collect())
+    }
 }
 
 /// 单条语句执行（按数据源选择驱动），返回影响行数。
 async fn execute_one(db: &Db, sql: &str) -> Result<Option<u64>> {
-    match db {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {    match db {
         Db::Sqlite(pool) => {
             let mut conn = pool.acquire().await?;
-            let r = sqlx::query(sql).execute(&mut *conn).await?;
+            let r = crate::sql_history::query(sql).execute(&mut *conn).await?;
             Ok(Some(r.rows_affected()))
         }
         Db::Mysql(pool) => {
-            let mut conn = pool.acquire().await?;
-            let r = sqlx::query(sql).execute(&mut *conn).await?;
+            // 没有绑定参数的完整脚本使用 COM_QUERY，例程 DDL 不支持 prepared protocol。
+            let r = crate::sql_history::raw_sql(sql).execute(pool).await?;
             Ok(Some(r.rows_affected()))
         }
         Db::Postgres(pool) => {
             let mut conn = pool.acquire().await?;
-            let r = sqlx::query(sql).execute(&mut *conn).await?;
+            let r = crate::sql_history::query(sql).execute(&mut *conn).await?;
             Ok(Some(r.rows_affected()))
         }
         Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => Ok(Some(db.generic_exec(sql).await?)),
@@ -801,6 +1019,8 @@ async fn execute_one(db: &Db, sql: &str) -> Result<Option<u64>> {
             Err(anyhow!("该数据源类型不支持 SQL 脚本还原"))
         }
     }
+
+    }).await
 }
 
 /// 执行 SQL 文件中的全部语句（还原备份的共用实现），返回执行的语句数。
@@ -810,50 +1030,48 @@ async fn execute_one(db: &Db, sql: &str) -> Result<Option<u64>> {
 /// 走连接池会让"关外键"与"还原数据"落在不同会话，守卫形同虚设。
 /// 守卫语句失败时跳过（如 PG 普通用户不能设置 session_replication_role）。
 pub async fn restore_sql_file(db: &Db, _kind: &DbKind, path: &str) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("无法读取备份文件: {}", path))?;
     // 剥离纯注释块并过滤空语句
-    let stmts: Vec<String> = crate::db::split_statements(&content)
-        .into_iter()
-        .map(|s| crate::db::strip_leading_comments(&s))
-        .filter(|s| !s.is_empty())
-        .collect();
+    let stmts = script_statements(db, &content)?;
 
     let mut count = 0u64;
     match db {
         Db::Sqlite(pool) => {
             let mut conn = pool.acquire().await?;
-            let _ = sqlx::query("PRAGMA foreign_keys = OFF").execute(&mut *conn).await;
+            let _ = crate::sql_history::query("PRAGMA foreign_keys = OFF").execute(&mut *conn).await;
             for t in &stmts {
-                match sqlx::query(t).execute(&mut *conn).await {
+                match crate::sql_history::query(t).execute(&mut *conn).await {
                     Ok(_) => count += 1,
                     Err(e) => {
                         if is_fk_guard_stmt(t) {
                             continue;
                         }
-                        let _ = sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await;
+                        let _ = crate::sql_history::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await;
                         return Err(anyhow::Error::from(e).context(format!("还原在第 {} 条语句失败", count + 1)));
                     }
                 }
             }
-            let _ = sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await;
+            let _ = crate::sql_history::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await;
         }
         Db::Mysql(pool) => {
             let mut conn = pool.acquire().await?;
-            let _ = sqlx::query("SET FOREIGN_KEY_CHECKS = 0").execute(&mut *conn).await;
+            let _ = crate::sql_history::query("SET FOREIGN_KEY_CHECKS = 0").execute(&mut *conn).await;
             for t in &stmts {
-                match sqlx::query(t).execute(&mut *conn).await {
+                match {let mut history=crate::sql_history::Guard::new(t,Vec::new());let result=sqlx::Executor::execute(&mut *conn,t.as_str()).await;history.result(&result,|r|r.rows_affected() as i64);result} {
                     Ok(_) => count += 1,
                     Err(e) => {
                         if is_fk_guard_stmt(t) {
                             continue;
                         }
-                        let _ = sqlx::query("SET FOREIGN_KEY_CHECKS = 1").execute(&mut *conn).await;
+                        let _ = crate::sql_history::query("SET FOREIGN_KEY_CHECKS = 1").execute(&mut *conn).await;
                         return Err(anyhow::Error::from(e).context(format!("还原在第 {} 条语句失败", count + 1)));
                     }
                 }
             }
-            let _ = sqlx::query("SET FOREIGN_KEY_CHECKS = 1").execute(&mut *conn).await;
+            let _ = crate::sql_history::query("SET FOREIGN_KEY_CHECKS = 1").execute(&mut *conn).await;
         }
         Db::Mssql(_) => {
             // 无会话级外键守卫语法，逐条执行；守卫语句失败跳过
@@ -889,7 +1107,7 @@ pub async fn restore_sql_file(db: &Db, _kind: &DbKind, path: &str) -> Result<u64
         Db::Postgres(pool) => {
             let mut conn = pool.acquire().await?;
             for t in &stmts {
-                match sqlx::query(t).execute(&mut *conn).await {
+                match crate::sql_history::query(t).execute(&mut *conn).await {
                     Ok(_) => count += 1,
                     Err(e) => {
                         if is_fk_guard_stmt(t) {
@@ -902,6 +1120,8 @@ pub async fn restore_sql_file(db: &Db, _kind: &DbKind, path: &str) -> Result<u64
         }
     }
     Ok(count)
+
+    }).await
 }
 
 /// 导出整个查询结果为 CSV（查询页导出）。
@@ -926,6 +1146,10 @@ pub fn preview_csv(path: &str, delimiter: &str, encoding: &str, limit: usize) ->
 /// 检查路径可写。
 pub fn ensure_writable(path: &str) -> Result<()> {
     let p = Path::new(path);
+    if path.trim().is_empty() || path.contains('\0') || !p.is_absolute() || path.ends_with('/') || path.ends_with('\\')
+        || p.file_name().is_none() || p.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        bail!("导出文件必须使用包含目录和完整文件名的绝对路径");
+    }
     if let Some(parent) = p.parent() {
         if !parent.exists() {
             std::fs::create_dir_all(parent)?;
@@ -966,6 +1190,7 @@ fn tasks() -> &'static parking_lot::Mutex<HashMap<String, TaskEntry>> {
     static TASKS: OnceLock<parking_lot::Mutex<HashMap<String, TaskEntry>>> = OnceLock::new();
     TASKS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
+#[derive(Clone)]
 pub struct TaskControl { id: String, cancel: Arc<AtomicBool> }
 impl TaskControl {
     pub fn begin(id: &str) -> Result<Self> {
@@ -989,7 +1214,8 @@ impl TaskControl {
     }
     pub fn finish<T>(&self, result: &Result<T>) {
         if let Some(t) = tasks().lock().get_mut(&self.id) {
-            t.progress.status = if result.is_ok() { "completed" } else if self.cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
+            let unknown = result.as_ref().err().is_some_and(|error| format!("{error:#}").contains("TRANSFER_EFFECTS_UNKNOWN"));
+            t.progress.status = if result.is_ok() { "completed" } else if unknown { "unknown" } else if self.cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
             t.progress.message = result.as_ref().err().map(|e| format!("{:#}", e)).unwrap_or_else(|| "执行完成".into());
         }
     }
@@ -1028,6 +1254,8 @@ pub fn validate_export(opts: &ExportOptions) -> Result<()> {
 /// Dedicated transaction: BEGIN/INSERT must not go through different pool sessions.
 /// MySQL DDL commits implicitly; cancellation/errors still roll back pending DML.
 pub async fn execute_atomic(db: &Db, statements: &[(String, bool)], task: Option<&TaskControl>) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let total = statements.iter().filter(|(_, row)| *row).count() as u64;
     macro_rules! run {
         ($pool:expr) => {{
@@ -1035,7 +1263,7 @@ pub async fn execute_atomic(db: &Db, statements: &[(String, bool)], task: Option
             let mut count = 0u64;
             for (i, (sql, is_row)) in statements.iter().enumerate() {
                 if let Some(t) = task { if let Err(e) = t.check() { tx.rollback().await?; return Err(e.context("任务已取消，未提交的目标修改已回滚")); } }
-                match sqlx::query(sql).execute(&mut *tx).await {
+                match crate::sql_history::query(sql).execute(&mut *tx).await {
                     Ok(r) => if *is_row { count += r.rows_affected(); },
                     Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context(format!("第 {} 条目标语句执行失败，未提交数据已回滚", i + 1))); }
                 }
@@ -1067,44 +1295,267 @@ pub async fn execute_atomic(db: &Db, statements: &[(String, bool)], task: Option
             Ok(count)
         }
         _ => bail!("当前导入/同步只支持 SQLite、MySQL/MariaDB、PostgreSQL、SQL Server、ClickHouse 与 ODBC 关系型数据库") }
+
+    }).await
 }
 pub async fn run_import_task(db: &Db, kind: &DbKind, opts: &ImportTaskOptions) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let task = TaskControl::begin(&opts.task_id)?;
     let result = run_import_data(db, kind, &opts.options, &opts.column_mapping, Some(&task)).await;
     task.finish(&result); result
+
+    }).await
 }
+/// 生成单行导入 INSERT 语句。`strategy` 为 error/skip/update；
+/// 非事务方言（SQL Server/ClickHouse/ODBC）不支持冲突策略，由调用方提前拒绝。
+fn import_insert_statement(
+    full: &str,
+    quoted_cols: &str,
+    values: &str,
+    kind: &DbKind,
+    strategy: &str,
+    conflict_cols: &[String],
+    all_cols: &[String],
+) -> Result<String> {
+    let qconflict = conflict_cols.iter().map(|c| quote_ident(kind, c)).collect::<Vec<_>>().join(", ");
+    match strategy {
+        "error" => Ok(format!("INSERT INTO {} ({}) VALUES ({})", full, quoted_cols, values)),
+        "skip" => match kind.protocol() {
+            Protocol::Mysql => Ok(format!("INSERT IGNORE INTO {} ({}) VALUES ({})", full, quoted_cols, values)),
+            Protocol::Sqlite | Protocol::Postgres => Ok(format!(
+                "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING",
+                full, quoted_cols, values, qconflict
+            )),
+            _ => bail!("当前目标通道尚未接入导入冲突处理"),
+        },
+        "update" => {
+            let non_key: Vec<&String> = all_cols.iter().filter(|c| !conflict_cols.iter().any(|k| k == *c)).collect();
+            if non_key.is_empty() { bail!("更新冲突需要至少一个非键列用于更新"); }
+            match kind.protocol() {
+                Protocol::Mysql => {
+                    let assigns = non_key
+                        .iter()
+                        .map(|c| { let q = quote_ident(kind, c); format!("{} = VALUES({})", q, q) })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Ok(format!("INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}", full, quoted_cols, values, assigns))
+                }
+                Protocol::Sqlite | Protocol::Postgres => {
+                    let assigns = non_key
+                        .iter()
+                        .map(|c| { let q = quote_ident(kind, c); format!("{} = excluded.{}", q, q) })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Ok(format!(
+                        "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+                        full, quoted_cols, values, qconflict, assigns
+                    ))
+                }
+                _ => bail!("当前目标通道尚未接入导入冲突处理"),
+            }
+        }
+        other => bail!("导入冲突策略无效: {other}"),
+    }
+}
+
+/// 流式导入的数据来源：CSV 或 JSON 数组。
+enum RowFeeder {
+    Csv(CsvStream),
+    Json(JsonStream),
+}
+
+impl RowFeeder {
+    fn names(&self) -> &[String] {
+        match self {
+            RowFeeder::Csv(s) => &s.names,
+            RowFeeder::Json(s) => &s.names,
+        }
+    }
+
+    fn next_batch(&mut self, limits: &TransferLimits) -> Result<Option<Vec<Vec<Option<String>>>>> {
+        match self {
+            RowFeeder::Csv(s) => Ok(s.next_batch(limits)?.map(|b| {
+                b.rows
+                    .into_iter()
+                    .map(|r| {
+                        r.into_iter()
+                            .map(csv_value)
+                            .collect()
+                    })
+                    .collect()
+            })),
+            RowFeeder::Json(s) => s.next_batch(limits),
+        }
+    }
+}
+
+struct ImportMapper {
+    pairs: Vec<(usize, String)>,
+    kind: DbKind,
+    full: String,
+    quoted: String,
+    strategy: String,
+    conflict_cols: Vec<String>,
+    cols: Vec<String>,
+    types: Vec<String>,
+}
+
+impl ImportMapper {
+    fn statements(&self, rows: &[Vec<Option<String>>]) -> Result<Vec<(String, bool)>> {
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let vals = self
+                .pairs
+                .iter()
+                .zip(self.types.iter())
+                .map(|((i, _), ty)| crate::sync::value_sql(row.get(*i).and_then(Option::as_deref), &self.kind, ty, ty))
+                .collect::<Result<Vec<_>>>()?;
+            out.push((import_insert_statement(&self.full, &self.quoted, &vals.join(", "), &self.kind, &self.strategy, &self.conflict_cols, &self.cols)?, true));
+        }
+        Ok(out)
+    }
+}
+
+/// 分批执行导入语句：事务型通道整批一个事务，非事务通道逐条自动提交。
+/// 每批之间检查取消信号并更新进度，保证大文件不会先全部读入再假装分批。
+async fn execute_import_batches(db: &Db, prefix: &[(String, bool)], feeder: &mut RowFeeder, mapper: &ImportMapper, limits: &TransferLimits, task: Option<&TaskControl>) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    macro_rules! run_tx {
+        ($pool:expr) => {{
+            let mut count = 0u64;
+            let mut tx = $pool.begin().await?;
+            for (sql, is_row) in prefix {
+                match crate::sql_history::query(sql).execute(&mut *tx).await {
+                    Ok(r) => if *is_row { count += r.rows_affected(); },
+                    Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context("导入前置语句执行失败，未提交数据已回滚")); }
+                }
+            }
+            let mut batches = 0u64;
+            loop {
+                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消，未提交的目标修改已回滚"))?; }
+                let Some(rows) = feeder.next_batch(limits)? else { break };
+                let stmts = mapper.statements(&rows)?;
+                for (sql, is_row) in &stmts {
+                    match crate::sql_history::query(sql).execute(&mut *tx).await {
+                        Ok(r) => if *is_row { count += r.rows_affected(); },
+                        Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context(format!("第 {} 批导入语句执行失败，未提交数据已回滚", batches + 1))); }
+                    }
+                }
+                batches += 1;
+                if let Some(t) = task { t.update("write", count, 0, "正在分批写入目标（提交前可取消）"); }
+                tokio::task::yield_now().await;
+            }
+            tx.commit().await?;
+            Ok(count)
+        }};
+    }
+    match db {
+        Db::Sqlite(p) => run_tx!(p),
+        Db::Mysql(p) => run_tx!(p),
+        Db::Postgres(p) => run_tx!(p),
+        Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => {
+            let mut count = 0u64;
+            for (sql, is_row) in prefix {
+                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消；该目标通道不支持事务，已执行的语句不会自动回滚"))?; }
+                let n = db.generic_exec(sql).await.map_err(|e| anyhow!(e).context("导入前置语句执行失败；该目标通道不支持事务，失败前已执行的语句不会自动回滚"))?;
+                if *is_row { count += n.max(1); }
+            }
+            let mut batches = 0u64;
+            loop {
+                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消；该目标通道不支持事务，已执行的语句不会自动回滚"))?; }
+                let Some(rows) = feeder.next_batch(limits)? else { break };
+                for (sql, is_row) in mapper.statements(&rows)? {
+                    let n = db.generic_exec(&sql).await.map_err(|e| anyhow!(e).context(format!("第 {} 批导入失败；该目标通道不支持事务，已执行的语句不会自动回滚", batches + 1)))?;
+                    if is_row { count += n.max(1); }
+                }
+                batches += 1;
+                if let Some(t) = task { t.update("write", count, 0, "正在分批写入目标（非事务通道，逐条提交）"); }
+                tokio::task::yield_now().await;
+            }
+            Ok(count)
+        }
+        _ => bail!("当前导入/同步只支持 SQLite、MySQL/MariaDB、PostgreSQL、SQL Server、ClickHouse 与 ODBC 关系型数据库"),
+    }
+
+    }).await
+}
+
+async fn execute_prepared_script(db: &Db, script: &mut PreparedScript, task: Option<&TaskControl>) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    macro_rules! run {
+        ($pool:expr, $implicit:expr) => {{
+            let mut tx = $pool.begin().await?;
+            let result: Result<u64> = async {
+                let mut count = 0u64;
+                let mut statements = 0u64;
+                while let Some(sql) = script.next_statement()? {
+                    if let Some(t) = task { t.check()?; }
+                    // 当前数据库 future 一直 await 到真实结束；取消只停止下一条，不丢弃已发送操作。
+                    let receipt = crate::sql_history::query(&sql).execute(&mut *tx).await?;
+                    if script.counts_rows() { count = count.checked_add(receipt.rows_affected()).ok_or_else(|| anyhow!("导入影响行数溢出"))?; }
+                    statements += 1;
+                    if let Some(t) = task { t.update("write", statements, script.count(), if $implicit { "逐语句写入（MySQL DDL/非事务引擎可能已提交）" } else { "逐语句写入（同物理事务，提交前可取消）" }); }
+                    if statements % 100 == 0 { tokio::task::yield_now().await; }
+                }
+                if let Some(t) = task { t.check()?; }
+                Ok(count)
+            }.await;
+            match result {
+                Ok(count) => {
+                    tx.commit().await.map_err(|error| anyhow!("TRANSFER_EFFECTS_UNKNOWN: SQL 提交确认失败；可能已生效，必须核对后再操作: {error}"))?;
+                    Ok(count)
+                }
+                Err(error) => match tx.rollback().await {
+                    Ok(()) if !$implicit => Err(error.context("SQL 脚本失败；本次物理事务的回滚已确认")),
+                    Ok(()) => Err(error.context("TRANSFER_EFFECTS_UNKNOWN: MySQL 待提交 DML 已回滚，但 DDL/非事务引擎可能已生效，不能宣称全部回滚或自动重放")),
+                    Err(rollback) => Err(error.context(format!("TRANSFER_EFFECTS_UNKNOWN: SQL 回滚未确认；可能已生效，必须核对后再操作: {rollback}"))),
+                },
+            }
+        }};
+    }
+    match db { Db::Sqlite(pool) => run!(pool, false), Db::Mysql(pool) => run!(pool, true), Db::Postgres(pool) => run!(pool, false),
+        _ => bail!("当前通道尚未验证流式 SQL 执行；没有发送 SQL"), }
+
+    }).await
+}
+
 async fn run_import_data(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: &[ImportColumnMapping], task: Option<&TaskControl>) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     validate_names(&[opts.table.clone()])?;
     if opts.sheet.as_deref().is_some_and(|s| !s.is_empty()) { bail!("CSV/JSON/SQL 导入不支持工作表参数"); }
-    let content = read_text(&opts.file, &opts.encoding)?;
-    if let Some(t) = task { t.check()?; t.update("parse", 0, 0, "正在解析文件"); }
+    let limits = TransferLimits::default();
     if opts.format.eq_ignore_ascii_case("sql") {
-        if opts.truncate || opts.create_table || !mapping.is_empty() { bail!("SQL 脚本按原语句执行，不支持清空、自动建表或列映射"); }
-        let stmts = crate::db::split_statements(&content).into_iter().map(|s| crate::db::strip_leading_comments(&s)).filter(|s| !s.is_empty()).collect::<Vec<_>>();
-        for s in &stmts {
-            let word = s.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
-            if matches!(word.as_str(), "BEGIN" | "COMMIT" | "ROLLBACK" | "END" | "SAVEPOINT" | "RELEASE" | "START" | "ATTACH" | "DETACH" | "VACUUM" | "PRAGMA" | "SET" | "USE") { bail!("SQL 导入不允许会话/事务控制语句: {}", word); }
+        if opts.truncate || opts.create_table || !mapping.is_empty() || !opts.on_conflict.is_empty() && opts.on_conflict != "error" || !opts.conflict_columns.is_empty() {
+            bail!("SQL 脚本按原语句执行，不支持清空、自动建表、列映射或 CSV/JSON 冲突选项");
         }
-        return execute_atomic(db, &stmts.into_iter().map(|s| { let row = s.trim_start().to_ascii_uppercase().starts_with("INSERT"); (s, row) }).collect::<Vec<_>>(), task).await;
+        if let Some(t) = task { t.check()?; t.update("parse", 0, 0, "正在完整预扫描 SQL（成功前不会修改目标）"); }
+        let file = opts.file.clone(); let encoding = opts.encoding.clone(); let kind = kind.clone(); let control = task.cloned();
+        let mut script = tokio::task::spawn_blocking(move || PreparedScript::prepare(&file, &encoding, &kind,
+            usize::try_from(limits.max_record_bytes).context("SQL 单条语句上限超过当前平台可表示的内存范围")?, limits.spill_budget_bytes.as_deref(), || control.as_ref().map_or(Ok(()), TaskControl::check))).await??;
+        return execute_prepared_script(db, &mut script, task).await;
     }
-    let (names, rows): (Vec<String>, Vec<Vec<Option<String>>>) = match opts.format.to_ascii_lowercase().as_str() {
-        "csv" => { let (names, rows) = parse_csv(&content, validate_delimiter(&opts.delimiter)?, opts.has_header)?;
-            (names, rows.into_iter().map(|r| r.into_iter().map(|s| if s == "\\N" { None } else { Some(if s == "\\\\N" { "\\N".into() } else { s }) }).collect()).collect()) },
+    if let Some(t) = task { t.check()?; t.update("parse", 0, 0, "正在打开并解析文件"); }
+    let mut feeder = match opts.format.to_ascii_lowercase().as_str() {
+        "csv" => {
+            let delim = validate_delimiter(&opts.delimiter)?;
+            RowFeeder::Csv(CsvStream::open(&opts.file, &opts.encoding, delim, opts.has_header)?)
+        }
         "json" => {
-            let v: serde_json::Value = serde_json::from_str(&content).context("JSON 格式无效")?;
-            let items = match v { serde_json::Value::Array(a) => a, serde_json::Value::Object(_) => vec![v], _ => bail!("JSON 必须是对象或对象数组") };
-            let mut names = Vec::new();
-            for item in &items {
-                let map = item.as_object().ok_or_else(|| anyhow!("JSON 每一行都必须是对象"))?;
-                for key in map.keys() { if !names.contains(key) { names.push(key.clone()); } }
-            }
+            let names = JsonStream::scan_names(&opts.file, &opts.encoding, limits.max_record_bytes)?;
             validate_names(&names)?;
-            let rows = items.iter().map(|item| names.iter().map(|n| match item.get(n) { None | Some(serde_json::Value::Null) => None, Some(serde_json::Value::String(s)) => Some(s.clone()), Some(v) => Some(v.to_string()) }).collect()).collect();
-            (names, rows)
-        },
+            let mut s = JsonStream::open(&opts.file, &opts.encoding, limits.max_record_bytes)?;
+            s.names = names;
+            RowFeeder::Json(s)
+        }
         _ => bail!("不支持的导入格式: {}", opts.format),
     };
+    let names = feeder.names().to_vec();
     if names.is_empty() { bail!("导入文件没有列，未修改目标"); }
+    validate_names(&names)?;
     let exists = crate::schema::list_tables(db, kind.clone(), &opts.schema).await?.iter().any(|(n, _)| n == &opts.table);
     if !exists && !opts.create_table { bail!("目标表不存在，请启用自动建表"); }
     let target_meta = if exists { Some(crate::schema::table_schema(db, kind.clone(), &opts.schema, &opts.table).await?) } else { None };
@@ -1125,28 +1576,102 @@ async fn run_import_data(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: 
     validate_names(&cols)?;
     if pairs.is_empty() { bail!("没有匹配的列，未修改目标"); }
     let full = qualified(kind, &opts.schema, &opts.table);
-    let mut stmts = Vec::new();
-    if !exists { stmts.push((format!("CREATE TABLE {} ({})", full, cols.iter().map(|c| format!("{} TEXT", quote_ident(kind, c))).collect::<Vec<_>>().join(", ")), false)); }
-    if opts.truncate { stmts.push((format!("DELETE FROM {}", full), false)); }
+    let strategy = { let v = opts.on_conflict.to_ascii_lowercase(); if v.is_empty() { "error".to_string() } else { v } };
+    if !matches!(strategy.as_str(), "error" | "skip" | "update") { bail!("导入冲突策略无效：仅支持 error/skip/update"); }
+    let conflict_cols: Vec<String> = if strategy == "error" {
+        Vec::new()
+    } else {
+        if !exists { bail!("目标表不存在：自动建表不支持冲突处理"); }
+        if !matches!(kind.protocol(), Protocol::Sqlite | Protocol::Mysql | Protocol::Postgres) { bail!("当前目标通道尚未接入导入冲突处理；请在 SQLite/MySQL/PostgreSQL 使用"); }
+        let keys: Vec<String> = if opts.conflict_columns.is_empty() {
+            target_meta.as_ref().map(|m| m.columns.iter().filter(|c| c.primary_key).map(|c| c.name.clone()).collect()).unwrap_or_default()
+        } else { opts.conflict_columns.clone() };
+        if keys.is_empty() { bail!("冲突处理需要目标表主键或显式指定冲突键列"); }
+        for k in &keys {
+            if !cols.contains(k) { bail!("冲突键列必须参与导入列映射: {}", k); }
+            if exists && !target_cols.contains(k) { bail!("目标表不存在冲突键列: {}", k); }
+        }
+        keys
+    };
+    let mut prefix: Vec<(String, bool)> = Vec::new();
+    if !exists { prefix.push((format!("CREATE TABLE {} ({})", full, cols.iter().map(|c| format!("{} TEXT", quote_ident(kind, c))).collect::<Vec<_>>().join(", ")), false)); }
+    if opts.truncate { prefix.push((format!("DELETE FROM {}", full), false)); }
     let quoted = cols.iter().map(|c| quote_ident(kind, c)).collect::<Vec<_>>().join(", ");
-    for row in rows {
-        let vals = pairs.iter().map(|(i, name)| {
-            let ty = target_meta.as_ref().and_then(|s| s.columns.iter().find(|c| c.name == *name)).map(|c| c.data_type.as_str()).unwrap_or("TEXT");
-            crate::sync::value_sql(row.get(*i).and_then(Option::as_deref), kind, ty, ty)
-        }).collect::<Result<Vec<_>>>()?;
-        stmts.push((format!("INSERT INTO {} ({}) VALUES ({})", full, quoted, vals.join(", ")), true));
-    }
-    execute_atomic(db, &stmts, task).await
+    let types = pairs.iter().map(|(_, name)| target_meta.as_ref().and_then(|s| s.columns.iter().find(|c| c.name == *name)).map(|c| c.data_type.clone()).unwrap_or_else(|| "TEXT".to_string())).collect::<Vec<_>>();
+    let mapper = ImportMapper { pairs, kind: kind.clone(), full, quoted, strategy, conflict_cols, cols, types };
+    execute_import_batches(db, &prefix, &mut feeder, &mapper, &limits, task).await
+
+    }).await
 }
 
 /// Keep empty table headers and binary values, unlike schema::fetch_all_rows.
 pub async fn fetch_transfer_rows(db: &Db, kind: &DbKind, schema: &str, table: &str, clause: Option<&str>, limit: Option<u64>) -> Result<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     validate_where(clause)?; validate_names(&[table.to_string()])?;
     let sql = format!("SELECT * FROM {}{}{}", qualified(kind, schema, table), clause.filter(|s| !s.trim().is_empty()).map(|s| format!(" WHERE {}", s)).unwrap_or_default(), limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default());
     let names = crate::schema::table_schema(db, kind.clone(), schema, table).await?.columns.into_iter().map(|c| c.name).collect::<Vec<_>>();
+    fetch_rows_sql(db, kind, schema, table, &sql, names).await
+
+    }).await
+}
+
+/// 键集分页读取：与 OFFSET 分页等价，但用 (k1,k2) > (上一页末行键) 定位，
+/// 深页不再需要扫描并丢弃前 offset 行（OFFSET 在大表上是 O(n²)）。
+pub async fn fetch_transfer_page_after(
+    db: &Db, kind: &DbKind, schema: &str, table: &str, clause: Option<&str>,
+    key_cols: &[String], key_types: &[String], after: Option<&[Option<String>]>, limit: u64,
+) -> Result<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    validate_where(clause)?; validate_names(&[table.to_string()])?;
+    for c in key_cols { validate_names(&[c.clone()])?; }
+    if key_cols.is_empty() || key_cols.len() != key_types.len() { bail!("键集分页需要键列及其类型"); }
+    let quoted = key_cols.iter().map(|c| quote_ident(kind, c)).collect::<Vec<_>>().join(", ");
+    let mut predicates: Vec<String> = Vec::new();
+    if let Some(c) = clause.filter(|s| !s.trim().is_empty()) { predicates.push(format!("({})", c)); }
+    if let Some(values) = after {
+        if values.len() != key_cols.len() { bail!("键集分页的续页键列数量不一致"); }
+        let literals = values.iter().zip(key_types.iter())
+            .map(|(value, ty)| crate::sync::value_sql(value.as_deref(), kind, ty, ty))
+            .collect::<Result<Vec<_>>>()?;
+        if values.iter().any(|value| value.is_none()) { bail!("键集分页键值为 NULL，无法安全续页"); }
+        predicates.push(format!("({}) > ({})", quoted, literals.join(", ")));
+    }
+    let mut sql = format!("SELECT * FROM {}", qualified(kind, schema, table));
+    if !predicates.is_empty() { sql.push_str(&format!(" WHERE {}", predicates.join(" AND "))); }
+    sql.push_str(&format!(" ORDER BY {} LIMIT {}", quoted, limit));
+    let names = crate::schema::table_schema(db, kind.clone(), schema, table).await?.columns.into_iter().map(|c| c.name).collect::<Vec<_>>();
+    fetch_rows_sql(db, kind, schema, table, &sql, names).await
+
+    }).await
+}
+
+/// 分页读取：只用于只读导出与快照读取，不作为镜像删除的完整性依据。
+pub async fn fetch_transfer_page(db: &Db, kind: &DbKind, schema: &str, table: &str, clause: Option<&str>, order_cols: &[String], offset: u64, limit: u64) -> Result<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    validate_where(clause)?; validate_names(&[table.to_string()])?;
+    for c in order_cols { validate_names(&[c.clone()])?; }
+    let mut sql = format!("SELECT * FROM {}", qualified(kind, schema, table));
+    if let Some(c) = clause.filter(|s| !s.trim().is_empty()) { sql.push_str(&format!(" WHERE {}", c)); }
+    if !order_cols.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(&order_cols.iter().map(|c| quote_ident(kind, c)).collect::<Vec<_>>().join(", "));
+    }
+    sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
+    let names = crate::schema::table_schema(db, kind.clone(), schema, table).await?.columns.into_iter().map(|c| c.name).collect::<Vec<_>>();
+    fetch_rows_sql(db, kind, schema, table, &sql, names).await
+
+    }).await
+}
+
+async fn fetch_rows_sql(db: &Db, kind: &DbKind, schema: &str, table: &str, sql: &str, names: Vec<String>) -> Result<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     macro_rules! fetch {
         ($pool:expr, $convert:path) => {{
-            let fetched = sqlx::query(&sql).fetch_all($pool).await?;
+            let fetched = crate::sql_history::query(sql).fetch_all($pool).await?;
             let names = fetched.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect::<Vec<_>>()).unwrap_or(names);
             let mut rows = Vec::with_capacity(fetched.len());
             for row in fetched {
@@ -1163,54 +1688,257 @@ pub async fn fetch_transfer_rows(db: &Db, kind: &DbKind, schema: &str, table: &s
         }};
     }
     match db { Db::Sqlite(p) => fetch!(p, crate::values::sqlite_row_values), Db::Mysql(p) => fetch!(p, crate::values::my_row_values), Db::Postgres(p) => fetch!(p, crate::values::pg_row_values),
-        // 通用通道（SQL Server / ClickHouse / ODBC 关系型）：适配器直接返回文本行；
-        // 结果列为空（0 行且驱动未给列名）时回退到元数据层列名。
         Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => {
-            let (mut names, rows) = db.generic_rows(&sql).await?;
+            let (mut names, rows) = db.generic_rows(sql).await?;
             if names.is_empty() {
                 names = crate::schema::table_schema(db, kind.clone(), schema, table).await?.columns.into_iter().map(|c| c.name).collect();
             }
             Ok((names, rows))
         }
         _ => bail!("该数据源不支持导入导出") }
+
+    }).await
 }
+
+/// 流式导出写入器：有界序列化写入临时文件，完整成功后无覆盖发布目标。
+pub(crate) enum ExportSink {
+    Csv { out: FileEncoder, delim: char, columns: usize },
+    Json { out: FileEncoder, first: bool, names: Vec<String> },
+    Sql { out: FileEncoder, kind: DbKind, prefix: String, types: Vec<String>, buffer: Vec<u8> },
+}
+
+impl ExportSink {
+    fn view(stage: &StagedOutput, kind: &DbKind, schema: &str, definition: &str, encoding: &str) -> Result<()> {
+        if definition.trim().is_empty() || definition.len() > TransferLimits::default().max_record_bytes as usize { bail!("真实视图定义为空或超过导出上限"); }
+        let mut out = stage.encoder(encoding)?;
+        out.write_all("-- 视图只导出真实定义，不向视图写入 INSERT。请先创建其依赖对象；本文件的表部分仅包含数据。\r\n".as_bytes())?;
+        if kind.protocol() == crate::models::Protocol::Mssql { write!(&mut out, "USE {};\r\nGO\r\n", quote_ident(kind, schema))?; }
+        out.write_all(definition.trim().trim_end_matches(';').as_bytes())?;
+        out.write_all(b";\r\n")?;
+        if kind.protocol() == crate::models::Protocol::Mssql { out.write_all(b"GO\r\n")?; }
+        out.finish()?.get_ref().sync_all()?;
+        Ok(())
+    }
+
+    fn create(stage: &StagedOutput, format: &str, kind: &DbKind, schema: &str, table: &str, names: &[String], types: &[String], delimiter: &str, has_header: bool, encoding: &str) -> Result<Self> {
+        validate_names(names)?;
+        if !types.is_empty() && types.len() != names.len() { bail!("导出类型与列数不一致"); }
+        if !names.iter().try_fold(0u64, |sum, name| u64::try_from(name.len()).ok().and_then(|bytes| sum.checked_add(bytes))).is_some_and(|bytes| bytes <= TransferLimits::default().max_record_bytes) { bail!("导出表头超过单条记录上限"); }
+        let mut out = stage.encoder(encoding)?;
+        match format {
+            "csv" => {
+                let delim = validate_delimiter(delimiter)?;
+                if has_header {
+                    let cells: Vec<String> = names.iter().map(|n| csv_escape(n, delim)).collect();
+                    out.write_all((cells.join(&delim.to_string()) + "\r\n").as_bytes())?;
+                }
+                Ok(ExportSink::Csv { out, delim, columns: names.len() })
+            }
+            "json" => {
+                out.write_all(b"[\n")?;
+                Ok(ExportSink::Json { out, first: true, names: names.to_vec() })
+            }
+            "sql" => {
+                let full = qualified(kind, schema, table);
+                let cols = names.iter().map(|n| quote_ident(kind, n)).collect::<Vec<_>>().join(", ");
+                if kind.protocol() == crate::models::Protocol::Mssql && types.iter().any(|ty| ty.eq_ignore_ascii_case("rowversion") || ty.eq_ignore_ascii_case("timestamp")) {
+                    out.write_all("-- SQL Server rowversion 为服务器生成的只读值；下方保留原始 0xHEX，恢复归档数据时该目标列须为 BINARY(8)，不能显式写入真实 rowversion 列。\r\n".as_bytes())?;
+                }
+                Ok(ExportSink::Sql { out, kind: kind.clone(), prefix: format!("INSERT INTO {} ({}) VALUES (", full, cols), types: if types.is_empty() { vec!["TEXT".into(); names.len()] } else { types.to_vec() }, buffer: Vec::with_capacity(1024) })
+            }
+            _ => bail!("不支持的导出格式"),
+        }
+    }
+
+    pub(crate) fn write_rows(&mut self, rows: &[Vec<Option<String>>]) -> Result<u64> {
+        let limits = TransferLimits::default();
+        let columns = match self { Self::Csv { columns, .. } => *columns, Self::Json { names, .. } => names.len(), Self::Sql { types, .. } => types.len() };
+        if u64::try_from(rows.len()).map_or(true, |rows| rows > limits.batch_rows) { bail!("导出批次行数超过上限"); }
+        for row in rows {
+            if row.len() != columns { bail!("导出行列数与实际列元数据不一致"); }
+            if !row.iter().try_fold(0usize, |sum, v| sum.checked_add(v.as_ref().map_or(0, String::len))).is_some_and(|bytes| u64::try_from(bytes).is_ok_and(|bytes| bytes <= limits.max_record_bytes)) { bail!("导出单条记录超过上限"); }
+        }
+        let mut count = 0u64;
+        match self {
+            ExportSink::Csv { out, delim, .. } => {
+                for row in rows {
+                    let mut record = LimitedRecordWriter { inner: out, bytes: 0, max_bytes: limits.max_record_bytes };
+                    for (i, value) in row.iter().enumerate() {
+                        if i > 0 { record.write_all(delim.to_string().as_bytes())?; }
+                        record.write_all(csv_cell(value.as_deref(), *delim).as_bytes())?;
+                    }
+                    record.write_all(b"\r\n")?;
+                    count += 1;
+                }
+            }
+            ExportSink::Json { out, first, names } => {
+                for row in rows {
+                    let mut obj = serde_json::Map::new();
+                    for (i, name) in names.iter().enumerate() {
+                        obj.insert(name.clone(), serde_json::Value::from(row.get(i).cloned().flatten()));
+                    }
+                    if *first { *first = false; } else { out.write_all(b",\n")?; }
+                    let record = LimitedRecordWriter { inner: out, bytes: 0, max_bytes: limits.max_record_bytes };
+                    serde_json::to_writer(record, &serde_json::Value::Object(obj))?;
+                    count += 1;
+                }
+            }
+            ExportSink::Sql { out, kind, prefix, types, buffer } => {
+                for row in rows {
+                    // 单条 INSERT 结构/顺序不变；复用有界序列化缓冲，编码器每行只处理一次。
+                    // 不攒整表，不合并多行 INSERT，转义扩张仍在写入缓冲前核对上限。
+                    buffer.clear();
+                    let mut record = LimitedRecordWriter { inner: &mut *buffer, bytes: 0, max_bytes: limits.max_record_bytes };
+                    record.write_all(prefix.as_bytes())?;
+                    for (i, value) in row.iter().enumerate() {
+                        let ty = &types[i];
+                        let literal_type = if kind.protocol() == crate::models::Protocol::Mssql && (ty.eq_ignore_ascii_case("rowversion") || ty.eq_ignore_ascii_case("timestamp")) { "BINARY(8)" } else { ty };
+                        let value = crate::sync::value_sql(value.as_deref(), kind, literal_type, literal_type)?;
+                        if i > 0 { record.write_all(b", ")?; }
+                        record.write_all(value.as_bytes())?;
+                    }
+                    record.write_all(b");\r\n")?;
+                    out.write_all(buffer)?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    pub(crate) fn finish(self) -> Result<()> {
+        let out = match self {
+            ExportSink::Csv { out, .. } | ExportSink::Sql { out, .. } => out,
+            ExportSink::Json { mut out, .. } => { out.write_all(b"\n]\n")?; out },
+        };
+        out.finish()?.get_ref().sync_all()?;
+        Ok(())
+    }
+}
+
+/// 限制的是序列化后的单条记录字节数；转义扩张也不能突破上限。
+struct LimitedRecordWriter<'a, W: Write> { inner: &'a mut W, bytes: u64, max_bytes: u64 }
+impl<W: Write> Write for LimitedRecordWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if u64::try_from(bytes.len()).map_or(true, |len| len > self.max_bytes.saturating_sub(self.bytes)) { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "导出序列化记录超过上限")); }
+        let written = self.inner.write(bytes)?; self.bytes += written as u64; Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() }
+}
+
+/// 把一次执行缓存下来的完整结果集流式写成文件。
+///
+/// 读取的是执行时落盘的行，不会重跑用户 SQL；写入先落在目标旁边的临时文件，
+/// 完整成功后无覆盖原子发布；已有目标保持不变，临时文件由 RAII 回收。
+pub fn export_spool_set(set: &crate::query_spool::SpoolSet, opts: &ExportOptions, kind: &DbKind, names: &[String], types: &[String]) -> Result<u64> {
+    validate_export(opts)?;
+    if names != set.names() || types != set.types() { bail!("导出列元数据与查询快照不一致"); }
+    set.ensure_complete()?;
+    if opts.limit.is_some_and(|limit| limit < set.total()) { bail!("完整查询快照导出不接受截断行数上限；请清空 limit 后重试"); }
+    let stage = StagedOutput::new(&opts.file)?;
+    let mut sink = ExportSink::create(&stage, &opts.format.to_ascii_lowercase(), kind, &opts.schema, &opts.table, names, types, &opts.delimiter, opts.has_header, &opts.encoding)?;
+    let mut count = 0u64;
+    set.stream(256, |rows| {
+        count = count.checked_add(sink.write_rows(&rows)?).ok_or_else(|| anyhow!("导出行数溢出"))?;
+        Ok(())
+    })?;
+    sink.finish()?;
+    if count != set.total() { bail!("导出快照行数不一致，没有发布文件"); }
+    stage.publish(|| set.ensure_complete())?;
+    Ok(count)
+}
+
+/// 转码测试及受控 UTF-8 来源复用同一个严格有界编码器，不允许覆盖既有目标。
+fn transcode_file(src: &Path, dst: &Path, encoding: &str) -> Result<()> {
+    let src = transfer_output::checked_absolute(src)?;
+    let mut options = std::fs::OpenOptions::new(); options.read(true);
+    #[cfg(windows)] { use std::os::windows::fs::OpenOptionsExt; options.share_mode(1); }
+    let mut input = options.open(src)?;
+    if !input.metadata()?.is_file() { bail!("转码来源必须是普通文件"); }
+    let stage = StagedOutput::new(dst.to_str().ok_or_else(|| anyhow!("导出路径必须能无损表示为 UTF-8"))?)?;
+    let mut output = stage.encoder(encoding)?;
+    std::io::copy(&mut input, &mut output)?;
+    let output = output.finish()?; output.get_ref().sync_all()?; drop(output);
+    stage.publish(|| Ok(()))
+}
+
 pub async fn run_export_task(db: &Db, kind: &DbKind, opts: &ExportTaskOptions) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     let task = TaskControl::begin(&opts.task_id)?;
     let result = async {
         let o = &opts.options;
         validate_export(o)?; protect_database_path(db, &o.file).await?; task.check()?;
         task.update("read", 0, 0, "正在读取源数据");
-        let (names, rows) = fetch_transfer_rows(db, kind, &o.schema, &o.table, o.where_clause.as_deref(), o.limit).await?;
-        task.check()?; task.update("export", 0, rows.len() as u64, "正在生成导出文件");
-        let types = if o.format.eq_ignore_ascii_case("sql") { crate::schema::table_schema(db, kind.clone(), &o.schema, &o.table).await?.columns.into_iter().map(|c| c.data_type).collect::<Vec<_>>() } else { vec![] };
-        let temp = Path::new(&o.file).with_file_name(format!(".navkit-task-{}.tmp", uuid::Uuid::new_v4()));
-        let temp_string = temp.to_string_lossy().to_string();
-        let format = o.format.to_ascii_lowercase(); let encoding = o.encoding.clone(); let delimiter = o.delimiter.clone();
-        let header = o.has_header; let k = kind.clone(); let schema = o.schema.clone(); let table = o.table.clone();
-        let write_result = tokio::task::spawn_blocking(move || match format.as_str() {
-            "csv" => export_csv(&temp_string, &names, &rows, &delimiter, &encoding, header),
-            "json" => export_json(&temp_string, &names, &rows, &encoding),
-            "sql" => export_sql_typed(&temp_string, &k, &schema, &table, &names, &rows, &types, &encoding),
-            _ => Err(anyhow!("不支持的导出格式")),
-        }).await?;
-        let complete = (|| -> Result<u64> {
-            let count = write_result?; task.check()?;
-            std::fs::rename(&temp, &o.file).context("无法替换导出文件")?;
-            Ok(count)
-        })();
-        if complete.is_err() { let _ = std::fs::remove_file(&temp); }
-        let count = complete?;
+
+        // 所有编码复用有界写入器和受控 stage，编码/读取/取消失败均不发布目标。
+        let stage = StagedOutput::new(&o.file)?;
+        let count = transfer_export_cursor::export_cursor(db, kind, o, &task, &stage).await?;
+        stage.publish(|| task.check())?;
         task.update("export", count, count, "文件已保存"); Ok(count)
     }.await;
     task.finish(&result); result
+
+    }).await
 }
 pub async fn protect_database_path(db: &Db, output: &str) -> Result<()> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
     if let Db::Sqlite(pool) = db {
-        for row in sqlx::query("PRAGMA database_list").fetch_all(pool).await? {
+        for row in crate::sql_history::query("PRAGMA database_list").fetch_all(pool).await? {
             let path: String = row.try_get("file")?;
             if !path.is_empty() && std::fs::canonicalize(&path).ok() == std::fs::canonicalize(output).ok() && Path::new(output).exists() { bail!("输出文件不能覆盖当前 SQLite 数据库"); }
         }
     }
     if ["db", "sqlite", "sqlite3", "db3"].contains(&Path::new(output).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str()) { bail!("导出文件不能使用数据库文件扩展名"); }
     Ok(())
+
+    }).await
+}
+
+#[cfg(test)]
+#[path = "transfer_spool_tests.rs"]
+mod transfer_spool_tests;
+
+#[cfg(test)]
+#[path = "transfer_streaming_tests.rs"]
+mod transfer_streaming_tests;
+
+#[cfg(test)]
+mod import_conflict_tests {
+    use super::*;
+
+    fn cols() -> Vec<String> { vec!["id".into(), "name".into()] }
+
+    #[test]
+    fn error_strategy_is_plain_insert() {
+        let sql = import_insert_statement("\"t\"", "\"id\", \"name\"", "1, 'a'", &DbKind::of("sqlite"), "error", &[], &cols()).unwrap();
+        assert_eq!(sql, "INSERT INTO \"t\" (\"id\", \"name\") VALUES (1, 'a')");
+    }
+
+    #[test]
+    fn sqlite_skip_and_update_use_on_conflict() {
+        let skip = import_insert_statement("\"t\"", "\"id\", \"name\"", "1, 'a'", &DbKind::of("sqlite"), "skip", &["id".into()], &cols()).unwrap();
+        assert!(skip.contains("ON CONFLICT (\"id\") DO NOTHING"));
+        let upd = import_insert_statement("\"t\"", "\"id\", \"name\"", "1, 'a'", &DbKind::of("sqlite"), "update", &["id".into()], &cols()).unwrap();
+        assert!(upd.contains("DO UPDATE SET \"name\" = excluded.\"name\""));
+    }
+
+    #[test]
+    fn mysql_uses_ignore_and_duplicate_key() {
+        let skip = import_insert_statement("`t`", "`id`, `name`", "1, 'a'", &DbKind::of("mysql"), "skip", &["id".into()], &cols()).unwrap();
+        assert!(skip.starts_with("INSERT IGNORE INTO"));
+        let upd = import_insert_statement("`t`", "`id`, `name`", "1, 'a'", &DbKind::of("mysql"), "update", &["id".into()], &cols()).unwrap();
+        assert!(upd.contains("ON DUPLICATE KEY UPDATE"));
+    }
+
+    #[test]
+    fn update_requires_non_key_column() {
+        assert!(import_insert_statement("\"t\"", "\"id\"", "1", &DbKind::of("sqlite"), "update", &["id".into()], &["id".into()]).is_err());
+    }
+
+    #[test]
+    fn unknown_strategy_rejected() {
+        assert!(import_insert_statement("\"t\"", "\"id\"", "1", &DbKind::of("sqlite"), "merge", &[], &["id".into()]).is_err());
+    }
 }

@@ -1,0 +1,442 @@
+ M .gitignore
+ M README.md
+ M build.ps1
+ D "docs/NavKit-\345\256\214\346\225\264\344\273\273\345\212\241\344\271\246.md"
+ D "docs/Navicat\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
+ D docs/design/DESIGN-v2-backup.md
+ M docs/design/DESIGN.md
+ M docs/design/assets/logo.js
+ M docs/design/screens-core.js
+ M docs/design/screens-interactions.js
+ D "docs/\345\205\250\345\212\237\350\203\275\347\234\237\345\256\236\346\265\213\350\257\225\346\212\245\345\221\212-20261107.md"
+ D "docs/\345\267\256\345\274\202\346\270\205\345\215\225.md"
+ D "docs/\347\225\214\351\235\242\350\247\204\346\240\274\350\241\250.md"
+ D "docs/\351\251\261\345\212\250\344\270\213\350\275\275\346\235\245\346\272\220\346\224\277\347\255\226\344\270\216\345\276\205\345\212\236.md"
+ D "docs/\351\252\214\346\224\266\344\272\244\344\273\230/14\351\241\271\344\277\256\345\244\215\351\252\214\346\224\266\346\212\245\345\221\212.md"
+ D "docs/\351\252\214\346\224\266\344\272\244\344\273\230/\351\252\214\346\224\266\346\212\245\345\221\212.md"
+ M package.json
+ M public/preview-bootstrap.js
+ M src-tauri/Cargo.lock
+ M src-tauri/Cargo.toml
+ M src-tauri/build.rs
+ M src-tauri/icons/128x128.png
+ M src-tauri/icons/16x16.png
+ M src-tauri/icons/256x256.png
+ M src-tauri/icons/32x32.png
+ M src-tauri/icons/48x48.png
+ M src-tauri/icons/512x512.png
+ M src-tauri/icons/icon.ico
+ M src-tauri/src/NavkitH2.java
+ M src-tauri/src/NavkitJdbc.java
+ M src-tauri/src/catalog.rs
+ M src-tauri/src/clickhouse.rs
+ M src-tauri/src/commands.rs
+ M src-tauri/src/commands_h2_namespace_tests.rs
+ M src-tauri/src/commands_jdbc_namespace_tests.rs
+ M src-tauri/src/data_generator.rs
+ M src-tauri/src/datasource_sync/tests.rs
+ M src-tauri/src/db.rs
+ M src-tauri/src/driver_download.rs
+ M src-tauri/src/driver_transfer_tests.rs
+ M src-tauri/src/error.rs
+ M src-tauri/src/h2_db.rs
+ M src-tauri/src/http_db.rs
+ M src-tauri/src/jdbc_db.rs
+ M src-tauri/src/lib.rs
+ D src-tauri/src/managed_dbx.rs
+ D src-tauri/src/managed_dbx_tests.rs
+ M src-tauri/src/managed_jdbc.rs
+ M src-tauri/src/manual_transaction.rs
+ M src-tauri/src/models.rs
+ M src-tauri/src/monitor.rs
+ M src-tauri/src/mssql.rs
+ M src-tauri/src/native_db.rs
+ M src-tauri/src/native_mq.rs
+ M src-tauri/src/native_rest_tests.rs
+ M src-tauri/src/native_tests.rs
+ M src-tauri/src/odbc_db.rs
+ M src-tauri/src/schema.rs
+ M src-tauri/src/storage.rs
+ M src-tauri/src/sync.rs
+ M src-tauri/src/transfer.rs
+ M src-tauri/src/values.rs
+ M src-tauri/tests/backup_roundtrip.rs
+ M src-tauri/tests/e2e_pipeline.rs
+ M src-tauri/tests/e2e_sync_diff_incremental.rs
+ M src-tauri/tests/e2e_sync_live_matrix.rs
+ M src-tauri/tests/e2e_sync_regressions.rs
+ M src-tauri/tests/support/sync_simulated/mod.rs
+ M src-tauri/tests/transfer_sync_acceptance.rs
+ D src-tauri/tools_fix_a.py
+ D src-tauri/tools_fix_c.py
+ D src-tauri/tools_fix_c2.py
+ D src-tauri/tools_fix_c3.py
+ M src/core/App.ts
+ M src/core/ManualTransactions.ts
+ M src/core/api.ts
+ D src/core/chart.ts
+ M src/core/dbcatalog.ts
+ M src/core/objectDetails.ts
+ M src/core/queryBuilder.ts
+ M src/core/sqlCompletion.ts
+ M src/core/types.ts
+ M src/dialogs/BackupDialog.ts
+ D src/dialogs/ChartDialog.ts
+ M src/dialogs/ConnectionDialog.ts
+ M src/dialogs/ConnectionPickerDialog.ts
+ M src/dialogs/DataGeneratorDialog.ts
+ M src/dialogs/DatasourceSyncTab.ts
+ M src/dialogs/DriverManagerDialog.ts
+ M src/dialogs/HistoryLogDialog.ts
+ M src/dialogs/ImportExportDialog.ts
+ M src/dialogs/QueryBuilderDialog.ts
+ M src/dialogs/ScheduleDialog.ts
+ M src/dialogs/ServerMonitorDialog.ts
+ M src/dialogs/SettingsDialog.ts
+ M src/dialogs/SyncDialog.ts
+ M src/dialogs/UserDialog.ts
+ M src/dialogs/toolDialog.ts
+ M src/main.ts
+ M src/styles/base.css
+ D src/ui/ChartPanel.ts
+ M src/ui/DataGrid.ts
+ M src/ui/Dialog.ts
+ M src/ui/InfoPanel.ts
+ M src/ui/MenuBar.ts
+ D src/ui/ModelCanvas.ts
+ M src/ui/Ribbon.ts
+ M src/ui/SqlEditor.ts
+ M src/ui/TabStrip.ts
+ M src/ui/TabToolbar.ts
+ M src/ui/TreePanel.ts
+ M src/ui/Wizard.ts
+ M src/ui/icons.ts
+ M src/ui/logo.ts
+ M src/ui/menu.ts
+ M src/ui/pict.ts
+ D tools/_tmp_tree_probe.mjs
+ D tools/_tmp_tree_probe2.mjs
+ D tools/_tmp_tree_probe3.mjs
+ D tools/fetch_dbx_logos.py
+ D tools/fix_r2.py
+ D tools/fix_r3.py
+ D tools/fix_values.py
+ M tools/make_original_icon.py
+ D tools/tests/chart-data.test.mjs
+ M tools/tests/column-order.test.mjs
+ M tools/tests/data-grid-filter-sort.test.mjs
+ M tools/tests/datasource-sync-browser.mjs
+ M tools/tests/datasource-sync.test.mjs
+ M tools/tests/fixture-transport.test.mjs
+ M tools/tests/manual-transaction-controller.test.mjs
+ M tools/tests/native-tools-regression.mjs
+ M tools/tests/portable-packaging.test.mjs
+ M tools/tests/query-builder-browser.mjs
+ M tools/tests/query-builder.test.mjs
+ M tools/tests/query-tools-browser.mjs
+ M tools/tests/ribbon-layout.test.mjs
+ M tools/tests/sql-completion-execution.test.mjs
+ M tools/tests/tool-commands.test.mjs
+ M tools/tests/tool-dialogs-browser.mjs
+ M tools/tests/transaction-fixture-bindings.mjs
+ M tools/tests/transfer-feedback.test.mjs
+ M tools/tests/tree-drag-sort-browser.mjs
+ M tools/tests/tree-drag-sort.test.mjs
+?? .agents/
+?? bridge/
+?? docs/README.md
+?? docs/active/
+?? docs/completed/
+?? docs/design/data-dictionary-wizard.html
+?? docs/design/execution-log-console.html
+?? docs/design/execution-log-console.png
+?? docs/design/icon-field-applied.html
+?? docs/design/icon-field-applied.png
+?? docs/design/icon-field-proposals.html
+?? docs/design/icon-field-proposals.png
+?? docs/design/info-panel-redesign/
+?? "docs/design/\347\225\214\351\235\242\350\247\204\346\240\274\350\241\250.md"
+?? docs/planned/
+?? pnpm-lock.yaml
+?? pnpm-workspace.yaml
+?? src-tauri/run_sql_history_regressions.sh
+?? src-tauri/src/JdbcMutationSupport.java
+?? src-tauri/src/batch_execution.rs
+?? src-tauri/src/batch_execution_tests.rs
+?? src-tauri/src/batch_export.rs
+?? src-tauri/src/batch_sql_reader.rs
+?? src-tauri/src/commands_physical_key_tests.rs
+?? src-tauri/src/connection_health.rs
+?? src-tauri/src/connection_params.rs
+?? src-tauri/src/connection_runtime.rs
+?? src-tauri/src/controlled_execution.rs
+?? src-tauri/src/data_dictionary.rs
+?? src-tauri/src/data_dictionary/
+?? src-tauri/src/db_resource.rs
+?? src-tauri/src/design.rs
+?? src-tauri/src/execution.rs
+?? src-tauri/src/execution_bound.rs
+?? src-tauri/src/execution_contracts.rs
+?? src-tauri/src/execution_grants.rs
+?? src-tauri/src/execution_policy.rs
+?? src-tauri/src/execution_spool_tests.rs
+?? src-tauri/src/execution_tests.rs
+?? src-tauri/src/http_runtime_profile.rs
+?? src-tauri/src/http_runtime_profile_tests.rs
+?? src-tauri/src/http_tunnel.rs
+?? src-tauri/src/http_tunnel_adapter.rs
+?? src-tauri/src/http_tunnel_production_tests.rs
+?? src-tauri/src/http_tunnel_protocol.rs
+?? src-tauri/src/http_tunnel_tests.rs
+?? src-tauri/src/java_runtime.rs
+?? src-tauri/src/jdbc_mutation.rs
+?? src-tauri/src/jdbc_mutation_bridge.rs
+?? src-tauri/src/jdbc_mutation_bridge_tests.rs
+?? src-tauri/src/jdbc_mutation_c2_real_tests.rs
+?? src-tauri/src/jdbc_mutation_contracts.rs
+?? src-tauri/src/jdbc_mutation_real_tests.rs
+?? src-tauri/src/jdbc_mutation_transport_tests.rs
+?? src-tauri/src/managed_mirror.rs
+?? src-tauri/src/managed_mirror_tests.rs
+?? src-tauri/src/mutation.rs
+?? src-tauri/src/mysql_options.rs
+?? src-tauri/src/mysql_routines.rs
+?? src-tauri/src/native_tls.rs
+?? src-tauri/src/object_catalog.rs
+?? src-tauri/src/object_commands.rs
+?? src-tauri/src/object_identity.rs
+?? src-tauri/src/object_mutation.rs
+?? src-tauri/src/object_mutation_tests.rs
+?? src-tauri/src/owned_operation_tests.rs
+?? src-tauri/src/query_cleanup_debug.rs
+?? src-tauri/src/query_commands.rs
+?? src-tauri/src/query_commands_tests.rs
+?? src-tauri/src/query_execution.rs
+?? src-tauri/src/query_lineage.rs
+?? src-tauri/src/query_lineage_tests.rs
+?? src-tauri/src/query_result_mutation.rs
+?? src-tauri/src/query_result_mutation_tests.rs
+?? src-tauri/src/query_result_store.rs
+?? src-tauri/src/query_result_store_tests.rs
+?? src-tauri/src/query_spool.rs
+?? src-tauri/src/query_spool_tests.rs
+?? src-tauri/src/routine_call.rs
+?? src-tauri/src/routine_create.rs
+?? src-tauri/src/routine_design.rs
+?? src-tauri/src/runtime_commands.rs
+?? src-tauri/src/runtime_commit.rs
+?? src-tauri/src/runtime_profiles.rs
+?? src-tauri/src/scheduler.rs
+?? src-tauri/src/scheduler_clock.rs
+?? src-tauri/src/scheduler_contracts.rs
+?? src-tauri/src/scheduler_desktop.rs
+?? src-tauri/src/scheduler_desktop_integration_tests.rs
+?? src-tauri/src/scheduler_migration.rs
+?? src-tauri/src/scheduler_migration_tests.rs
+?? src-tauri/src/scheduler_offline.rs
+?? src-tauri/src/scheduler_runner.rs
+?? src-tauri/src/scheduler_service.rs
+?? src-tauri/src/scheduler_state_access.rs
+?? src-tauri/src/scheduler_store.rs
+?? src-tauri/src/scheduler_structure.rs
+?? src-tauri/src/scheduler_structure_tests.rs
+?? src-tauri/src/scheduler_tests.rs
+?? src-tauri/src/scheduler_tools.rs
+?? src-tauri/src/schema_namespaces.rs
+?? src-tauri/src/schema_relational_keys.rs
+?? src-tauri/src/sql_history.rs
+?? src-tauri/src/sql_history_sqlx.rs
+?? src-tauri/src/sql_history_tests.rs
+?? src-tauri/src/sqlx_runtime.rs
+?? src-tauri/src/ssh_known_hosts.rs
+?? src-tauri/src/ssh_tunnel.rs
+?? src-tauri/src/structure_commands.rs
+?? src-tauri/src/structure_execution.rs
+?? src-tauri/src/structure_integration_tests.rs
+?? src-tauri/src/structure_metadata.rs
+?? src-tauri/src/structure_sync.rs
+?? src-tauri/src/sync_stream.rs
+?? src-tauri/src/sync_stream_spill.rs
+?? src-tauri/src/sync_stream_tests.rs
+?? src-tauri/src/table_copy.rs
+?? src-tauri/src/table_design_execution.rs
+?? src-tauri/src/table_design_execution_tests.rs
+?? src-tauri/src/table_native.rs
+?? src-tauri/src/table_native_tests.rs
+?? src-tauri/src/table_objects.rs
+?? src-tauri/src/table_workflows.rs
+?? src-tauri/src/table_workflows_filter.rs
+?? src-tauri/src/table_workflows_filter_comparisons.rs
+?? src-tauri/src/table_workflows_native.rs
+?? src-tauri/src/table_workflows_native_metadata.rs
+?? src-tauri/src/table_workflows_native_plan.rs
+?? src-tauri/src/table_workflows_native_tests.rs
+?? src-tauri/src/table_workflows_regression_tests.rs
+?? src-tauri/src/table_workflows_tests.rs
+?? src-tauri/src/tls_material.rs
+?? src-tauri/src/tls_options.rs
+?? src-tauri/src/transfer_export_cursor.rs
+?? src-tauri/src/transfer_export_protocol_tests.rs
+?? src-tauri/src/transfer_mssql_export.rs
+?? src-tauri/src/transfer_mysql_export.rs
+?? src-tauri/src/transfer_output.rs
+?? src-tauri/src/transfer_spool_tests.rs
+?? src-tauri/src/transfer_sql_reader.rs
+?? src-tauri/src/transfer_stream.rs
+?? src-tauri/src/transfer_streaming_tests.rs
+?? src-tauri/src/updater.rs
+?? src/core/backgroundTasks.ts
+?? src/core/batchExecution.ts
+?? src/core/connection-health-client.ts
+?? src/core/database-picker.ts
+?? src/core/editing-state.ts
+?? src/core/erDiagram.ts
+?? src/core/execution.ts
+?? src/core/export-path.ts
+?? src/core/format-size.ts
+?? src/core/grid-clipboard.ts
+?? src/core/log-format.ts
+?? src/core/mutation.ts
+?? src/core/namespace-label.ts
+?? src/core/object-catalog-loader.ts
+?? src/core/object-catalog.ts
+?? src/core/object-mutation.ts
+?? src/core/object-navigation.ts
+?? src/core/objectBrowser.ts
+?? src/core/query-editability.ts
+?? src/core/query-result-api.ts
+?? src/core/query-result-model.ts
+?? src/core/queryExecution.ts
+?? src/core/queryResultPages.ts
+?? src/core/routine-call.ts
+?? src/core/routine-create.ts
+?? src/core/routine-editor.ts
+?? src/core/runtime-profile-editor.ts
+?? src/core/runtime-profile.ts
+?? src/core/savedQueries.ts
+?? src/core/scheduler-tool-template.ts
+?? src/core/scheduler.ts
+?? src/core/snippets.ts
+?? src/core/sql-kind.ts
+?? src/core/structure-sync.ts
+?? src/core/table-design-draft.ts
+?? src/core/table-picker.ts
+?? src/dialogs/BatchExportDialog.ts
+?? src/dialogs/DataDictionaryDialog.ts
+?? src/dialogs/ErDiagramDialog.ts
+?? src/dialogs/LeaveGuardDialog.ts
+?? src/dialogs/ObjectActionDialog.ts
+?? src/dialogs/ObjectMutationDialog.ts
+?? src/dialogs/RoutineCallDialog.ts
+?? src/dialogs/SchedulerToolTemplateDialog.ts
+?? src/dialogs/TableOperationDialog.ts
+?? src/dialogs/TablePlanDialog.ts
+?? src/dialogs/TextDialog.ts
+?? src/dialogs/UpdateDialog.ts
+?? src/styles/batch-execution.css
+?? src/styles/data-dictionary.css
+?? src/styles/drafts.css
+?? src/styles/er-diagram.css
+?? src/styles/execution-log.css
+?? src/styles/history-log-dialog.css
+?? src/styles/server-monitor-dialog.css
+?? src/styles/settings-dialog.css
+?? src/styles/table-designer.css
+?? src/styles/task-center.css
+?? src/ui/BatchExecutionPanel.ts
+?? src/ui/ColumnSidebar.ts
+?? src/ui/ExecutionLogList.ts
+?? src/ui/ExecutionProgress.ts
+?? src/ui/QueryResultPanel.ts
+?? src/ui/RoutineDocumentView.ts
+?? src/ui/RuntimeProfileEditor.ts
+?? src/ui/SchedulerPanel.ts
+?? src/ui/TableDesigner.ts
+?? src/ui/TableFilterControls.ts
+?? src/ui/TaskCenterPanel.ts
+?? src/ui/TransferProgress.ts
+?? src/ui/data-grid-controls.css
+?? src/ui/query-result-panel.css
+?? tools/acceptance/
+?? tools/check-doc-links.py
+?? tools/tests/.routine-env-probe.ps1
+?? tools/tests/HttpTunnelTestServer.java
+?? tools/tests/JdbcMutationFaultTests.java
+?? tools/tests/JdbcObjectIdentityProbe.java
+?? tools/tests/__pycache__/
+?? tools/tests/approved-dialogs-browser.mjs
+?? tools/tests/approved-ui-styles.test.mjs
+?? tools/tests/background-tasks.test.mjs
+?? tools/tests/batch-execution-dom.test.mjs
+?? tools/tests/batch-execution-fixture.mjs
+?? tools/tests/batch-execution-service.test.mjs
+?? tools/tests/cell-preview-isolation.test.mjs
+?? tools/tests/column-order-browser-fixture.mjs
+?? tools/tests/connection-health-client.test.mjs
+?? tools/tests/data-dictionary-dialog.test.mjs
+?? tools/tests/data-grid-controls.test.mjs
+?? tools/tests/data-grid-editing-browser.mjs
+?? tools/tests/data-grid-pagination-browser.mjs
+?? tools/tests/data-grid-resize-browser.mjs
+?? tools/tests/data-tab-editing-races-browser.mjs
+?? tools/tests/database-export-protocol-fixture.py
+?? tools/tests/database-ui-polish.test.mjs
+?? tools/tests/database-workflows-browser.mjs
+?? tools/tests/database-workflows-desktop-native.mjs
+?? tools/tests/database-workflows-native.mjs
+?? tools/tests/database-workflows-rustc-wrapper.cmd
+?? tools/tests/database-workflows-test-runner.cmd
+?? tools/tests/database-workflows-test-runner.py
+?? tools/tests/database-workflows.test.mjs
+?? tools/tests/dialog-fixtures.js
+?? tools/tests/draft-grid-fixture.mjs
+?? tools/tests/er-diagram.test.mjs
+?? tools/tests/execution-controller.test.mjs
+?? tools/tests/execution-log-format.test.mjs
+?? tools/tests/grid-clipboard.test.mjs
+?? tools/tests/history-log-design.test.mjs
+?? tools/tests/http-runtime-profile.test.mjs
+?? tools/tests/http-tunnel-client.test.mjs
+?? tools/tests/http-tunnel.test.mjs
+?? tools/tests/ipc-errors.test.mjs
+?? tools/tests/jdbc-mutation-rust.test.mjs
+?? tools/tests/jdbc-mutation.test.mjs
+?? tools/tests/mutation.test.mjs
+?? tools/tests/namespace-semantics.test.mjs
+?? tools/tests/native-execution-identity.mjs
+?? tools/tests/native-query-spool.mjs
+?? tools/tests/object-browser-browser.mjs
+?? tools/tests/object-browser.test.mjs
+?? tools/tests/object-mutation-browser-fixture.mjs
+?? tools/tests/object-mutation-browser.test.mjs
+?? tools/tests/object-mutation-desktop-native.mjs
+?? tools/tests/object-mutation.test.mjs
+?? tools/tests/preview-mock-coverage.test.mjs
+?? tools/tests/query-execution.test.mjs
+?? tools/tests/query-result-host.test.mjs
+?? tools/tests/query-result-layout-browser.mjs
+?? tools/tests/query-result-model.test.mjs
+?? tools/tests/query-result-panel.test.mjs
+?? tools/tests/routine-create.test.mjs
+?? tools/tests/routine-editor.test.mjs
+?? tools/tests/routine-ipc-native.mjs
+?? tools/tests/routine-objects.test.mjs
+?? tools/tests/run-continuation-rust-20261111.mjs
+?? tools/tests/run-er-reverse-scoped-20261111.mjs
+?? tools/tests/run-http-sync-rust-20261110.mjs
+?? tools/tests/run-parallel-rust-scoped-20261110.mjs
+?? tools/tests/run-query-transfer-rust-20261110.mjs
+?? tools/tests/runtime-profile.test.mjs
+?? tools/tests/scheduler-panel.test.mjs
+?? tools/tests/scheduler.test.mjs
+?? tools/tests/server-monitor-design.test.mjs
+?? tools/tests/settings-dialog-design.test.mjs
+?? tools/tests/structure-sync.test.mjs
+?? tools/tests/tab-snippet-workflows.test.mjs
+?? tools/tests/table-designer-fixture.mjs
+?? tools/tests/table-designer-metadata.test.mjs
+?? tools/tests/table-designer.test.mjs
+?? tools/tests/ui-completion-styles.test.mjs
+?? tools/tests/update-dialog.test.mjs
+?? tools/tests/user-flow-regressions.test.mjs
+?? tools/tests/win-loader-diagnostic-20261110.py

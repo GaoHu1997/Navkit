@@ -32,12 +32,13 @@ export function toolButton(label: string, primary = false): HTMLButtonElement {
   button.className = primary ? "btn primary" : "btn"; button.textContent = label;
   return button;
 }
-export function toolTable(headers: string[], rows: (string | null)[][]): HTMLTableElement {
+export function toolTable(headers: string[], rows: (string | null)[][], options: { nowrap?: boolean } = {}): HTMLTableElement {
   const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
   const head = table.createTHead().insertRow();
   for (const name of headers) {
     const cell = document.createElement("th"); cell.scope = "col"; cell.textContent = name;
-    cell.style.cssText = "text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);background:var(--bg-panel);position:sticky;top:0;";
+    // nowrap：长值单行省略 + 容器横向滚动，避免逐字符换行把每行撑得很高
+    cell.style.cssText = "text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);background:var(--bg-panel);position:sticky;top:0;" + (options.nowrap ? "white-space:nowrap;" : "");
     head.appendChild(cell);
   }
   const body = table.createTBody();
@@ -45,7 +46,9 @@ export function toolTable(headers: string[], rows: (string | null)[][]): HTMLTab
     const tr = body.insertRow();
     for (const value of row) {
       const cell = tr.insertCell(); cell.textContent = value === null ? "NULL" : value;
-      cell.style.cssText = "padding:4px 8px;border-bottom:1px solid var(--border);white-space:pre-wrap;overflow-wrap:anywhere;max-width:300px;";
+      cell.style.cssText = options.nowrap
+        ? "padding:4px 8px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;"
+        : "padding:4px 8px;border-bottom:1px solid var(--border);white-space:pre-wrap;overflow-wrap:anywhere;max-width:300px;";
     }
   }
   return table;

@@ -1,0 +1,275 @@
+/* 会话监控的局部样式，消费现有灰白桌面令牌；不改变全局 Dialog。 */
+.dialog.server-monitor-dialog {
+  min-width: 0;
+  color: var(--text);
+}
+
+.dialog.server-monitor-dialog > .dialog-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+
+.dialog.server-monitor-dialog .monitor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dialog.server-monitor-dialog .monitor-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+}
+
+.dialog.server-monitor-dialog .monitor-control:first-child {
+  flex: 1 1 280px;
+  margin-right: var(--sp-3);
+}
+
+.dialog.server-monitor-dialog .monitor-control input,
+.dialog.server-monitor-dialog .monitor-control select {
+  height: var(--h-control);
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+  color: var(--text);
+  font: var(--fs-12) var(--font-ui);
+}
+
+.dialog.server-monitor-dialog .monitor-connection {
+  flex: 1 1 auto;
+  max-width: 460px;
+}
+
+.dialog.server-monitor-dialog .monitor-interval {
+  width: 64px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog.server-monitor-dialog .monitor-toolbar > .btn {
+  height: var(--h-control);
+  min-width: 0;
+}
+
+.dialog.server-monitor-dialog .monitor-refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dialog.server-monitor-dialog .monitor-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-11);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dialog.server-monitor-dialog .monitor-count {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dialog.server-monitor-dialog .monitor-sampled-at {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.dialog.server-monitor-dialog .monitor-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  user-select: text;
+}
+
+.dialog.server-monitor-dialog .monitor-table {
+  width: 100%;
+  min-width: 880px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+}
+
+.dialog.server-monitor-dialog .monitor-table :is(th, td) {
+  height: var(--h-control);
+  padding: 0 10px; /* 左右统一 10px，列与列之间不再贴字 */
+  border-right: 1px solid var(--border); /* 竖向分隔线，最后一列去除 */
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog.server-monitor-dialog .monitor-table :is(th, td):last-child {
+  border-right: 0;
+}
+
+.dialog.server-monitor-dialog .monitor-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: calc(var(--h-control) + 2px);
+  background: var(--bg-surface);
+  border-bottom: 2px solid var(--border-strong); /* 表头底边加重，与数据行区分 */
+  color: var(--text-secondary);
+  font-size: var(--fs-11);
+  font-weight: 600;
+}
+
+.dialog.server-monitor-dialog .monitor-column-0 { width: 112px; }
+.dialog.server-monitor-dialog .monitor-column-1 { width: 104px; }
+.dialog.server-monitor-dialog .monitor-column-2 { width: 164px; }
+.dialog.server-monitor-dialog .monitor-column-3 { width: 120px; }
+.dialog.server-monitor-dialog .monitor-column-4 { width: 80px; }
+.dialog.server-monitor-dialog .monitor-column-5 { width: 76px; }
+/* 操作列固定宽度并居中：不被「当前 SQL」列挤压成一条窄缝。 */
+.dialog.server-monitor-dialog .monitor-column-7 { width: 64px; text-align: center; }
+.dialog.server-monitor-dialog .monitor-table :is(th.monitor-column-7, .monitor-session-action) {
+  position: sticky;
+  right: 0;
+  background: var(--bg-surface);
+  text-align: center;
+}
+.dialog.server-monitor-dialog .monitor-table tbody tr:nth-child(even) .monitor-session-action { background: var(--bg-subtle); }
+.dialog.server-monitor-dialog .monitor-table tbody tr:hover .monitor-session-action { background: var(--bg-hover); }
+.dialog.server-monitor-dialog .monitor-session-action { text-align: center; padding-left: 0; padding-right: 0; }
+.dialog.server-monitor-dialog .monitor-session-action .monitor-kill { margin: 0 auto; }
+
+/* 斑马纹：偶数行淡背景，便于跨列对读；需置于 :hover 之前让悬停色胜出 */
+.dialog.server-monitor-dialog .monitor-table tbody tr:nth-child(even) {
+  background: var(--bg-subtle);
+}
+
+.dialog.server-monitor-dialog .monitor-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+/* 当前 SQL 列：宽度由 fixed 布局分配剩余空间（未设 width 的列收尾），
+   超长由上方 th/td 与 .monitor-sql-preview 的 ellipsis 双层截断，天然限宽不挤压其他列。 */
+.dialog.server-monitor-dialog .monitor-table .monitor-sql-cell {
+  position: relative;
+  padding-right: 78px;
+  font-family: var(--font-mono);
+}
+
+.dialog.server-monitor-dialog .monitor-sql-preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dialog.server-monitor-dialog .monitor-view-sql {
+  position: absolute;
+  top: 2px;
+  right: var(--sp-1);
+  height: 22px;
+  padding: 0 var(--sp-1);
+  min-width: 0;
+  border-color: transparent;
+  background: transparent;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+}
+
+.dialog.server-monitor-dialog .monitor-session-action .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 0;
+  width: 24px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+/* 结束/断开会话按钮：16px 电源图标，悬停或键盘聚焦时转危险色。 */
+.dialog.server-monitor-dialog .monitor-kill svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.dialog.server-monitor-dialog .monitor-session-action .monitor-kill:is(:hover, :focus-visible) {
+  color: var(--danger-600);
+}
+
+.dialog.server-monitor-dialog .monitor-table .monitor-empty {
+  height: 148px;
+  padding: var(--sp-4);
+  white-space: normal;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.dialog.server-monitor-dialog > .dialog-footer {
+  min-height: 48px;
+  height: auto;
+}
+
+.dialog.server-monitor-dialog .monitor-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-11);
+  color: var(--text-secondary);
+  line-height: var(--lh-normal);
+  overflow-wrap: anywhere;
+}
+
+.dialog.server-monitor-dialog .monitor-status[role="alert"],
+.dialog.server-monitor-confirm .monitor-confirm-status[role="alert"],
+.dialog.server-monitor-sql-dialog .monitor-detail-status[role="alert"] {
+  color: var(--danger-600);
+}
+
+.dialog.server-monitor-sql-dialog .monitor-sql-full {
+  max-height: min(480px, 60vh);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--fs-13)/20px var(--font-mono);
+  user-select: text;
+}
+
+.dialog.server-monitor-confirm p {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-12);
+  line-height: var(--lh-normal);
+}
+
+.dialog.server-monitor-dialog :is(button, input, select):focus-visible,
+.dialog.server-monitor-sql-dialog :is(button, pre):focus-visible,
+.dialog.server-monitor-confirm button:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .dialog.server-monitor-dialog .monitor-control:first-child {
+    flex-basis: 100%;
+    margin-right: 0;
+  }
+  .dialog.server-monitor-dialog .monitor-connection {
+    max-width: none;
+  }
+}

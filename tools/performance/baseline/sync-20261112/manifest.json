@@ -1,0 +1,24 @@
+{
+  "captured_from": "任务动手前当前工作树，不是git HEAD",
+  "source": "target/sync-perf-baseline",
+  "files": [
+    {
+      "name": "sync.rs",
+      "sha256": "76e024b22f0abbcec1fb42f18b9ef75c8e4a05defe2e66170752ceaa847559bd",
+      "original_sha256": "76e024b22f0abbcec1fb42f18b9ef75c8e4a05defe2e66170752ceaa847559bd",
+      "byte_identical": true
+    },
+    {
+      "name": "sync_stream.rs",
+      "sha256": "fd83d2b8a27417691953259ba381689bff13eca31d311b2c6dcaabab50adb8d4",
+      "original_sha256": "fd83d2b8a27417691953259ba381689bff13eca31d311b2c6dcaabab50adb8d4",
+      "byte_identical": true
+    },
+    {
+      "name": "sync_stream_spill.rs",
+      "sha256": "a0b50844ff2c8b5d5eb98bb26d9528706a89f3f9693dce4113f92251eb8fb9af",
+      "original_sha256": "a0b50844ff2c8b5d5eb98bb26d9528706a89f3f9693dce4113f92251eb8fb9af",
+      "byte_identical": true
+    }
+  ]
+}

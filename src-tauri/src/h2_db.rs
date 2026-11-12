@@ -3,17 +3,19 @@ use std::{path::{Path, PathBuf}, process::Stdio, time::Duration};
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{Child, ChildStdin, ChildStdout}, sync::Mutex};
-use crate::{http_db::{HttpAdapter, HttpRows}, models::ConnectionRequest};
+use tokio::{io::BufReader, process::{Child, ChildStdin, ChildStdout}, sync::Mutex};
+use crate::{http_db::{relational, HttpAdapter, HttpColumn, HttpRows}, models::ConnectionRequest};
 
 pub fn java_path() -> PathBuf {
     if let Some(java) = std::env::var_os("NAVKIT_JAVA") { return java.into(); }
+    // 一键安装的托管 JDK 优先于系统 Java：版本已知可满足 source launcher。
+    if let Some(java) = crate::java_runtime::managed_java() { return java; }
     if let Some(home) = std::env::var_os("JAVA_HOME") { return PathBuf::from(home).join("bin").join(if cfg!(windows) { "java.exe" } else { "java" }); }
     PathBuf::from("java")
 }
 pub fn runtime_status(jar: &Path) -> Result<String> { runtime_status_for(&java_path(), jar) }
 fn bounded_java(java: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output> {
-    let mut child = crate::background_process::command(java).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("无法运行Java；H2需要Java 11+，请配置JAVA_HOME或NAVKIT_JAVA")?;
+    let mut child = crate::background_process::command(java).arg("-Dfile.encoding=UTF-8").args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("无法运行Java；H2需要Java 11+，请配置JAVA_HOME或NAVKIT_JAVA")?;
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop { if child.try_wait()?.is_some() { return Ok(child.wait_with_output()?); } if std::time::Instant::now() >= deadline { let _=child.kill(); let _=child.wait(); bail!("H2 Java运行时探针15秒超时，进程已终止"); } std::thread::sleep(Duration::from_millis(20)); }
 }
@@ -69,7 +71,7 @@ impl Drop for Process {
         }
     }
 }
-pub struct H2Db { process: Mutex<Process>, timeout: Duration, version: String }
+pub struct H2Db { process: Mutex<Process>, timeout: Duration, version: String, session_id: String, catalog: String, initial_schema: String }
 fn enc(s: &str) -> String { base64::engine::general_purpose::STANDARD.encode(s) }
 fn decode_response(line: &str) -> Result<HttpRows> {
     let value: serde_json::Value = serde_json::from_str(line).context("H2 sidecar返回无效JSON")?;
@@ -96,12 +98,12 @@ impl H2Db {
         let java = p.get("java").map(PathBuf::from).unwrap_or_else(java_path);
         runtime_status_for(&java, &jar)?;
         let dir = crate::storage::data_dir().join("h2-sidecar").join(uuid::Uuid::new_v4().to_string()); tokio::fs::create_dir_all(&dir).await?;
-        let source = dir.join("NavkitH2.java"); tokio::fs::write(&source, include_str!("NavkitH2.java")).await?;
-        let mut child = crate::background_process::tokio_command(java).arg("--class-path").arg(&jar).arg(&source)
+        let source = dir.join("NavkitH2.java"); tokio::fs::write(&source, relational::source_with_support(include_str!("NavkitH2.java"))).await?;
+        let mut child = crate::background_process::tokio_command(java).arg("-Dfile.encoding=UTF-8").arg("--class-path").arg(&jar).arg(&source)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).kill_on_drop(false).spawn().context("无法启动H2 JDBC sidecar")?;
         let input = child.stdin.take().ok_or_else(|| anyhow!("H2 stdin不可用"))?;
         let output = BufReader::new(child.stdout.take().ok_or_else(|| anyhow!("H2 stdout不可用"))?);
-        let mut db = Self { process: Mutex::new(Process { child, input: Some(input), output, source_dir: dir }), timeout: Duration::from_secs(req.timeout_secs.max(1)), version: String::new() };
+        let mut db = Self { process: Mutex::new(Process { child, input: Some(input), output, source_dir: dir }), timeout: Duration::from_secs(req.timeout_secs.clamp(1, 300)), version: String::new(), session_id: String::new(), catalog: String::new(), initial_schema: String::new() };
         let url = p.get("jdbc_url").map(str::to_owned).unwrap_or_else(|| {
             if req.database.starts_with("jdbc:h2:") { req.database.clone() }
             else if !req.file.is_empty() { format!("jdbc:h2:{}", req.file) }
@@ -111,31 +113,89 @@ impl H2Db {
         if !url.starts_with("jdbc:h2:") { bail!("jdbc_url必须使用jdbc:h2:"); }
         let response = db.request(format!("connect\t{}\t{}\t{}\n", enc(&url), enc(if req.user.is_empty() { "sa" } else { &req.user }), enc(&req.password))).await?;
         db.version = response.rows.first().and_then(|r| r.first()).cloned().flatten().unwrap_or_default();
+        let capabilities: relational::JdbcCapabilities = db.request_v2("capabilities", serde_json::json!({})).await?;
+        db.session_id = capabilities.session_id;
+        db.catalog = capabilities.catalog;
+        db.initial_schema = capabilities.schema;
         Ok(db)
     }
     async fn request(&self, line: String) -> Result<HttpRows> {
         let mut process = self.process.lock().await;
-        let result = tokio::time::timeout(self.timeout, async {
-            let input = process.input.as_mut().ok_or_else(|| anyhow!("H2 sidecar已关闭"))?;
-            input.write_all(line.as_bytes()).await?; input.flush().await?;
-            let mut response = String::new();
-            if process.output.read_line(&mut response).await? == 0 { bail!("H2 sidecar已退出"); }
-            decode_response(&response)
-        }).await;
-        match result { Ok(r) => r, Err(_) => { let _ = process.child.kill().await; bail!("H2 JDBC请求超时；sidecar已终止，请重新连接"); } }
+        let Process { child, input, output, .. } = &mut *process;
+        let response = relational::exchange_line(child, input, output, &line, self.timeout).await?;
+        if let Err(error) = relational::validate_scalar(&response) {
+            process.input.take(); let _ = process.child.start_kill();
+            return Err(error.context("H2 scalar contract failed; physical session discarded; do not replay"));
+        }
+        decode_response(&response)
+    }
+    async fn request_v2<T: serde::de::DeserializeOwned>(&self, action: &str, payload: serde_json::Value) -> Result<T> {
+        let (request_id, line) = relational::request(action, &self.session_id, payload.clone())?;
+        let mut process = self.process.lock().await;
+        let Process { child, input, output, .. } = &mut *process;
+        let response = relational::exchange_line(child, input, output, &line, self.timeout).await?;
+        let envelope = match relational::decode_envelope(&response, &request_id, &self.session_id) {
+            Ok(value) => value,
+            Err(error) => { process.input.take(); let _ = process.child.start_kill(); return Err(error); }
+        };
+        if let Err(error) = relational::validate_result(action, &payload, &envelope) {
+            process.input.take(); let _ = process.child.start_kill();
+            return Err(error.context("H2 evidence contract failed; physical session discarded; outcome unknown, do not replay"));
+        }
+        let driver_error = envelope.get("error").is_some();
+        if relational::poisoned(&envelope) { process.input.take(); let _ = process.child.start_kill(); }
+        match relational::decode_result(envelope) {
+            Ok(result) => Ok(result),
+            Err(error) => { if !driver_error { process.input.take(); let _ = process.child.start_kill(); } Err(error) }
+        }
     }
     async fn query(&self, sql: &str) -> Result<HttpRows> { self.query_scoped("", sql).await }
     async fn query_scoped(&self, schema: &str, sql: &str) -> Result<HttpRows> {
         // The process mutex covers both schema selection and SQL, so concurrent
         // namespace views cannot leak a previous command's session schema.
-        self.request(format!("query\t{}\t{}\t{}\n", enc(sql), self.timeout.as_secs(), enc(schema))).await
+        let mut context=crate::sql_history::current_context();
+        if !schema.is_empty(){context.namespace=schema.into();}
+        let mut history=crate::sql_history::Guard::in_context(sql,Vec::new(),context);
+        let result=self.request(format!("query\t{}\t{}\t{}\n", enc(sql), self.timeout.as_secs(), enc(schema))).await;
+        history.result(&result,|r|r.rows.len() as i64);
+        result
     }
 }
 #[async_trait]
 impl HttpAdapter for H2Db {
+    fn shares_session_namespace(&self) -> bool { true }
+    async fn relational_capabilities(&self) -> Result<relational::JdbcCapabilities> {
+        self.request_v2("capabilities", serde_json::json!({})).await
+    }
+    async fn relational_metadata(&self, object: &relational::JdbcObjectId) -> Result<relational::JdbcMetadataSnapshot> {
+        self.request_v2("metadata", serde_json::json!({"object": object})).await
+    }
+    async fn apply_row_plan(&self, plan: &relational::JdbcRowPlan) -> Result<relational::JdbcMutationOutcome> {
+        if plan.read_only { bail!("READ_ONLY_VIOLATION: effective H2 connection is read-only"); }
+        if plan.session_id != self.session_id { bail!("STALE_CONTEXT: row plan belongs to another physical H2 session"); }
+        self.request_v2("row_plan", serde_json::to_value(plan)?).await
+    }
+    async fn table_columns(&self, container: &str, object: &str) -> Result<Option<Vec<HttpColumn>>> {
+        // An uncertified H2 compatibility mode remains browsable, but cannot
+        // produce trusted C2 metadata. Never turn a real metadata error into empty success.
+        if !self.relational_capabilities().await?.metadata { return Ok(None); }
+        let id = relational::JdbcObjectId { catalog: self.catalog.clone(), schema: if container.is_empty() { self.initial_schema.clone() } else { container.into() }, name: object.into() };
+        let metadata = self.relational_metadata(&id).await?;
+        Ok(Some(metadata.columns.into_iter().map(|column| HttpColumn { primary_key: metadata.primary_key.contains(&column.name),
+            name: column.name, data_type: column.type_name, nullable: column.nullable.unwrap_or(true) }).collect()))
+    }
     async fn ping(&self) -> Result<String> { self.query("SELECT 1").await?; Ok(format!("H2 {}", self.version)) }
     async fn containers(&self) -> Result<Vec<(String,String)>> { Ok(self.query("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME").await?.rows.into_iter().filter_map(|r| r.into_iter().next().flatten()).map(|n| (n, "H2 schema".into())).collect()) }
     async fn objects(&self, container: &str) -> Result<Vec<String>> { Ok(self.query(&format!("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA={} ORDER BY TABLE_NAME", crate::db::quote_literal(container))).await?.rows.into_iter().filter_map(|r| r.into_iter().next().flatten()).collect()) }
+    async fn object_types(&self, container: &str) -> Result<Option<Vec<(String, String)>>> {
+        // 视图与表严格分类，避免视图混入「表」的对象清单（TABLE_TYPE: BASE TABLE / VIEW）。
+        Ok(Some(self.query(&format!("SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA={} ORDER BY TABLE_NAME", crate::db::quote_literal(container))).await?.rows.into_iter().filter_map(|r| {
+            let mut it = r.into_iter();
+            let name = it.next().flatten()?;
+            let ty = it.next().flatten().unwrap_or_default();
+            Some((name, if ty.eq_ignore_ascii_case("VIEW") { "view".to_string() } else { "table".to_string() }))
+        }).collect()))
+    }
     async fn rows(&self, container: &str, object: &str, offset:u64, limit:u64) -> Result<HttpRows> { self.query(&format!("SELECT * FROM {}.{} OFFSET {} ROWS FETCH NEXT {} ROWS ONLY", crate::db::quote_ident(&crate::models::DbKind::of("h2"), container), crate::db::quote_ident(&crate::models::DbKind::of("h2"), object), offset, limit.min(10000))).await }
     async fn run(&self, container: &str, _: &str, sql: &str) -> Result<HttpRows> { self.query_scoped(container, sql).await }
 }

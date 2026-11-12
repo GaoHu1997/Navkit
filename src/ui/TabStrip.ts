@@ -57,7 +57,10 @@ export class TabStrip {
 
     const title = document.createElement("div");
     title.className = "tab-title";
-    title.textContent = tab.title;
+    // 仅改变显示名称，保留原始 title 供保存/重命名等业务使用。
+    const scoped = !["users", "datasync", "schedule"].includes(tab.kind) && !!tab.schema;
+    title.textContent = scoped ? `${tab.title}@${tab.schema}` : tab.title;
+    el.title = `${title.textContent}${tab.connectionName ? ` · ${tab.connectionName}` : ""}`;
 
     const close = document.createElement("div");
     close.className = "tab-close";
@@ -99,9 +102,6 @@ export class TabStrip {
         return "dbn_backup";
       case "schedule":
         return "info_pane_query";
-      case "model":
-      case "chart":
-        return "data_profiling_ent_preview_image";
       default:
         return "info_pane_table";
     }

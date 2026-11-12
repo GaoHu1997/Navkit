@@ -1,8 +1,10 @@
 /** 异步对象详情。仅展示可验证的元数据；调用方负责选中版本/取消，防止旧响应串选。 */
 import { api } from "./api";
 import { DB_KINDS } from "./dbcatalog";
+import { namespaceName } from "./namespace-label";
 import type { ConnectionConfig, ObjectType } from "./types";
 import type { InfoField, InfoPanelState } from "../ui/InfoPanel";
+import { formatByteCount, formatBytes } from "./format-size";
 
 export interface ObjectDetailsOptions {
   /** 默认对象详情；备份项不是数据库对象，通过此模式明确指定。 */
@@ -27,6 +29,8 @@ const statusLabels: Record<string, string> = {
   checksum: "校验和", create_options: "创建选项", comment: "注释", total_bytes: "总大小（字节）",
 };
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
+/** 服务器表状态里以字节为单位的统计键。 */
+const BYTE_STATUS_KEYS = new Set(["avg_row_length", "data_length", "max_data_length", "index_length", "data_free", "total_bytes"]);
 
 /** App 可直接 await loadObjectDetails(connection, schema, object, type)，无副作用/无缓存。 */
 export async function loadObjectDetails(
@@ -36,7 +40,7 @@ export async function loadObjectDetails(
   const protocol = DB_KINDS.find(k => k.id === connection.kind)?.protocol;
   const state: InfoPanelState = {
     icon: type === "connection" ? `info_pane_conn_${connection.kind}` : `info_pane_${type === "database" || type === "schema" ? "database" : type}`,
-    title: object || schema || connection.name, subtitle: labels[type] ?? type,
+    title: object || schema || connection.name, subtitle: type === "schema" ? "模式" : type === "database" ? namespaceName(connection) : labels[type] ?? type,
     refs: type === "connection" ? [] : [{ icon: `info_pane_conn_${connection.kind}`, text: connection.name },
       ...(schema && type !== "database" && type !== "schema" ? [{ icon: "info_pane_database", text: schema }] : [])],
     fields: [],
@@ -64,20 +68,22 @@ export async function loadObjectDetails(
     for (const [key, value] of info.extra) add(key, value);
     if (!info.version) add("状态", "服务器未提供版本；连接状态请以实际查询为准");
   };
-  const addSum = (label: string, values: number[]) => {
+  const addSum = (label: string, values: number[], bytes = false) => {
     const valid = values.filter(value => Number.isSafeInteger(value) && value >= 0);
     if (!values.length) { add(label, 0); return; }
     if (valid.length !== values.length) { add(`${label}状态`, "部分统计缺失/无效，未生成总计"); return; }
     const total = valid.reduce((sum, value) => sum + BigInt(value), 0n);
-    add(label, total.toString());
+    // 字节总量统一进位显示（KB/MB/GB），原始字节数保留在括号内供核对。
+    add(label, bytes && total <= BigInt(Number.MAX_SAFE_INTEGER) ? formatByteCount(Number(total)) : total.toString());
   };
   if (options.category === "backup") {
     const singleFile = options.backupName !== undefined;
     state.icon = "info_pane_backup"; state.subtitle = singleFile ? "备份文件" : "备份分组";
-    add("所属连接", connection.name); add("所属数据库/模式", schema);
+    add("所属连接", connection.name); add(`所属${namespaceName(connection)}`, schema);
     const files = await read("备份", () => source.listBackups(connection.id, schema));
     if (files && singleFile) {
       const f = files.find(f => f.name === options.backupName);
+      // 大小保留后端原始字节数（可核对）；文件列表里的展示值才做进位格式化。
       if (f) { state.title = f.name; add("修改时间", f.modified); add("文件大小（字节）", f.size); add("注释", f.comment); }
       else add("状态", "备份文件不存在或已删除");
     } else if (files) {
@@ -89,7 +95,7 @@ export async function loadObjectDetails(
       const latest = dated.reduce<typeof dated[number] | undefined>((current, item) => !current || item.time > current.time ? item : current, undefined);
       if (latest) { add("最新修改时间", latest.file.modified); add("最新修改的备份", latest.file.name); }
       if (dated.length < files.length) add("修改时间状态", "部分文件未提供可解析的修改时间，最新时间仅比较已知值");
-      state.list = files.map(file => ({ icon: "info_pane_backup", text: `${file.name} · ${file.size} 字节${file.modified ? ` · ${file.modified}` : ""}` }));
+      state.list = files.map(file => ({ icon: "info_pane_backup", text: `${file.name} · ${formatBytes(file.size)}${file.modified ? ` · ${file.modified}` : ""}` }));
       if (!files.length) add("状态", "后端未返回备份文件");
     }
     return state;
@@ -105,7 +111,7 @@ export async function loadObjectDetails(
     addServerInfo(info);
   } else if (type === "database" || type === "schema" || type === "folder") {
     addConnectionContext();
-    add(type === "schema" ? "模式名称" : "数据库/模式名称", schema || object);
+    add(`${type === "schema" ? "模式" : namespaceName(connection)}名称`, schema || object);
     const [objects, routines, server] = await Promise.all([
       read("对象列表", () => source.listObjects(connection.id, schema || object)),
       read("例程列表", () => source.listRoutines(connection.id, schema || object)),
@@ -119,7 +125,8 @@ export async function loadObjectDetails(
       // 仅聚合真实有统计来源的协议；其它适配器的0为占位，不能成为总行数/总大小。
       if (protocol === "mysql" || protocol === "postgres" || protocol === "sqlite") {
         addSum(protocol === "sqlite" ? "表总行数（对象列表统计）" : "表总行数（服务器估计）", tables.map(table => table.rows));
-        if (protocol !== "sqlite") addSum(protocol === "postgres" ? "表总存储大小（字节；服务器统计，含索引/TOAST）" : "表总数据大小（字节；服务器估计）", tables.map(table => table.dataLength));
+        // MySQL 汇总以原始字节数展示（标签标明“字节”）；postgres 用服务器侧体积统计（已含索引/TOAST），进位显示。
+        if (protocol !== "sqlite") addSum(protocol === "postgres" ? "表总存储大小（服务器统计，含索引/TOAST）" : "表总数据大小（字节；服务器估计）", tables.map(table => table.dataLength), protocol === "postgres");
         add("统计说明", protocol === "sqlite" ? "表行数汇总自对象列表；SQLite对象大小为占位值，未计入总大小。视图未计入汇总。" : "汇总自服务器对象元数据，行数为估计，可能因统计刷新而变化；不是 COUNT(*)。视图未计入汇总。");
       } else add("统计说明", "当前协议对象列表未保证提供真实行数/大小，未聚合占位统计值。");
       state.list = objects.map(o => ({ icon: o.type === "view" ? "info_pane_view" : "info_pane_table", text: o.name }));
@@ -145,8 +152,10 @@ export async function loadObjectDetails(
       const lower = key.toLowerCase();
       // 现有 SQLite tableStatus 的 Data_length 实为整库页数×页大小，Collation 被硬填 UTF-8，不能当表属性。
       if (protocol === "sqlite" && lower === "collation") continue;
-      const label = protocol === "sqlite" && lower === "data_length" ? "数据库文件页大小（字节；非单表）" : statusLabels[lower] ?? key;
-      if (!state.fields.some(f => f.label === label && f.value === value)) add(label, value);
+      const label = protocol === "sqlite" && lower === "data_length" ? "数据库文件页大小（非单表；服务器统计）" : statusLabels[lower] ?? key;
+      // 体积类统计统一进位显示；「非单表」的整库指标保留原始字节数（它不是这张表的大小，进位反而误导）。
+      const shown = BYTE_STATUS_KEYS.has(lower) && !label.includes("非单表") && /^\d+$/.test(value.trim()) ? formatByteCount(Number(value)) : value;
+      if (!state.fields.some(f => f.label === label && f.value === shown)) add(label, shown);
     }
     if (type === "view") {
       const definition = await read("视图定义", () => source.getViewDefinition(connection.id, schema, object));
@@ -173,7 +182,7 @@ export async function loadObjectDetails(
       }
     }
   } else if (type === "procedure" || type === "function") {
-    add("所属连接", connection.name); add("所属数据库/模式", schema);
+    add("所属连接", connection.name); add(`所属${namespaceName(connection)}`, schema);
     add("对象类型", labels[type]); add("连接类型", DB_KINDS.find(k => k.id === connection.kind)?.label ?? connection.kind);
     const definition = await read("定义", () => source.getRoutineDefinition(connection.id, schema, object, type));
     add("定义", definition);
@@ -196,5 +205,5 @@ export async function loadObjectDetails(
 /** 选中后即可展示的加载态，实际详情仍须 await；不写入虚构属性。 */
 export function objectDetailsLoading(connection: ConnectionConfig, schema: string, object: string, type: ObjectType): InfoPanelState {
   const fields: InfoField[] = [{ label: "状态", value: "正在读取详细信息…" }];
-  return { icon: type === "connection" ? `info_pane_conn_${connection.kind}` : `info_pane_${type}`, title: object || schema || connection.name, subtitle: labels[type] ?? type, fields };
+  return { icon: type === "connection" ? `info_pane_conn_${connection.kind}` : `info_pane_${type}`, title: object || schema || connection.name, subtitle: type === "schema" ? "模式" : type === "database" ? namespaceName(connection) : labels[type] ?? type, fields };
 }

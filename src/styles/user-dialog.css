@@ -1,0 +1,112 @@
+/* 用户编辑对话框（参考 Navicat 多标签用户编辑器）。 */
+
+.user-editor-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.user-editor-body .tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.user-editor-body .tabs-header {
+  padding: 0 var(--sp-2);
+}
+.user-editor-body .tabs-body {
+  padding: var(--sp-4) var(--sp-5);
+}
+.user-editor-panel[hidden] {
+  display: none !important;
+}
+.user-editor-note {
+  font-size: var(--fs-11);
+  color: var(--text-tertiary);
+}
+.user-editor-loading {
+  padding: var(--sp-4);
+  color: var(--text-tertiary);
+  font-size: var(--fs-12);
+}
+.user-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.user-add-row {
+  margin-bottom: var(--sp-3);
+}
+.user-add-row span {
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+}
+.user-privilege-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 2px var(--sp-5);
+}
+.user-privilege-grid .checkbox {
+  height: 24px;
+}
+.user-object-scroll {
+  overflow-x: auto;
+}
+.user-object-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--fs-12);
+}
+.user-object-table th,
+.user-object-table td {
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+  text-align: left;
+  white-space: nowrap;
+}
+.user-object-table th {
+  background: var(--bg-subtle);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.user-object-table .user-privilege-cell {
+  display: inline-flex;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+}
+.user-row-remove {
+  height: 22px;
+  padding: 0 8px;
+  font-size: var(--fs-11);
+}
+.user-role-list,
+.user-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.user-member-item {
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.user-sql-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.user-sql-preview {
+  margin: 0;
+  padding: var(--sp-3);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 200px;
+  color: var(--text);
+}

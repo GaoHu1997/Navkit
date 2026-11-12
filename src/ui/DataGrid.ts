@@ -5,7 +5,7 @@
  *  - 表头高 28 物理px（22.4 逻辑px），白底，底部 1px #DBDBDB
  *  - 行高 24 物理px（19.2 逻辑px），数据区白底无网格线
  *  - 列头点击排序（显示小三角），列宽可拖拽
- *  - NULL 显示为灰色斜体（可切换跳过）；行号列灰字，焦点行行号深蓝白字
+ *  - NULL 显示为灰色斜体（可切换跳过）；行号列灰字，焦点行使用浅强调色
  *  - 虚拟滚动：只渲染可视区域的行
  */
 
@@ -23,12 +23,16 @@ export interface GridCallbacks {
   onColumnClick?: (col: string, index: number) => void;
   /** 焦点单元格变化（单击单元格）。 */
   onCellFocus?: (row: number, col: number) => void;
+  /** 单元格进入编辑态（输入框已聚焦并全选）后触发；用于刷新内容预览面板。 */
+  onEditBegin?: (row: number, col: number) => void;
   /** 行选中变化。 */
   onSelectionChange?: (rows: number[]) => void;
   /** 双击。 */
   onRowDoubleClick?: (row: number) => void;
   /** 右键。 */
   onContextMenu?: (x: number, y: number, row: number, col: number) => void;
+  /** 列头右键（列名，索引，视口坐标）——用于升序 / 降序 / 移除排序菜单。 */
+  onHeaderContextMenu?: (col: string, index: number, x: number, y: number) => void;
 }
 
 export interface GridOptions {
@@ -51,6 +55,8 @@ export interface GridOptions {
   rowHeaderWidth?: number;
   /** 显示行号列（数据网格 true，对象网格 false）。 */
   showRowNumbers?: boolean;
+  /** 显示行号的起点偏移；数据索引和选择/编辑仍使用当前页的本地索引。 */
+  rowNumberOffset?: number;
   /** 右对齐的列名（数字列）。 */
   rightAlign?: string[];
   /** 每行首列图标（资源名），用于对象网格。 */
@@ -65,9 +71,49 @@ export interface GridOptions {
   dirtyCells?: Set<string>;
 }
 
-const ROW_HEIGHT = 19.2;
-const HEADER_HEIGHT = 22.4;
+/** 兜底行高/表头高（逻辑px）。真实值运行时取自 base.css 的 --h-row / --h-header，
+ *  避免 TS 常量与 CSS 各写一份、差 35% 导致可视行数算错。 */
+const DEFAULT_ROW_HEIGHT = 26;
+const DEFAULT_HEADER_HEIGHT = 28;
 const OVERSCAN = 8;
+
+type TemporalPickerType = "date" | "time" | "datetime-local";
+
+function temporalPickerType(type: string): TemporalPickerType | null {
+  if (/^(?:datetime\d*|timestamp(?:tz)?|smalldatetime)\b/i.test(type.trim())) return "datetime-local";
+  if (/^time(?:tz)?\b/i.test(type.trim())) return "time";
+  return /^date\b/i.test(type.trim()) ? "date" : null;
+}
+
+// 只拆原文中的墙上时间；不经过 Date，避免时区换算和精度截断。
+const CLOCK_PATTERN = /^(\d{2}:\d{2})(?::(\d{2})(\.\d+)?)?(\s*(?:[zZ]|[+-]\d{2}(?::?\d{2})?))?$/;
+const DATETIME_PATTERN = /^(\d{4}-\d{2}-\d{2})([ T])(.*)$/;
+
+function pickerValue(type: TemporalPickerType, raw: string): string {
+  if (type === "date") return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
+  const date = type === "datetime-local" ? raw.match(DATETIME_PATTERN) : null;
+  if (type === "datetime-local" && !date) return "";
+  const clock = (date?.[3] ?? raw).match(CLOCK_PATTERN);
+  if (!clock || Number(clock[1].slice(0, 2)) > 23) return "";
+  const time = `${clock[1]}:${clock[2] ?? "00"}`;
+  return date ? `${date[1]}T${time}` : time;
+}
+
+function mergePickerValue(type: TemporalPickerType, raw: string, picked: string): string {
+  // 清空选择器只清其辅助选择，不清权威文本；空串通过文本输入明确设置。
+  if (!picked) return raw;
+  if (type === "date") return picked;
+  const oldDate = type === "datetime-local" ? raw.match(DATETIME_PATTERN) : null;
+  const newDate = type === "datetime-local" ? picked.match(DATETIME_PATTERN) : null;
+  const oldClock = (oldDate?.[3] ?? raw).match(CLOCK_PATTERN);
+  const newClock = (newDate?.[3] ?? picked).match(CLOCK_PATTERN);
+  if (!newClock) return raw;
+  const seconds = newClock[2] ?? "00";
+  const fraction = oldClock?.[3] ?? "";
+  const clock = newClock[1] + (oldClock?.[2] || seconds !== "00" || fraction ? `:${seconds}` : "") + fraction;
+  const offset = oldClock?.[4] ?? "";
+  return (newDate ? `${newDate[1]}${oldDate?.[2] ?? "T"}` : "") + clock + offset;
+}
 
 export class DataGrid {
   readonly el: HTMLElement;
@@ -79,16 +125,36 @@ export class DataGrid {
   private cb: GridCallbacks;
   private colWidths: number[] = [];
   private defaultWidth = 96;
+  /** 列宽自适应下限 / 上限（逻辑px）。 */
+  private static readonly MIN_COL_WIDTH = 64;
+  private static readonly MAX_COL_WIDTH = 320;
+  /** 真实行高（逻辑px）。窗口缩放 / DPI / 主题变化后由 measureMetrics() 刷新。 */
+  private rowHeight = DEFAULT_ROW_HEIGHT;
+  private headerHeight = DEFAULT_HEADER_HEIGHT;
+  /** 容器尺寸变化时重算可视行窗口，否则改窗口大小后仍按旧高度渲染，底部留白或行数不足。 */
+  private resizeObserver: ResizeObserver | null = null;
   private resizing: { col: number; startX: number; startW: number } | null = null;
   private resizerEl: HTMLElement | null = null;
   private resizeOverlay: HTMLElement | null = null;
   private previousBodyCursor = "";
   private previousUserSelect = "";
   private editingInput: HTMLInputElement | null = null;
+  private editSession: {
+    row: HTMLTableRowElement;
+    editor: HTMLElement;
+    commit: () => void;
+  } | null = null;
   /** 列宽拖拽结束后吞掉下一次表头 click（否则会误触发排序）。 */
   private suppressNextHeaderClick = false;
-  /** 选中的列（-1 无）。点击列头选中整列，右侧信息面板联动列信息。 */
+  /** 选中的列（-1 无）。点击列头/单元格选中整列，右侧信息面板联动列信息。 */
   private selectedCol = -1;
+  private copyGeneration = 0;
+  private contextTarget: { row: number; col: number } | null = null;
+  private frozenContext: import("../core/grid-clipboard").GridCopySnapshot | null = null;
+  /** 最近一次渲染的可视窗口；滚动不跨窗口时不重建 DOM（否则逐像素滚动会整表闪烁）。 */
+  private lastWindow = { first: -1, last: -1, total: -1, cols: -1 };
+  /** 滚动渲染的 rAF 合并句柄。 */
+  private renderHandle = 0;
 
   constructor(cb: GridCallbacks = {}) {
     this.cb = cb;
@@ -113,9 +179,8 @@ export class DataGrid {
 
     // 键盘导航需要本组件可获得焦点（点击行/单元格后聚焦）
     this.el.tabIndex = 0;
-    this.el.style.outline = "none";
 
-    this.scroll.addEventListener("scroll", () => this.renderRows());
+    this.scroll.addEventListener("scroll", () => this.scheduleRenderRows());
     this.scroll.addEventListener("mousedown", this.onMouseDown);
     this.scroll.addEventListener("dblclick", this.onDoubleClick);
     this.scroll.addEventListener("contextmenu", this.onContextMenu);
@@ -124,36 +189,134 @@ export class DataGrid {
     this.thead.addEventListener("mousedown", this.onHeaderMouseDown);
     this.thead.addEventListener("mousemove", this.onHeaderHover);
     this.thead.addEventListener("mouseleave", this.onHeaderLeave);
+    this.thead.addEventListener("contextmenu", this.onHeaderContextMenu);
     this.thead.addEventListener("keydown", this.onResizeKeyDown);
     window.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("mouseup", this.onMouseUp);
     window.addEventListener("blur", this.onMouseUp);
+
+    // 网格/容器尺寸变化（拖动分栏、窗口缩放、侧栏展开）必须重算可视行窗口，
+    // 否则渲染窗口停在旧尺寸：窗口变大只留空白、变小则行数溢出。
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.handleContainerResize());
+      this.resizeObserver.observe(this.scroll);
+      this.resizeObserver.observe(this.el);
+    }
   }
 
   dispose(): void {
+    this.endEdit();
     this.onMouseUp();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     window.removeEventListener("mousemove", this.onMouseMove);
     window.removeEventListener("mouseup", this.onMouseUp);
     window.removeEventListener("blur", this.onMouseUp);
     this.thead.removeEventListener("mousemove", this.onHeaderHover);
     this.thead.removeEventListener("mouseleave", this.onHeaderLeave);
+    this.thead.removeEventListener("contextmenu", this.onHeaderContextMenu);
     this.thead.removeEventListener("keydown", this.onResizeKeyDown);
+    if (this.renderHandle) {
+      cancelAnimationFrame(this.renderHandle);
+      this.renderHandle = 0;
+    }
+  }
+
+  /** 上一次看到的视口尺寸；尺寸没变就不重算，避免 ResizeObserver/scroll 空转。 */
+  private lastViewport = { w: -1, h: -1 };
+
+  /** 容器尺寸变化：重新量行高并重算可视行窗口。 */
+  private handleContainerResize(): void {
+    const w = this.scroll.clientWidth;
+    const h = this.scroll.clientHeight;
+    if (w === this.lastViewport.w && h === this.lastViewport.h) return;
+    this.lastViewport = { w, h };
+    this.measureMetrics();
+    this.renderRows();
+  }
+
+  /**
+   * 从实际渲染结果量取行高/表头高。
+   * 优先读 CSS 变量（唯一真值来源），其次量一行真实 DOM，最后用兜底常量。
+   */
+  private measureMetrics(): void {
+    const cs = getComputedStyle(this.el);
+    const rowVar = parseFloat(cs.getPropertyValue("--h-row"));
+    const headerVar = parseFloat(cs.getPropertyValue("--h-header"));
+    if (Number.isFinite(rowVar) && rowVar > 0) this.rowHeight = rowVar;
+    if (Number.isFinite(headerVar) && headerVar > 0) this.headerHeight = headerVar;
+    const tr = this.tbody.querySelector<HTMLElement>("tr[data-row]");
+    const measured = tr?.getBoundingClientRect().height ?? 0;
+    if (measured > 0) this.rowHeight = measured;
+    const th = this.thead.querySelector<HTMLElement>("th");
+    const measuredHeader = th?.getBoundingClientRect().height ?? 0;
+    if (measuredHeader > 0) this.headerHeight = measuredHeader;
   }
 
   /** 更新数据并重绘。 */
   setData(opts: GridOptions): void {
+    ++this.copyGeneration;
+    // 换页/刷新/隐藏列使旧显示坐标失效；先取消，移除输入时不能误提交到新数据。
+    this.endEdit();
+    this.lastFocused = null;
+    this.contextTarget = null;
+    // 数据已换：旧的整列选中高亮不再对应任何选中，与「没选中就不高亮、不预览」一起清掉。
+    this.selectedCol = -1;
+    // 数据已变化：强制下一次 renderRows 重建可视窗口。
+    this.lastWindow = { first: -1, last: -1, total: -1, cols: -1 };
     const columnsChanged =
       opts.columns.length !== this.opts.columns.length ||
       opts.columns.some((c, i) => c.name !== this.opts.columns[i]?.name);
     this.opts = { ...this.opts, ...opts };
     if (columnsChanged) {
-      this.colWidths = this.opts.columns.map(() => this.defaultWidth);
+      // 列宽自适应：按列名与样本数据量宽，至少完整展示列名（不再均分固定宽）。
+      this.colWidths = this.measureColumnWidths();
       this.renderHeader();
     } else {
       this.updateHeaderState();
     }
+    this.updateColumnSelectionVisual();
     this.renderRows();
   }
+
+  /**
+   * 列宽自适应：以列名完整展示为下限，并采样可见数据量宽。
+   * 用 canvas measureText 代替逐格 DOM 测量；采样前 80 行足够反映内容宽度。
+   * canvas 不可用时退回固定默认宽（保证任何环境下都可渲染）。
+   */
+  private measureColumnWidths(): number[] {
+    const fallback = () => this.opts.columns.map(() => this.defaultWidth);
+    try {
+      const canvas = this.measureCanvas ??= document.createElement("canvas");
+      const ctx = canvas.getContext?.("2d");
+      if (!ctx) return fallback();
+    const thStyle = getComputedStyle(this.thead);
+    const tdStyle = getComputedStyle(this.tbody);
+    // 表头字号加粗（与 base.css 的表头样式一致），数据用正文字体。
+    ctx.font = `${thStyle.fontStyle} ${thStyle.fontWeight} ${thStyle.fontSize} ${thStyle.fontFamily}`;
+    const headerPad = 18; // 内边距 + 排序三角/拖宽手柄余量
+    const widths = this.opts.columns.map((col) => {
+      const headerW = ctx.measureText(col.name).width + headerPad + 12;
+      return Math.ceil(Math.min(DataGrid.MAX_COL_WIDTH, Math.max(DataGrid.MIN_COL_WIDTH, headerW)));
+    });
+    ctx.font = `${tdStyle.fontStyle} ${tdStyle.fontWeight} ${tdStyle.fontSize} ${tdStyle.fontFamily}`;
+    const cellPad = 16;
+    const sample = Math.min(this.opts.rows.length, 80);
+    for (let r = 0; r < sample; r++) {
+      const row = this.opts.rows[r] ?? [];
+      row.forEach((value, c) => {
+        if (value == null || c >= widths.length) return;
+        const w = ctx.measureText(value).width + cellPad;
+        if (w > widths[c]) widths[c] = Math.ceil(Math.min(DataGrid.MAX_COL_WIDTH, w));
+      });
+    }
+      return widths;
+    } catch {
+      // 测量环境不可用（无 canvas / 计算样式异常）：退回固定默认宽。
+      return fallback();
+    }
+  }
+  private measureCanvas: HTMLCanvasElement | null = null;
 
   /** 设置显式列宽（逻辑px，按参考截图实测）。 */
   setColWidths(ws: number[]): void {
@@ -165,6 +328,12 @@ export class DataGrid {
 
   /** 只更新选中与编辑态。 */
   setState(opts: Partial<GridOptions>): void {
+    if (opts.rows || opts.columns) {
+      ++this.copyGeneration;
+      this.endEdit();
+    }
+    if (opts.readOnly) this.endEdit();
+    this.lastWindow = { first: -1, last: -1, total: -1, cols: -1 };
     this.opts = { ...this.opts, ...opts };
     this.renderRows();
   }
@@ -195,7 +364,7 @@ export class DataGrid {
       const name = document.createElement("div");
       name.className = "grid-th-name";
       name.textContent = col.name;
-      th.title = `${col.name} (${col.type})`;
+      // 列头不设 title：悬停列名不再弹出提示框（列信息由点击列头/列数据在右侧面板展示）。
       const sort = document.createElement("div");
       sort.className = "grid-sort";
       inner.appendChild(name);
@@ -279,8 +448,19 @@ export class DataGrid {
       });
     });
     const sum = this.colWidths.reduce((a, b) => a + b, 0);
-    const rowHeader = this.opts.showRowNumbers === false ? 0 : 40;
+    const rowHeader = this.opts.showRowNumbers === false ? 0 : this.opts.rowHeaderWidth
+      ?? (this.opts.rowNumberOffset !== undefined ? Math.max(40, String(this.opts.rowNumberOffset + this.opts.rows.length).length * 7 + 16) : 40);
+    this.table.style.setProperty("--grid-row-header-width", `${rowHeader}px`);
     this.table.style.width = `${sum + rowHeader}px`;
+  }
+
+  /** 虚拟滚动渲染（rAF 合并滚动事件；可视窗口没变时跳过重建，避免逐像素滚动整表闪烁）。 */
+  private scheduleRenderRows(): void {
+    if (this.renderHandle) return;
+    this.renderHandle = requestAnimationFrame(() => {
+      this.renderHandle = 0;
+      this.renderRows();
+    });
   }
 
   /** 虚拟滚动渲染行。 */
@@ -288,32 +468,86 @@ export class DataGrid {
     this.table.classList.toggle("grid-lined", !!this.opts.lined);
     const total = this.opts.rows.length;
     const viewH = this.scroll.clientHeight || 400;
-    // 数据缩量后 scrollTop 可能越界，先钳位（否则渲染一片空白）
-    const maxTop = Math.max(0, total * ROW_HEIGHT - viewH);
+    // 行高以 CSS 变量为准（首次读变量，之后可由已渲染行校准）
+    if (!Number.isFinite(this.rowHeight) || this.rowHeight <= 0) this.measureMetrics();
+    const rowH = this.rowHeight;
+    // 数据缩量后 scrollTop 可能越界，先钳位（否则渲染一片空白）。
+    // 内容总高要把 sticky 表头算进去：它仍在滚动流里占高，漏掉会让最后一行滚不出底部。
+    const contentH = total * rowH + this.headerHeight;
+    const maxTop = Math.max(0, contentH - viewH);
     if (this.scroll.scrollTop > maxTop) {
       this.scroll.scrollTop = maxTop;
     }
     const scrollTop = this.scroll.scrollTop;
-    const first = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const visible = Math.ceil(viewH / ROW_HEIGHT) + OVERSCAN * 2;
+    const first = Math.max(0, Math.floor(scrollTop / rowH) - OVERSCAN);
+    const visible = Math.ceil(viewH / rowH) + OVERSCAN * 2;
     const last = Math.min(total, first + visible);
-
-    const frag = document.createDocumentFragment();
-    for (let r = first; r < last; r++) {
-      frag.appendChild(this.buildRow(r));
+    const colCount = Math.max(1, this.opts.columns.length + (this.opts.showRowNumbers === false ? 0 : 1));
+    // 可视窗口与上次完全一致（同数据量、同列数、同选中列）时不重建：
+    // 这是查询结果滚动「卡住后闪动」的根源 —— 每个滚动事件整表重建 tbody。
+    if (
+      this.lastWindow.first === first && this.lastWindow.last === last &&
+      this.lastWindow.total === total && this.lastWindow.cols === colCount &&
+      this.tbody.childElementCount > 0
+    ) {
+      // 编辑中的单元格也留在 tbody 里，跳过重建正好保护它不被移除。
+      this.applyColumnWidths();
+      return;
     }
-    this.tbody.innerHTML = "";
-    this.tbody.appendChild(frag);
+    this.lastWindow = { first, last, total, cols: colCount };
 
-    // 通过 tbody 的 padding 模拟滚动偏移
-    this.tbody.style.paddingTop = `${first * ROW_HEIGHT}px`;
-    this.tbody.style.paddingBottom = `${Math.max(0, (total - last) * ROW_HEIGHT)}px`;
+    // 编辑行是活 DOM 锚点，始终连接在原 tbody 上；即使暂时移入 fragment 也会丢焦点。
+    // 只重建锚点前后的兄弟，窗口外最多多保留这一行，间隙仍按真实行高撑开。
+    const anchor = this.editSession?.row ?? null;
+    const editRow = anchor ? Number(anchor.dataset.row) : -1;
+    const indices = Array.from({ length: last - first }, (_, i) => first + i);
+    if (editRow >= 0 && (editRow < first || editRow >= last)) {
+      indices.push(editRow);
+      indices.sort((a, b) => a - b);
+    }
+    const frag = anchor ? null : document.createDocumentFragment();
+    if (anchor) {
+      for (const child of Array.from(this.tbody.children)) {
+        if (child !== anchor) child.remove();
+      }
+    }
+    let beforeAnchor = !!anchor;
+    const insert = (node: HTMLTableRowElement) => frag ? frag.appendChild(node) : this.tbody.insertBefore(node, beforeAnchor ? anchor : null);
+    let nextRow = 0;
+    for (const r of indices) {
+      if (r > nextRow) insert(this.buildSpacerRow(colCount, (r - nextRow) * rowH));
+      if (r === editRow) beforeAnchor = false;
+      else insert(this.buildRow(r));
+      nextRow = r + 1;
+    }
+    if (nextRow < total) insert(this.buildSpacerRow(colCount, (total - nextRow) * rowH));
+    if (frag) {
+      this.tbody.innerHTML = "";
+      this.tbody.appendChild(frag);
+    }
+    this.applyColumnWidths();
+    this.updateSelectionVisual();
+    this.updateColumnSelectionVisual();
+  }
+
+  /** 撑高用的空行（不参与选中/斑马纹/占位统计）。 */
+  private buildSpacerRow(colCount: number, height: number): HTMLTableRowElement {
+    const tr = document.createElement("tr");
+    tr.className = "grid-spacer";
+    tr.setAttribute("aria-hidden", "true");
+    const td = document.createElement("td");
+    td.colSpan = colCount;
+    td.style.height = `${height}px`;
+    tr.appendChild(td);
+    return tr;
   }
 
   /** 构造一行。 */
   private buildRow(r: number): HTMLTableRowElement {
     const tr = document.createElement("tr");
     tr.dataset.row = String(r);
+    // 按数据索引而非 nth-child 决定斑马纹：占位行插在首尾不会让条纹整体翻转
+    if (r % 2 === 1) tr.classList.add("grid-row-alt");
     const flag = this.opts.rowFlags?.[r];
     if (flag === "delete") tr.classList.add("row-deleted");
     if (this.opts.selectedRows?.has(r)) tr.classList.add("selected");
@@ -321,17 +555,18 @@ export class DataGrid {
     if (this.opts.showRowNumbers !== false) {
       const rowHeader = document.createElement("td");
       rowHeader.className = "grid-row-header";
+      const rowNumber = (this.opts.rowNumberOffset ?? 0) + r + 1;
       if (flag === "insert") {
         rowHeader.classList.add("row-flag");
-        rowHeader.textContent = `+${r + 1}`;
+        rowHeader.textContent = `+${rowNumber}`;
       } else if (flag === "delete") {
         rowHeader.classList.add("row-flag");
-        rowHeader.textContent = `✕${r + 1}`;
+        rowHeader.textContent = `✕${rowNumber}`;
       } else if (flag === "dirty") {
         rowHeader.classList.add("row-flag");
-        rowHeader.textContent = `●${r + 1}`;
+        rowHeader.textContent = `●${rowNumber}`;
       } else {
-        rowHeader.textContent = String(r + 1);
+        rowHeader.textContent = String(rowNumber);
       }
       if (this.lastFocused && this.lastFocused.row === r) {
         rowHeader.classList.add("focused-col");
@@ -379,10 +614,10 @@ export class DataGrid {
     const name = th.dataset.name ?? "";
     const i = Number(th.dataset.col);
     if (this.cb.onColumnClick) {
-      // 表数据页：表头单击 = 选中列（再点取消），排序走排序面板
+      // 表数据页：表头单击 = 选中列（再点取消），排序走排序面板/表头右键。
+      // 就地切换高亮，不重建 DOM（行元素保持稳定）。
       this.selectedCol = this.selectedCol === i ? -1 : i;
-      this.renderHeader();
-      this.renderRows();
+      this.updateColumnSelectionVisual();
       this.cb.onColumnClick(this.selectedCol >= 0 ? name : "", this.selectedCol);
       return;
     }
@@ -400,6 +635,15 @@ export class DataGrid {
   private onHeaderLeave = (): void => {
     if (this.resizing) return;
     this.thead.querySelectorAll<HTMLElement>("th[data-col]").forEach((th) => { th.style.cursor = ""; });
+  };
+
+  /** 列头右键：交给宿主弹升序 / 降序 / 移除排序菜单（与排序面板联动）。 */
+  private onHeaderContextMenu = (e: MouseEvent): void => {
+    const th = (e.target as HTMLElement).closest<HTMLElement>("th[data-col]");
+    if (!th || !this.cb.onHeaderContextMenu) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.cb.onHeaderContextMenu(th.dataset.name ?? "", Number(th.dataset.col), e.clientX, e.clientY);
   };
 
   private onResizeKeyDown = (e: KeyboardEvent): void => {
@@ -430,7 +674,7 @@ export class DataGrid {
       r.className = "grid-resizer";
       Object.assign(r.style, {
         position: "fixed", top: `${rect.top}px`, left: `${rect.right - 1}px`, width: "2px",
-        height: `${Math.max(HEADER_HEIGHT, this.scroll.getBoundingClientRect().bottom - rect.top)}px`,
+        height: `${Math.max(this.headerHeight, this.scroll.getBoundingClientRect().bottom - rect.top)}px`,
         zIndex: "10000", background: "var(--accent-500)", pointerEvents: "none",
       });
       const width = document.createElement("span");
@@ -490,6 +734,9 @@ export class DataGrid {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
+    if (this.editSession?.editor.contains(e.target as Node)) return;
+    if (e.button === 2) return; // 右键在已选范围内保留多选，命中信息由 contextmenu 冻结。
+    this.frozenContext = null;
     const td = (e.target as HTMLElement).closest<HTMLElement>("td[data-col]");
     if (!td) {
       // 点击行号：与行内点击完全一致（选中行 + 焦点行号高亮 + 焦点单元格）
@@ -523,7 +770,23 @@ export class DataGrid {
     // mousedown 重建行元素后 dblclick 的目标会被替换，事件永远无法送达，
     // 只读网格（对象页）的「双击打开表 / 视图」就失效了。
     this.updateSelectionVisual();
+    // 点击列数据 = 同时选中整列，右侧「列信息」面板联动显示该列。
+    if (this.cb.onColumnClick && this.selectedCol !== c) {
+      this.selectedCol = c;
+      this.updateColumnSelectionVisual();
+      this.cb.onColumnClick(this.opts.columns[c]?.name ?? "", c);
+    }
   };
+
+  /** 就地更新整列选中高亮（表头 + 可视行），不重建 DOM。 */
+  private updateColumnSelectionVisual(): void {
+    this.thead.querySelectorAll<HTMLElement>("th[data-col]").forEach((th) => {
+      th.classList.toggle("col-selected", Number(th.dataset.col) === this.selectedCol);
+    });
+    this.tbody.querySelectorAll<HTMLElement>("td[data-col]").forEach((td) => {
+      td.classList.toggle("col-selected", Number(td.dataset.col) === this.selectedCol);
+    });
+  }
 
   /** 只更新选中与焦点行号高亮（不重建 DOM）。 */
   private updateSelectionVisual(): void {
@@ -545,6 +808,7 @@ export class DataGrid {
   private lastMouseDownAt = 0;
 
   private onDoubleClick = (e: MouseEvent): void => {
+    if (this.editSession?.editor.contains(e.target as Node)) return;
     let target = e.target as HTMLElement | null;
     // document 等节点没有 closest
     if (!target || typeof target.closest !== "function") target = null;
@@ -572,11 +836,17 @@ export class DataGrid {
   }
 
   private onContextMenu = (e: MouseEvent): void => {
+    if (this.editSession?.editor.contains(e.target as Node)) return;
+    // 列头的专属菜单由 thead 分发，不能被通用网格菜单覆盖。
+    if (this.cb.onHeaderContextMenu && (e.target as HTMLElement).closest("th[data-col]")) return;
     e.preventDefault();
     const td = (e.target as HTMLElement).closest<HTMLElement>("td[data-col]");
     const tr = (e.target as HTMLElement).closest<HTMLElement>("tr[data-row]");
     const r = td ? Number(td.dataset.row) : tr ? Number(tr.dataset.row) : -1;
     const c = td ? Number(td.dataset.col) : -1;
+    this.contextTarget = r >= 0 ? { row: r, col: c } : null;
+    this.frozenContext = this.captureCopy(true);
+    this.el.focus?.();
     this.cb.onContextMenu?.(e.clientX, e.clientY, r, c);
   };
 
@@ -604,7 +874,7 @@ export class DataGrid {
         break;
       case "Enter":
         e.preventDefault();
-        if (!this.opts.readOnly) this.cb.onEditStart?.(row, col);
+        if (!e.repeat && !this.opts.readOnly) this.cb.onEditStart?.(row, col);
         break;
       case "F2":
         e.preventDefault();
@@ -617,7 +887,31 @@ export class DataGrid {
     }
   };
 
+  /** 当前显示数组就是筛选/排序/隐藏列后的顺序；立即冻结原值和选择。 */
+  private captureCopy(context = false): import("../core/grid-clipboard").GridCopySnapshot {
+    const target = context ? this.contextTarget : this.lastFocused;
+    const selected = this.opts.selectedRows ?? new Set<number>();
+    const rows = target && !selected.has(target.row) && context ? [target.row] :
+      selected.size ? [...selected].sort((a, b) => a - b) : target ? [target.row] : [];
+    return {
+      generation: this.copyGeneration,
+      columns: this.opts.columns.map(c => ({ name: c.name })),
+      rows: rows.filter(r => r >= 0 && r < this.opts.rows.length).map(r => [...this.opts.rows[r]]),
+      cell: target && target.row >= 0 && target.col >= 0 ? this.opts.rows[target.row]?.[target.col] : undefined,
+    };
+  }
+  freezeCopy(context = false): import("../core/grid-clipboard").GridCopySnapshot {
+    if (context && this.frozenContext) {
+      if (this.frozenContext.generation !== this.copyGeneration) throw new Error("结果已刷新，旧菜单选择已失效，请重新选择");
+      return structuredClone(this.frozenContext);
+    }
+    return this.captureCopy();
+  }
+  flushEditing(): void { this.editSession?.commit(); }
+
   private moveFocus(row: number, col: number): void {
+    this.frozenContext = null;
+    this.contextTarget = null;
     this.lastFocused = { row, col };
     const selected = new Set(this.opts.selectedRows ?? []);
     selected.clear();
@@ -630,8 +924,8 @@ export class DataGrid {
     // 需要滚动时 scroll 事件会触发 renderRows 重建可视窗口
     this.updateSelectionVisual();
     // 滚动到可见区域
-    const top = row * ROW_HEIGHT;
-    const bottom = top + ROW_HEIGHT;
+    const top = row * this.rowHeight;
+    const bottom = top + this.rowHeight;
     const viewTop = this.scroll.scrollTop;
     const viewBottom = viewTop + (this.scroll.clientHeight || 400);
     if (top < viewTop) this.scroll.scrollTop = top;
@@ -641,55 +935,100 @@ export class DataGrid {
   /** 在指定单元格显示编辑输入框。 */
   beginEdit(row: number, col: number, current: string | null): HTMLInputElement | null {
     this.endEdit();
-    const tr = this.tbody.querySelector<HTMLElement>(`tr[data-row="${row}"]`);
+    if (this.opts.readOnly || !this.opts.columns[col] || !this.opts.rows[row]) return null;
+    const generation = this.copyGeneration;
+    const tr = this.tbody.querySelector<HTMLTableRowElement>(`tr[data-row="${row}"]`);
     if (!tr) return null;
     const td = tr.querySelector<HTMLElement>(`td[data-col="${col}"]`);
     if (!td) return null;
     td.classList.add("grid-cell-editing");
+    const editor = document.createElement("div");
+    editor.className = "grid-cell-editor";
+    Object.assign(editor.style, { position: "absolute", inset: "0", display: "flex" });
     const input = document.createElement("input");
     input.className = "grid-cell-input";
+    input.type = "text";
+    input.setAttribute("aria-label", `编辑 ${this.opts.columns[col].name}`);
+    Object.assign(input.style, { position: "relative", flex: "1", minWidth: "0" });
     input.value = current ?? "";
-    td.appendChild(input);
-    input.focus();
-    input.select();
-    this.editingInput = input;
+    editor.appendChild(input);
+    let modified = false;
+    const type = temporalPickerType(this.opts.columns[col].type);
+    let picker: HTMLInputElement | null = null;
+    if (type) {
+      picker = document.createElement("input");
+      picker.type = type;
+      picker.className = "grid-cell-picker";
+      picker.step = "1";
+      picker.setAttribute("aria-label", `选择 ${this.opts.columns[col].name} 的${type === "date" ? "日期" : type === "time" ? "时间" : "日期时间"}`);
+      picker.title = type === "time" ? "时间选择器；负数或超过24小时请直接输入" : "选择日期或时间；保留文本中的小数秒和时区";
+      // 紧凑旁置控件保留原生指示器与键盘入口；完整值始终在左侧文本中可读可改。
+      Object.assign(picker.style, {
+        flex: "0 0 28px", width: "28px", minWidth: "0", height: "100%", padding: "0 2px",
+        border: "1px solid var(--accent-500)", background: "var(--bg-surface)", color: "var(--text)",
+      });
+      picker.value = pickerValue(type, input.value);
+      picker.addEventListener("change", () => {
+        const value = mergePickerValue(type, input.value, picker!.value);
+        if (value !== input.value) { input.value = value; modified = true; }
+      });
+      editor.appendChild(picker);
+    }
+    input.addEventListener("input", () => {
+      modified = true;
+      if (picker && type) picker.value = pickerValue(type, input.value);
+    });
+    input.addEventListener("beforeinput", () => { modified = true; });
     const commit = () => {
-      const v = input.value;
-      const had = this.editingInput === input;
+      if (this.editingInput !== input || generation !== this.copyGeneration) return;
+      const value = current === null && !modified && input.value === "" ? null : input.value;
       this.endEdit();
-      if (had) this.cb.onEditEnd?.(row, col, v === "" ? null : v); // 空串 = NULL
+      if (generation === this.copyGeneration) this.cb.onEditEnd?.(row, col, value);
     };
-    input.addEventListener("keydown", (e) => {
+    editor.addEventListener("keydown", (e) => {
       e.stopPropagation();
+      if (e.isComposing) return;
+      if (e.target === input && (e.key === "Backspace" || e.key === "Delete")) modified = true;
       if (e.key === "Enter") {
         e.preventDefault();
         commit();
+        this.el.focus({ preventScroll: true });
       } else if (e.key === "Escape") {
-        // 取消编辑：不提交任何值
         e.preventDefault();
         this.endEdit();
+        this.el.focus({ preventScroll: true });
       }
     });
-    input.addEventListener("blur", () => {
-      if (this.editingInput === input) {
-        commit();
-      }
+    editor.addEventListener("focusout", (e) => {
+      if (e.relatedTarget instanceof Node && editor.contains(e.relatedTarget)) return;
+      // 原生 picker 与文本之间换焦点属于同一次编辑；真正离开组件才提交。
+      queueMicrotask(() => { if (!editor.contains(document.activeElement)) commit(); });
     });
+    this.editingInput = input;
+    this.editSession = { row: tr, editor, commit };
+    td.appendChild(editor);
+    input.focus({ preventScroll: true });
+    input.select();
+    this.cb.onEditBegin?.(row, col);
     return input;
   }
 
   /** 结束编辑。 */
   endEdit(): void {
-    if (this.editingInput) {
-      // 先解除引用再移除：remove() 会同步触发 blur，blur 里的 commit() 会重入 endEdit()，
-      // 若此时 editingInput 仍指向已移除节点，会对同一节点再次 remove() 并抛 NotFoundError。
-      const input = this.editingInput;
-      this.editingInput = null;
-      input.remove();
-    }
+    const session = this.editSession;
+    if (!session) return;
+    // 先使所有事件失效，再移除编辑器，防止 blur/Enter 重入重复提交。
+    this.editingInput = null;
+    this.editSession = null;
+    session.editor.remove();
     this.tbody.querySelectorAll(".grid-cell-editing").forEach((el) => {
       el.classList.remove("grid-cell-editing");
     });
+    // 编辑结束（提交或取消）后内容不再选中：通知宿主收起单元格内容面板。
+    // 与 onEditBegin 成对，避免退出编辑后面板残留（BUG-R1-017）。
+    this.cb.onEditBegin?.(this.lastFocused?.row ?? -1, this.lastFocused?.col ?? -1);
+    this.lastWindow = { first: -1, last: -1, total: -1, cols: -1 };
+    this.scheduleRenderRows();
   }
 
   /** 导出为纯文本（复制用）。 */
@@ -730,7 +1069,11 @@ export class DataGrid {
   /** 设置选中列（-1 清除）。 */
   set selectedColumn(index: number) {
     this.selectedCol = index;
-    this.renderHeader();
-    this.renderRows();
+    this.updateColumnSelectionVisual();
+  }
+
+  /** 是否有单元格正在编辑（文本预览面板只在编辑选中内容时出现）。 */
+  get editingActive(): boolean {
+    return !!this.editingInput;
   }
 }
