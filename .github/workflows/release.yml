@@ -96,7 +96,7 @@ jobs:
         run: |
           $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
           New-Item -ItemType Directory -Force -Path dist-release | Out-Null
-          $portable = "dist-release/NavKit-$ver-windows-x64-portable"
+          $portable = "portable-staging/NavKit-$ver-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $portable, "$portable/data" | Out-Null
           Copy-Item src-tauri/target/release/navkit.exe "$portable/NavKit.exe"
           Copy-Item "assets/使用说明.txt" "$portable/README-portable.txt"
@@ -170,5 +170,5 @@ jobs:
           body_path: .github/RELEASE_NOTES.md
           prerelease: true
           make_latest: false
-          files: dist-release/**
+          files: dist-release/*
           fail_on_unmatched_files: false
