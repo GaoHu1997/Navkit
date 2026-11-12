@@ -32,7 +32,7 @@ jobs:
             target: ''
           - label: macos-native
             os: macos-latest
-            bundles: app,dmg
+            bundles: app
             target: ''
           - label: linux-x64
             os: ubuntu-22.04
@@ -56,7 +56,7 @@ jobs:
       - name: Install macOS ODBC (unixODBC)
         if: runner.os == 'macOS'
         run: |
-          brew install unixodbc
+          brew install unixodbc dylibbundler
           ODBC_PREFIX="$(brew --prefix unixodbc)"
           echo "CPATH=$ODBC_PREFIX/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=$ODBC_PREFIX/lib" >> "$GITHUB_ENV"
@@ -100,6 +100,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $portable, "$portable/data" | Out-Null
           Copy-Item src-tauri/target/release/navkit.exe "$portable/NavKit.exe"
           Copy-Item "assets/使用说明.txt" "$portable/README-portable.txt"
+          try {
+            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$portable/MicrosoftEdgeWebview2Setup.exe" -UseBasicParsing -TimeoutSec 180
+          } catch { Write-Warning "WebView2 bootstrapper download failed: $_" }
           Compress-Archive -Path "$portable/*" -DestinationPath "dist-release/NavKit-$ver-windows-x64-portable.zip" -Force
           Copy-Item src-tauri/target/release/bundle/nsis/*.exe dist-release/ -Force
 
@@ -110,18 +113,16 @@ jobs:
           set -euo pipefail
           ver=$(node -p "require('./package.json').version")
           arch=$(uname -m)
-          mkdir -p dist-release
-          cp src-tauri/target/release/bundle/dmg/*.dmg dist-release/
           APP="src-tauri/target/release/bundle/macos/NavKit.app"
-          if [ ! -d "$APP" ]; then
-            DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
-            MNT=$(mktemp -d)
-            hdiutil attach "$DMG" -nobrowse -mountpoint "$MNT" >/dev/null
-            ditto -c -k --sequesterRsrc --keepParent "$MNT/NavKit.app" "dist-release/NavKit-$ver-macos-$arch-portable.zip"
-            hdiutil detach "$MNT" >/dev/null
-          else
-            ditto -c -k --sequesterRsrc --keepParent "$APP" "dist-release/NavKit-$ver-macos-$arch-portable.zip"
-          fi
+          BIN="$APP/Contents/MacOS/navkit"
+          [ -d "$APP" ] || { echo "NavKit.app not found"; exit 1; }
+          mkdir -p "$APP/Contents/Frameworks" dist-release
+          # 把 unixODBC 等非系统动态库打进 App，并改写 install_name，避免干净机器缺少 libodbc 启动失败
+          dylibbundler -od -b -x "$BIN" -d "$APP/Contents/Frameworks" -p @executable_path/../Frameworks
+          codesign --force --deep --sign - "$APP" || true
+          echo '--- bundled dylibs ---'; ls -la "$APP/Contents/Frameworks"
+          hdiutil create -volname "NavKit" -srcfolder "$APP" -ov -format UDZO "dist-release/NavKit-$ver-macos-$arch.dmg" >/dev/null
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist-release/NavKit-$ver-macos-$arch-portable.zip"
 
       - name: Package portable and collect artifacts (Linux)
         if: runner.os == 'Linux'
@@ -132,7 +133,7 @@ jobs:
           mkdir -p dist-release
           cp src-tauri/target/release/bundle/appimage/*.AppImage dist-release/
           cp src-tauri/target/release/bundle/deb/*.deb dist-release/
-          tar -czf "dist-release/NavKit-$ver-linux-x64-portable.tar.gz" -C src-tauri/target/release navkit
+          # AppImage 自带 unixODBC 等运行库，作为 Linux 免安装便携版
           cp "assets/使用说明.txt" "dist-release/README-portable.txt"
 
       - name: Upload build artifacts
