@@ -32,7 +32,7 @@ jobs:
             target: ''
           - label: macos-native
             os: macos-latest
-            bundles: dmg
+            bundles: app,dmg
             target: ''
           - label: linux-x64
             os: ubuntu-22.04
@@ -111,10 +111,17 @@ jobs:
           ver=$(node -p "require('./package.json').version")
           arch=$(uname -m)
           mkdir -p dist-release
-          ditto -c -k --sequesterRsrc --keepParent \
-            "src-tauri/target/release/bundle/macos/NavKit.app" \
-            "dist-release/NavKit-$ver-macos-$arch-portable.zip"
           cp src-tauri/target/release/bundle/dmg/*.dmg dist-release/
+          APP="src-tauri/target/release/bundle/macos/NavKit.app"
+          if [ ! -d "$APP" ]; then
+            DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+            MNT=$(mktemp -d)
+            hdiutil attach "$DMG" -nobrowse -mountpoint "$MNT" >/dev/null
+            ditto -c -k --sequesterRsrc --keepParent "$MNT/NavKit.app" "dist-release/NavKit-$ver-macos-$arch-portable.zip"
+            hdiutil detach "$MNT" >/dev/null
+          else
+            ditto -c -k --sequesterRsrc --keepParent "$APP" "dist-release/NavKit-$ver-macos-$arch-portable.zip"
+          fi
 
       - name: Package portable and collect artifacts (Linux)
         if: runner.os == 'Linux'
