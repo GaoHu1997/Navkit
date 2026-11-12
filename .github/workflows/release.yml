@@ -28,16 +28,29 @@ jobs:
         include:
           - label: windows-x64
             os: windows-latest
+            target: ''
+            arch: x64
             bundles: nsis
+          - label: windows-arm64
+            os: windows-11-arm
             target: ''
-          - label: macos-native
+            arch: arm64
+            bundles: nsis
+          - label: macos-arm64
             os: macos-latest
+            target: aarch64-apple-darwin
+            arch: arm64
             bundles: app
-            target: ''
+          - label: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+            bundles: app
           - label: linux-x64
             os: ubuntu-22.04
-            bundles: appimage,deb
             target: ''
+            arch: x64
+            bundles: appimage,deb
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +66,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install macOS ODBC (unixODBC)
+      - name: Add Rust target
+        if: ${{ matrix.target != '' }}
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install macOS unixODBC and dylibbundler
         if: runner.os == 'macOS'
         run: |
           brew install unixodbc dylibbundler
@@ -90,51 +107,60 @@ jobs:
           fi
           npx tauri "${args[@]}"
 
-      - name: Package portable and collect artifacts (Windows)
+      - name: Package Windows
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          New-Item -ItemType Directory -Force -Path dist-release | Out-Null
-          $portable = "portable-staging/NavKit-$ver-windows-x64-portable"
-          New-Item -ItemType Directory -Force -Path $portable, "$portable/data" | Out-Null
-          Copy-Item src-tauri/target/release/navkit.exe "$portable/NavKit.exe"
-          Copy-Item "assets/使用说明.txt" "$portable/README-portable.txt"
+          $target = "${{ matrix.target }}"
+          $rel = if ($target) { "src-tauri/target/$target/release" } else { "src-tauri/target/release" }
+          New-Item -ItemType Directory -Force -Path dist-release, portable-staging | Out-Null
+          $stage = "portable-staging/NavKit-$ver-windows-$env:ARCH-portable"
+          New-Item -ItemType Directory -Force -Path $stage, "$stage/data" | Out-Null
+          Copy-Item "$rel/navkit.exe" "$stage/NavKit.exe"
+          Copy-Item "assets/使用说明.txt" "$stage/README-portable.txt"
           try {
-            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$portable/MicrosoftEdgeWebview2Setup.exe" -UseBasicParsing -TimeoutSec 180
+            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$stage/MicrosoftEdgeWebview2Setup.exe" -UseBasicParsing -TimeoutSec 180
           } catch { Write-Warning "WebView2 bootstrapper download failed: $_" }
-          Compress-Archive -Path "$portable/*" -DestinationPath "dist-release/NavKit-$ver-windows-x64-portable.zip" -Force
-          Copy-Item src-tauri/target/release/bundle/nsis/*.exe dist-release/ -Force
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist-release/NavKit-$ver-windows-$env:ARCH-portable.zip" -Force
+          Copy-Item "$rel/navkit.exe" "dist-release/NavKit-$ver-windows-$env:ARCH-portable.exe" -Force
+          $setup = Get-ChildItem "$rel/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'setup' } | Select-Object -First 1
+          if (-not $setup) { $setup = Get-ChildItem "$rel/bundle/nsis/*.exe" | Select-Object -First 1 }
+          Copy-Item $setup.FullName "dist-release/NavKit-$ver-windows-$env:ARCH-installer.exe" -Force
+          Get-ChildItem dist-release | Select-Object Name
 
-      - name: Package portable and collect artifacts (macOS)
+      - name: Package macOS
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           ver=$(node -p "require('./package.json').version")
-          arch=$(uname -m)
-          APP="src-tauri/target/release/bundle/macos/NavKit.app"
+          REL="src-tauri/target/${{ matrix.target }}/release"
+          APP="$REL/bundle/macos/NavKit.app"
           BIN="$APP/Contents/MacOS/navkit"
-          [ -d "$APP" ] || { echo "NavKit.app not found"; exit 1; }
+          [ -d "$APP" ] || { echo "app not found: $APP"; exit 1; }
           mkdir -p "$APP/Contents/Frameworks" dist-release
-          # 把 unixODBC 等非系统动态库打进 App，并改写 install_name，避免干净机器缺少 libodbc 启动失败
           dylibbundler -od -b -x "$BIN" -d "$APP/Contents/Frameworks" -p @executable_path/../Frameworks
           codesign --force --deep --sign - "$APP" || true
           echo '--- bundled dylibs ---'; ls -la "$APP/Contents/Frameworks"
-          hdiutil create -volname "NavKit" -srcfolder "$APP" -ov -format UDZO "dist-release/NavKit-$ver-macos-$arch.dmg" >/dev/null
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist-release/NavKit-$ver-macos-$arch-portable.zip"
+          hdiutil create -volname "NavKit" -srcfolder "$APP" -ov -format UDZO "dist-release/NavKit-$ver-macos-$ARCH-installer.dmg" >/dev/null
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist-release/NavKit-$ver-macos-$ARCH-portable.zip"
 
-      - name: Package portable and collect artifacts (Linux)
+      - name: Package Linux
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           ver=$(node -p "require('./package.json').version")
           mkdir -p dist-release
-          cp src-tauri/target/release/bundle/appimage/*.AppImage dist-release/
-          cp src-tauri/target/release/bundle/deb/*.deb dist-release/
-          # AppImage 自带 unixODBC 等运行库，作为 Linux 免安装便携版
-          cp "assets/使用说明.txt" "dist-release/README-portable.txt"
+          cp src-tauri/target/release/bundle/deb/*.deb "dist-release/NavKit-$ver-linux-$ARCH-installer.deb"
+          cp src-tauri/target/release/bundle/appimage/*.AppImage "dist-release/NavKit-$ver-linux-$ARCH-portable.AppImage"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
