@@ -30,10 +30,10 @@ jobs:
             os: windows-latest
             bundles: nsis
             target: ''
-          - label: macos-universal
+          - label: macos-native
             os: macos-latest
             bundles: dmg
-            target: universal-apple-darwin
+            target: ''
           - label: linux-x64
             os: ubuntu-22.04
             bundles: appimage,deb
@@ -47,15 +47,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add macOS targets
+      - name: Install macOS ODBC (unixODBC)
         if: runner.os == 'macOS'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        run: |
+          brew install unixodbc
+          ODBC_PREFIX="$(brew --prefix unixodbc)"
+          echo "CPATH=$ODBC_PREFIX/include" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$ODBC_PREFIX/lib" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ODBC_PREFIX/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -104,11 +109,12 @@ jobs:
         run: |
           set -euo pipefail
           ver=$(node -p "require('./package.json').version")
+          arch=$(uname -m)
           mkdir -p dist-release
           ditto -c -k --sequesterRsrc --keepParent \
-            "src-tauri/target/universal-apple-darwin/release/bundle/macos/NavKit.app" \
-            "dist-release/NavKit-$ver-macos-universal-portable.zip"
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dist-release/
+            "src-tauri/target/release/bundle/macos/NavKit.app" \
+            "dist-release/NavKit-$ver-macos-$arch-portable.zip"
+          cp src-tauri/target/release/bundle/dmg/*.dmg dist-release/
 
       - name: Package portable and collect artifacts (Linux)
         if: runner.os == 'Linux'

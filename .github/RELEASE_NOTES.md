@@ -8,7 +8,7 @@
 | 平台 | 安装包 | 免安装便携版 |
 |---|---|---|
 | Windows x64 | `NavKit_1.0.0-pre_x64-setup.exe`（NSIS 安装包） | `NavKit-1.0.0-pre-windows-x64-portable.zip` |
-| macOS（Intel + Apple Silicon 通用） | `NavKit_1.0.0-pre_universal.dmg` | `NavKit-1.0.0-pre-macos-universal-portable.zip` |
+| macOS（Apple Silicon / Intel，按构建机架构） | `NavKit_1.0.0-pre_<arch>.dmg` | `NavKit-1.0.0-pre-macos-<arch>-portable.zip` |
 | Ubuntu / Linux x64 | `NavKit_1.0.0-pre_amd64.deb`、`NavKit_1.0.0-pre_amd64.AppImage` | `NavKit-1.0.0-pre-linux-x64-portable.tar.gz`（AppImage 亦可直接运行） |
 
 > 文件名中的版本号以实际构建产物为准。免安装版解压即用，不写注册表、不写系统目录。
@@ -25,7 +25,7 @@
 ## 系统要求
 
 - **Windows**：Windows 10/11 x64，需要 WebView2 运行时（安装包会自动处理；便携版附带 WebView2 离线引导程序）。
-- **macOS**：macOS 11 及以上，Intel 与 Apple Silicon 均受支持（通用二进制）。
+- **macOS**：macOS 11 及以上；安装包架构以文件名中的 `aarch64`（Apple Silicon）或 `x64`（Intel）为准。
 - **Ubuntu**：Ubuntu 22.04 及以上 x64，需安装系统 WebKitGTK 等运行库（`.deb` 会自动声明依赖）。
 - JDBC / H2 连接需要 Java 11+（完整 JDK，含 `jdk.compiler`）；程序内可一键检测并安装托管运行时。
 
