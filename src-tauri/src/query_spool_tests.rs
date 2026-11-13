@@ -93,7 +93,7 @@ fn dropping_registry_preserves_active_set_until_last_arc() {
     let dir = TempDir::new();
     let spool = Arc::new(Spool {
         id: uuid::Uuid::new_v4().to_string(), connection: "connection".into(), owner: "tab".into(), namespace: "schema".into(), principal: "alice".into(),
-        dir: dir.0.clone(), sets: parking_lot::Mutex::new(Vec::new()), created: Instant::now(), completed: AtomicBool::new(false),
+        dir: dir.0.clone(), sets: parking_lot::Mutex::new(Vec::new()), created: Instant::now(), completed: AtomicBool::new(false), execution_verified: AtomicBool::new(true),
     });
     registry().lock().insert(spool.id.clone(), spool.clone());
     let set = spool.begin_set(0, &names(), &[]);
@@ -118,7 +118,7 @@ fn failed_creation_is_retained_and_finished() {
     std::fs::write(&obstructed, b"file").unwrap();
     let spool = Spool {
         id: uuid::Uuid::new_v4().to_string(), connection: String::new(), owner: String::new(), namespace: String::new(), principal: String::new(),
-        dir: obstructed, sets: parking_lot::Mutex::new(Vec::new()), created: Instant::now(), completed: AtomicBool::new(false),
+        dir: obstructed, sets: parking_lot::Mutex::new(Vec::new()), created: Instant::now(), completed: AtomicBool::new(false), execution_verified: AtomicBool::new(true),
     };
     let set = spool.begin_set(0, &names(), &[]);
     assert!(Arc::ptr_eq(&set, &spool.set(0).unwrap()));

@@ -126,6 +126,7 @@ pub struct SpoolSet {
     writer: parking_lot::Mutex<Writer>,
     total: AtomicU64,
     truncated: AtomicBool,
+    execution_verified: AtomicBool,
 }
 
 fn row_bytes(row: &[Option<String>]) -> usize {
@@ -153,7 +154,7 @@ impl SpoolSet {
         Ok(Self {
             names: names.to_vec(), types: types.to_vec(), file,
             writer: parking_lot::Mutex::new(Writer { out: Some(BufWriter::new(out)), offsets: Vec::new(), bytes: 0, reserved: 0, rows: 0, max_bytes: MAX_SET_BYTES, finished: false, stopped: None }),
-            total: AtomicU64::new(0), truncated: AtomicBool::new(false),
+            total: AtomicU64::new(0), truncated: AtomicBool::new(false), execution_verified: AtomicBool::new(true),
         })
     }
 
@@ -161,7 +162,7 @@ impl SpoolSet {
         Self {
             names: names.to_vec(), types: types.to_vec(), file: PathBuf::new(),
             writer: parking_lot::Mutex::new(Writer { out: None, offsets: Vec::new(), bytes: 0, reserved: 0, rows: 0, max_bytes: MAX_SET_BYTES, finished: false, stopped: Some(format!("结果缓存无法创建：{error:#}")) }),
-            total: AtomicU64::new(0), truncated: AtomicBool::new(true),
+            total: AtomicU64::new(0), truncated: AtomicBool::new(true), execution_verified: AtomicBool::new(true),
         }
     }
 
@@ -233,6 +234,9 @@ impl SpoolSet {
     pub fn types(&self) -> Vec<String> { self.types.clone() }
 
     pub fn ensure_complete(&self) -> Result<()> {
+        if !self.execution_verified.load(Ordering::Acquire) {
+            bail!("执行尚未成功终结，不能将临时缓存当作完整结果导出");
+        }
         let writer = self.writer.lock();
         if !writer.finished { bail!("查询结果仍在写入，请等待执行完成后导出"); }
         if let Some(reason) = &writer.stopped {
@@ -242,6 +246,9 @@ impl SpoolSet {
     }
 
     fn readable(&self) -> Result<()> {
+        if !self.execution_verified.load(Ordering::Acquire) {
+            bail!("查询尚未成功终结，首屏仅为临时预览，请等待终态后分页");
+        }
         if !self.writer.lock().finished { bail!("查询结果仍在写入，请等待执行完成后分页"); }
         Ok(())
     }
@@ -359,15 +366,26 @@ pub struct Spool {
     sets: parking_lot::Mutex<Vec<Option<Arc<SpoolSet>>>>,
     created: Instant,
     completed: AtomicBool,
+    execution_verified: AtomicBool,
 }
 
 impl Spool {
+    pub(crate) fn pending_execution(&self) {
+        self.execution_verified.store(false, Ordering::Release);
+        for set in self.sets.lock().iter().flatten() { set.execution_verified.store(false, Ordering::Release); }
+    }
+    pub(crate) fn verify_execution(&self) {
+        self.execution_verified.store(true, Ordering::Release);
+        for set in self.sets.lock().iter().flatten() { set.execution_verified.store(true, Ordering::Release); }
+    }
+
     pub fn begin_set(&self, index: usize, names: &[String], types: &[String]) -> Arc<SpoolSet> {
         let mut sets = self.sets.lock();
         while sets.len() <= index { sets.push(None); }
         if let Some(set) = &sets[index] { return set.clone(); }
         let set = Arc::new(SpoolSet::create(&self.dir, &self.id, index, names, types)
             .unwrap_or_else(|error| SpoolSet::unavailable(names, types, error)));
+        set.execution_verified.store(self.execution_verified.load(Ordering::Acquire), Ordering::Release);
         live_sets().lock().push(Arc::downgrade(&set));
         if self.completed.load(Ordering::Acquire) { set.finish(); }
         sets[index] = Some(set.clone());
@@ -446,7 +464,7 @@ pub fn create(connection: &str, owner: &str, namespace: &str, principal: &str) -
     let id = uuid::Uuid::new_v4().to_string();
     let spool = Arc::new(Spool {
         id: id.clone(), connection: connection.into(), owner: owner.into(), namespace: namespace.into(), principal: principal.into(),
-        dir: spool_dir(), sets: parking_lot::Mutex::new(Vec::new()), created: Instant::now(), completed: AtomicBool::new(false),
+        dir: spool_dir(), sets: parking_lot::Mutex::new(Vec::new()), created: Instant::now(), completed: AtomicBool::new(false), execution_verified: AtomicBool::new(true),
     });
     all.insert(id, spool.clone());
     live_spools().lock().push(Arc::downgrade(&spool));

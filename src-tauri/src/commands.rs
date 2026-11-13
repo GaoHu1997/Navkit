@@ -510,7 +510,15 @@ pub(crate) fn register_execution(state: &AppState, request: &crate::execution_co
 }
 
 pub(crate) async fn execute_sql_service(state: &AppState, request: crate::execution_contracts::ExecutionRequest, principal: &str) -> CmdResult<crate::execution_contracts::ExecutionOutcome> {
-    let (cfg, binding, entry) = register_execution(state, &request, principal)?;
+    let registered = register_execution(state, &request, principal)?;
+    execute_registered_sql_service(state, request, principal, registered).await
+}
+
+pub(crate) async fn execute_registered_sql_service(
+    state: &AppState, request: crate::execution_contracts::ExecutionRequest, principal: &str,
+    registered: (ConnectionConfig, crate::execution::Binding, Arc<crate::execution::Entry>),
+) -> CmdResult<crate::execution_contracts::ExecutionOutcome> {
+    let (cfg, binding, entry) = registered;
     let mut transaction = false;
     let history_context=crate::sql_history::Context { connection_id:cfg.id.clone(),connection_name:cfg.name.clone(),kind:cfg.kind.0.clone(),database:cfg.database.clone(),namespace:request.namespace.clone(),path:Some(state.store.data_root().join("logs/sql_log.jsonl")),origin:request.origin.clone().unwrap_or_else(||"tool".into()),operation_id:Some(request.execution_id.clone()) };
     let outcome = crate::sql_history::scope(history_context,async {
@@ -553,6 +561,9 @@ pub(crate) async fn execute_sql_service(state: &AppState, request: crate::execut
             return Err(AppError::coded("MANUAL_TRANSACTION_ENDED", "该查询的手动事务已结束，请刷新事务状态；没有发送 SQL"));
         }
         let (key, conn) = query_db(state, &cfg.id, Some(&request.namespace)).await?;
+        if entry.stream().is_some() && !matches!(conn.as_ref(), db::Db::Sqlite(_) | db::Db::Mysql(_) | db::Db::Postgres(_)) {
+            return Err(AppError::coded("STREAM_ADAPTER_UNSUPPORTED", "实际物理适配器不是已认证的原生流式驱动；SQL 没有发送"));
+        }
         if execution_binding(&state, &saved_config(state, &cfg.id)?, principal, &request.owner_id, &request.namespace)? != binding {
             return Err(AppError::coded("EXECUTION_CONTEXT_CHANGED", "排队期间保存连接已改变，SQL 没有发送"));
         }
@@ -603,6 +614,66 @@ pub(crate) async fn execute_sql_service(state: &AppState, request: crate::execut
 pub async fn execute_sql_v2(window: tauri::WebviewWindow, state: State<'_, AppState>, request: crate::execution_contracts::ExecutionRequest) -> CmdResult<crate::execution_contracts::ExecutionOutcome> {
     execute_sql_service(&state, request, window.label()).await
 }
+/// Opt-in native streaming. Reuses the reviewed one-use SQL grant unchanged.
+/// Unsupported adapters are rejected before registration; use execute_sql_v2 there.
+pub(crate) fn register_streaming_execution(
+    state: &AppState, request: &crate::execution_contracts::ExecutionRequest, principal: &str,
+    options: crate::execution_stream::StreamOptions,
+) -> CmdResult<(ConnectionConfig, crate::execution::Binding, Arc<crate::execution::Entry>)> {
+    options.validate()?;
+    let cfg = saved_config(state, &request.connection_id)?;
+    if db::runtime::prepare_at(&cfg, state.store.data_root())?.http.is_some() {
+        return Err(AppError::coded("STREAM_ADAPTER_UNSUPPORTED", "HTTP 隧道尚未认证首屏流式返回；没有发送 SQL"));
+    }
+    if !matches!(cfg.kind.protocol(), Protocol::Mysql | Protocol::Postgres | Protocol::Sqlite)
+        || db::explicit_legacy_binding(&cfg.params) {
+        return Err(AppError::coded("STREAM_ADAPTER_UNSUPPORTED", "当前适配器尚未认证首屏流式返回；请使用原查询接口，没有发送 SQL"));
+    }
+    let registered = register_execution(state, request, principal)?;
+    registered.2.attach_stream(crate::execution_stream::StreamProgress::new(options));
+    Ok(registered)
+}
+
+#[tauri::command]
+pub async fn execute_sql_streaming(
+    app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, AppState>,
+    request: crate::execution_contracts::ExecutionRequest, options: crate::execution_stream::StreamOptions,
+) -> CmdResult<crate::execution_stream::StreamSnapshot> {
+    use tauri::Manager;
+    let principal = window.label().to_owned();
+    let registered = register_streaming_execution(&state, &request, &principal, options)?;
+    let entry = registered.2.clone();
+    let progress = entry.stream().expect("stream registered");
+    crate::execution_stream::launch(entry.clone(), async move {
+        let state = app.state::<AppState>();
+        execute_registered_sql_service(&state, request, &principal, registered).await
+    });
+    // Dropping this IPC waiter does NOT drop/abort the owning database worker.
+    Ok(progress.wait_first(&entry).await)
+}
+
+pub(crate) fn stream_snapshot_service(
+    state: &AppState, principal: &str, execution_id: &str, connection_id: &str, owner_id: &str, namespace: &str,
+) -> CmdResult<crate::execution_stream::StreamSnapshot> {
+    if uuid::Uuid::parse_str(execution_id).is_err() || connection_id.is_empty() || connection_id.len() > 512
+        || owner_id.is_empty() || owner_id.len() > 256 || namespace.len() > 1024 || namespace.contains('\0') {
+        return Err(AppError::coded("EXECUTION_CONTEXT_INVALID", "流式快照上下文无效"));
+    }
+    let cfg = saved_config(state, connection_id)?;
+    let binding = execution_binding(state, &cfg, principal, owner_id, namespace)?;
+    let entry = state.executions.authorized(execution_id, &binding)?;
+    let progress = entry.stream().ok_or_else(|| AppError::coded("EXECUTION_NOT_STREAMING", "此执行未使用流式接口"))?;
+    Ok(progress.snapshot(&entry))
+}
+
+#[tauri::command]
+pub fn execution_stream_snapshot(
+    window: tauri::WebviewWindow, state: State<'_, AppState>,
+    execution_id: String, connection_id: String, owner_id: String, namespace: String,
+) -> CmdResult<crate::execution_stream::StreamSnapshot> {
+    stream_snapshot_service(&state, window.label(), &execution_id, &connection_id, &owner_id, &namespace)
+}
+
 #[tauri::command]
 pub fn cancel_execution(window: tauri::WebviewWindow, state: State<'_, AppState>, execution_id: String, connection_id: String, owner_id: String, namespace: String) -> CmdResult<crate::execution_contracts::CancelAcknowledgement> {
     let cfg = saved_config(&state, &connection_id)?;

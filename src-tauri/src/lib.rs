@@ -40,6 +40,7 @@ pub mod db;
 mod error;
 pub mod execution_contracts;
 pub mod execution;
+pub mod execution_stream;
 mod query_spool;
 mod query_execution;
 mod query_lineage;
@@ -239,6 +240,8 @@ pub fn run() {
             commands::execute_sql,
             commands::issue_execution_grant,
             commands::execute_sql_v2,
+            commands::execute_sql_streaming,
+            commands::execution_stream_snapshot,
             commands::cancel_execution,
             commands::execution_status,
             commands::execution_capabilities,

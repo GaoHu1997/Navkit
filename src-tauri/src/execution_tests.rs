@@ -1,6 +1,8 @@
 //! C1 实际临时 SQLite；不启动服务，不连接用户数据库。
 #[path = "execution_spool_tests.rs"]
 mod spool_tests;
+#[path = "execution_stream_service_tests.rs"]
+mod stream_service_tests;
 use std::{sync::Arc, path::PathBuf, time::Duration};
 use crate::{commands::{AppState, execute_sql_service}, db::{self, Db}, execution::{Binding, Registry}, execution_contracts::*, models::*, storage::Store};
 const LONG: &str = "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n";

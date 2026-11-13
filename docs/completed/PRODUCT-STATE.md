@@ -4,7 +4,7 @@
 > 不是过程记录。任何一条能力的代码入口都必须可打开核对。
 > 更新规则见 `.agents/skills/docs-lifecycle/SKILL.md`。
 >
-> 最后核对：2026-11-12｜代码基线：工作树（`53e79e8` + 未提交修改；包含 IPC 与例程备份修复）
+> 最后核对：2026-11-13｜本次流式后端基线：`5d01dae` + 独立 `perf/query-streaming` 分支。以下既有历史验收记录未全部重跑，不代表本分支已做桌面/实库验收。
 
 ## 一、产品定位
 
@@ -20,6 +20,26 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 🚧 | 仍有已确认的功能缺口，需要继续写代码 |
 
 ## 三、当前验证状态
+
+### 2026-11-13 独立分支：查询首屏流式后端
+
+| 能力 | 验收 | 代码入口与边界 |
+|---|---|---|
+| 首屏预览与后台全量续读 | ⏳ 后端已实现，缺真实桌面与专用 MySQL 性能验收 | [流式观察契约](<../../src-tauri/src/execution_stream.rs>)、[命令入口](<../../src-tauri/src/commands.rs>)；只新增 opt-in API，旧 execute_sql_v2 和 ExecutionRequest 不变，不合并主工作树、不接前端 |
+| 取消、异常与最终回执 | ⏳ 原生生命周期回归通过 | [执行引擎](<../../src-tauri/src/execution.rs>)；同一拥有者任务继续完整读取、监督取消与清理，再由 Entry::finish 发布终态；临时 preview 绝不等价于成功，失败撤销缓存，Unknown 的迟到清理不能变成成功 |
+| 完整缓存分页/导出 | ⏳ 本地 SQLite 全链路验证，缺用户实库验收 | [成功终态门](<../../src-tauri/src/query_spool.rs>)、[SQLite lineage 观察](<../../src-tauri/src/query_execution.rs>)；首屏之外仍写原执行全量缓存，成功清理后才开放缓存读/导出，不重跑 SQL |
+| MySQL 原生驱动流式验证 | ⏳ 回环协议模拟通过，非厂商实库结论 | [MySQL 8 协议模拟回归](<../../src-tauri/src/execution_stream_mysql_tests.rs>)；真实 SQLx 驱动、200 行后阻塞尾部，验证提前首屏、10050 行最后页、迟到错误撤销与定向 KILL QUERY；TLS/非空密码/多结果/用户具体 SQL 未实测 |
+
+**最终源码验证**：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib execution -- --test-threads=1 --nocapture`：112 通过、0 失败、3 ignored；`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib query_spool::tests:: -- --test-threads=1`：6 通过、0 失败。测试入口：[观察通道生命周期](<../../src-tauri/src/execution_stream_tests.rs>)、[实际命令服务与全量导出](<../../src-tauri/src/execution_stream_service_tests.rs>)、[旧 C1 回归](<../../src-tauri/src/execution_tests.rs>)。
+
+**性能证据边界**：本地 debug 构建、SQLite 50000 行的最近一次服务验证：默认首屏 200 行在 45.58 ms 返回，完整读取与清理在 1145.40 ms 完成；删除原表数据后仍从本次缓存导出 50000 行。它验证的是首屏/全量阶段解耦与不重放，不是对用户远程 MySQL SQL 的 DBX/DBeaver/NavKit 同环境速度对比，不能据此宣称界面已达到 1 秒。
+
+**完整库回归不是全绿**：最后一次完整库运行（末次快照资源标志修补前）1042 通过、2 失败、38 ignored；失败为 [账户权限断言](<../../src-tauri/src/db_users.rs#L789-L793>) 和 [SQL Server 模拟器认证连接重置](<../../src-tauri/src/transfer_export_protocol_tests.rs#L90-L94>)，两项单跑均复现，相关模块本轮未改。末次快照修补后，以上执行相关 112 项及缓存 6 项已重建复跑，不能把专项通过写成全库通过。完整文档链接检查仍有基线遗留的 4 个历史产物链接缺失；本次新增代码入口均存在。
+
+**接入契约**：先调用 issue_execution_grant，再以原请求调用 execute_sql_streaming，参数为 `{ request, options: { page_rows: 200 } }`；返回 `{ status, preview, outcome }`。首行慢时最多等待 1 秒便返回当前状态（这不是 SQL 超时），后续按原 execution/connection/owner/namespace 调 execution_stream_snapshot 轮询。preview.provisional=true、observed_rows 为已观察行数下界；停止仍用 cancel_execution。只有 outcome 是终态，result 只带元数据/总行数/spool_id，不留永久全量 rows 副本；最终成功后从 spool_id 调 fetch_query_rows 与 export_query_spooled。
+
+**现阶段限制**：默认首屏 200 行，可选 1..1000，8 MiB 保守上限；只提前展示 result_index=0，第一结果无行时暂时没有预览。后台期间暂不开放缓存翻页/导出和编辑。完整导出仍受既有 512 MiB 单结果 / 2 GiB 总缓存配额约束，失败明确拒绝完整导出，不静默漏行。JDBC/ODBC/REST/HTTP 隧道不宣称支持该流式 API；PostgreSQL 复用观察点但未做专用 PG 流式实库验收。前端接入尚未实施：[未开工范围与验收条件](<../planned/query-streaming-frontend.md>)。
+
 
 **2026-11-12 IPC 错误与例程备份修复**：
 
@@ -222,3 +242,4 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | active/ER原生逆向下一切片-20261111.md、planned/ER原生逆向下一切片-20261111.md | 并入 §四 ER 能力行、§五 PL-23 与 §六 第 9 条 |
 | active/当前轮次收尾与验证-20261111.md | 并入 §三 本轮全量结果与 §三 实测修正表 |
 | 2026-11-12 IPC 与例程备份修复（直接结果归档） | §三 增补真实根因、错误边界、回归与未通过项，不新增已完成过程文档 |
+| active/query-streaming-backend.md | §三 合并独立流式后端、成功终态导出门、MySQL 回环/生命周期回归与真实边界；前端未开工项放 planned/query-streaming-frontend.md |

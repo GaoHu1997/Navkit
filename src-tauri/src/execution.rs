@@ -20,6 +20,7 @@ pub struct Entry {
     spool: parking_lot::Mutex<Option<Arc<crate::query_spool::Spool>>>,
     query_capture: parking_lot::Mutex<Option<Arc<crate::query_execution::QueryCapture>>>,
     remote_transaction: parking_lot::Mutex<Option<String>>,
+    stream: parking_lot::Mutex<Option<Arc<crate::execution_stream::StreamProgress>>>,
 }
 struct Inner { state: ExecutionState, started: Option<Instant>, elapsed: u64, stop_confirmed: bool, work_settled: bool, finished: Option<Instant>, resources_pending: bool }
 pub struct Registry { entries: parking_lot::Mutex<HashMap<String, Arc<Entry>>>, grants: parking_lot::Mutex<crate::execution_grants::Grants>, epoch: Instant }
@@ -51,7 +52,7 @@ impl Registry {
             return Err(AppError::coded("EXECUTION_QUARANTINED", "此连接的控制或结果仍在隔离清理，不能发送新 SQL"));
         }
         self.grants.lock().consume(id, Some(token), &binding, scope, self.epoch.elapsed().as_millis() as u64)?;
-        let entry = Arc::new(Entry { id: id.into(), binding, budget: (ms != 0).then(|| Duration::from_millis(ms)), inner: parking_lot::Mutex::new(Inner { state: ExecutionState::Queued, started: None, elapsed: 0, stop_confirmed: false, work_settled: false, finished: None, resources_pending: false }), reason: AtomicU8::new(0), wake: Notify::new(), changed: Notify::new(), activity: Default::default(), spool: Default::default(), query_capture: Default::default(), remote_transaction: Default::default() });
+        let entry = Arc::new(Entry { id: id.into(), binding, budget: (ms != 0).then(|| Duration::from_millis(ms)), inner: parking_lot::Mutex::new(Inner { state: ExecutionState::Queued, started: None, elapsed: 0, stop_confirmed: false, work_settled: false, finished: None, resources_pending: false }), reason: AtomicU8::new(0), wake: Notify::new(), changed: Notify::new(), activity: Default::default(), spool: Default::default(), query_capture: Default::default(), remote_transaction: Default::default(), stream: Default::default() });
         entries.insert(id.into(), entry.clone()); Ok(entry)
     }
     fn request_scope(request: &ExecutionRequest) -> String {
@@ -105,7 +106,7 @@ impl Registry {
             return Err(AppError::coded("EXECUTION_QUARANTINED", "此连接的控制或结果仍在隔离清理，不能发送新 SQL"));
         }
         self.grants.lock().consume(&req.execution_id, req.execution_grant.as_deref(), &binding, &Self::request_scope(req), self.epoch.elapsed().as_millis() as u64)?;
-        let entry = Arc::new(Entry { id: req.execution_id.clone(), binding, budget: (ms != 0).then(|| Duration::from_millis(ms)), inner: parking_lot::Mutex::new(Inner { state: ExecutionState::Queued, started: None, elapsed: 0, stop_confirmed: false, work_settled: false, finished:None, resources_pending:false }), reason: AtomicU8::new(0), wake: Notify::new(), changed:Notify::new(), activity:Default::default(), spool:Default::default(), query_capture:Default::default(), remote_transaction:Default::default() });
+        let entry = Arc::new(Entry { id: req.execution_id.clone(), binding, budget: (ms != 0).then(|| Duration::from_millis(ms)), inner: parking_lot::Mutex::new(Inner { state: ExecutionState::Queued, started: None, elapsed: 0, stop_confirmed: false, work_settled: false, finished:None, resources_pending:false }), reason: AtomicU8::new(0), wake: Notify::new(), changed:Notify::new(), activity:Default::default(), spool:Default::default(), query_capture:Default::default(), remote_transaction:Default::default(), stream:Default::default() });
         if req.cancel_before_send { entry.request_stop(false); }
         entries.insert(entry.id.clone(), entry.clone()); Ok(entry)
     }
@@ -116,9 +117,21 @@ impl Registry {
     }
 }
 impl Entry {
+    pub(crate) fn attach_stream(&self, stream: Arc<crate::execution_stream::StreamProgress>) {
+        *self.stream.lock() = Some(stream);
+    }
+    pub(crate) fn stream(&self) -> Option<Arc<crate::execution_stream::StreamProgress>> { self.stream.lock().clone() }
+    pub(crate) fn preview_rows_limit(&self) -> usize { self.stream().map_or(RESULT_PREVIEW_ROWS, |s| s.options.page_rows) }
+    pub(crate) fn observe_stream_row(&self, index: usize, names: &[String], types: &[String], row: &[Option<String>]) {
+        if let Some(stream) = self.stream() { stream.observe(self, index, names, types, row); }
+    }
+
     pub(crate) fn own_activity(&self, guard: tokio::sync::OwnedRwLockReadGuard<()>) { *self.activity.lock()=Some(guard); }
     /// 挂上结果缓存；take 只在执行终结时调用，避免 spool 无限期占用临时文件。
-    pub(crate) fn attach_spool(&self, cache: Arc<crate::query_spool::Spool>) { *self.spool.lock() = Some(cache); }
+    pub(crate) fn attach_spool(&self, cache: Arc<crate::query_spool::Spool>) {
+        if self.stream().is_some() { cache.pending_execution(); }
+        *self.spool.lock() = Some(cache);
+    }
     pub(crate) fn spool(&self) -> Option<Arc<crate::query_spool::Spool>> { self.spool.lock().clone() }
     pub(crate) fn take_spool(&self) -> Option<Arc<crate::query_spool::Spool>> { self.spool.lock().take() }
     pub(crate) fn attach_query_capture(&self, capture: Arc<crate::query_execution::QueryCapture>) { *self.query_capture.lock() = Some(capture); }
@@ -195,9 +208,12 @@ impl Entry {
         // 完成时解除 Entry 的强引用；正在排空的任务持有自己的 Arc，最后释放时再清文件。
         if let Some(cache) = self.take_spool() {
             if state != ExecutionState::Succeeded { crate::query_spool::drop_spool(&cache.id); }
+            else if self.stream().is_some() { cache.verify_execution(); }
         }
         if state != ExecutionState::Succeeded { if let Some(capture) = self.query_capture() { capture.release(); } }
-        ExecutionOutcome { execution_id: self.id.clone(), state, effects: if no_effect { "no_effect" } else if value.is_some() { "completed" } else if reason != 0 || state == ExecutionState::Unknown { "possibly_applied" } else { "possibly_partial" }.into(), result: value, error, deadline: self.deadline(&inner), transaction_state: if state == ExecutionState::Unknown && (transaction || remote_transaction.is_some()) { "unknown" } else if let Some(remote) = remote_transaction.as_deref() { remote } else if transaction && state != ExecutionState::Succeeded { "rollback_required" } else if transaction { "active" } else { "none" }.into(), resources_pending:inner.resources_pending }
+        let outcome = ExecutionOutcome { execution_id: self.id.clone(), state, effects: if no_effect { "no_effect" } else if value.is_some() { "completed" } else if reason != 0 || state == ExecutionState::Unknown { "possibly_applied" } else { "possibly_partial" }.into(), result: value, error, deadline: self.deadline(&inner), transaction_state: if state == ExecutionState::Unknown && (transaction || remote_transaction.is_some()) { "unknown" } else if let Some(remote) = remote_transaction.as_deref() { remote } else if transaction && state != ExecutionState::Succeeded { "rollback_required" } else if transaction { "active" } else { "none" }.into(), resources_pending:inner.resources_pending };
+        if let Some(stream) = self.stream() { stream.complete(&outcome); }
+        outcome
     }
 }
 
@@ -321,25 +337,26 @@ struct ResultPreview {
     rows: Vec<Vec<Option<String>>>,
     total: u64,
     full: bool,
+    limit: usize,
 }
 impl ResultPreview {
-    fn new() -> Self { Self { rows: Vec::new(), total: 0, full: false } }
+    fn new(limit: usize) -> Self { Self { rows: Vec::new(), total: 0, full: false, limit } }
     fn observe(&mut self) { self.total += 1; }
     fn retain(&mut self, values: Vec<Option<String>>, remaining: &mut usize) {
         let bytes = std::mem::size_of::<Vec<Option<String>>>()
             + values.capacity() * std::mem::size_of::<Option<String>>()
             + values.iter().flatten().map(String::capacity).sum::<usize>();
-        if self.rows.len() >= RESULT_PREVIEW_ROWS || bytes > *remaining {
+        if self.rows.len() >= self.limit || bytes > *remaining {
             self.full = true;
             return;
         }
         *remaining -= bytes;
         self.rows.push(values);
-        self.full = self.rows.len() >= RESULT_PREVIEW_ROWS;
+        self.full = self.rows.len() >= self.limit;
     }
     fn message(&self) -> String {
         if self.total > self.rows.len() as u64 {
-            format!("查询已完成，共 {} 行；当前仅显示前 {} 行（预览上限 10000 行 / 50 MiB）。数据库响应已完整读取；复制、筛选和导出仅包含当前预览，查看其余数据请使用 LIMIT / OFFSET 分页查询。", self.total, self.rows.len())
+            format!("查询已完成，共 {} 行；当前仅显示前 {} 行。数据库响应已完整读取；复制、筛选和导出仅包含当前预览，查看其余数据请使用 LIMIT / OFFSET 分页查询。", self.total, self.rows.len())
         } else { String::new() }
     }
 }
@@ -350,8 +367,9 @@ macro_rules! batch {
             let start = Instant::now(); let mut sets = Vec::new(); let mut messages = Vec::new();
             // 结果缓存由命令层在执行前挂到 Entry 上；界面预览仍然有界，但要缓存完整结果。
             let cache = entry.spool();
+            let streaming = entry.stream();
             // 预算覆盖整个批次，防止多结果集绕过内存上限。
-            let mut remaining = RESULT_PREVIEW_BYTES;
+            let mut remaining = if streaming.is_some() { crate::execution_stream::STREAM_PREVIEW_BYTES } else { RESULT_PREVIEW_BYTES };
             for stmt in $split(sql).into_iter().filter(|s| crate::db::is_executable(s)) {
                 if entry.stopping() { return Err(anyhow!("执行已请求停止；剩余批次没有发送")); }
                 let statement_start = Instant::now();
@@ -366,12 +384,13 @@ macro_rules! batch {
                 } else {
                     let target = cache.as_ref().map(|c| c.begin_set(sets.len(), &names, &types));
                     let mut stream = crate::sql_history::query(&stmt).fetch(&mut *conn);
-                    let mut preview = ResultPreview::new();
+                    let mut preview = ResultPreview::new(entry.preview_rows_limit());
                     while let Some(row) = stream.try_next().await? {
                         preview.observe();
                         // 同一行的值只能转换一次：先写缓存，再按预览预算保留。
                         let values = $values(&row, names.len());
                         if let Some(target) = &target { target.push(&values); }
+                        if let Some(progress) = &streaming { progress.observe(entry, sets.len(), &names, &types, &values); }
                         if !preview.full { preview.retain(values, &mut remaining); }
                         // 定期让出执行器，防止已经缓冲的行 + 同步落盘饿死独立取消/超时分支。
                         if preview.total % 128 == 0 { tokio::task::yield_now().await; }

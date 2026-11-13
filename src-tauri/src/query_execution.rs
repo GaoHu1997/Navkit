@@ -131,14 +131,16 @@ pub(crate) async fn sqlite_batch(conn: &mut sqlx::SqliteConnection, sql: &str, e
     let Some(context) = entry.query_capture() else { return crate::execution::sqlite_batch(conn, sql, entry).await; };
     let start = std::time::Instant::now();
     let cache = entry.spool();
+    let streaming = entry.stream();
     let mut target: Option<Arc<crate::query_spool::SpoolSet>> = None;
     let attempt = crate::query_lineage::capture_sqlite_select(conn, sql, CaptureLimits::default(), |names, types, values| {
         if entry.stopping() { return Err(anyhow!("执行已请求停止，未发布查询来源证据")); }
         if target.is_none() { target = cache.as_ref().map(|cache| cache.begin_set(0, names, types)); }
         if let Some(target) = &target { target.push(values); }
+        if let Some(progress) = &streaming { progress.observe(entry, 0, names, types, values); }
         Ok(())
     }).await?;
-    let capture = match attempt {
+    let mut capture = match attempt {
         CaptureAttempt::NotEligible(_) => return crate::execution::sqlite_batch(conn, sql, entry).await,
         CaptureAttempt::Executed(capture) => capture,
     };
@@ -151,6 +153,7 @@ pub(crate) async fn sqlite_batch(conn: &mut sqlx::SqliteConnection, sql: &str, e
         format!("查询已完成，共 {} 行；当前显示前 {} 行，分页与导出使用本次缓存。", capture.total, capture.display_rows.len())
     } else { String::new() };
     context.publish(&capture);
+    if entry.stream().is_some() { capture.display_rows.truncate(entry.preview_rows_limit()); }
     let columns = capture.names.iter().zip(&capture.types).map(|(name, kind)| crate::models::ResultColumn {
         name: name.clone(), data_type: kind.clone(), nullable: true, primary_key: false, auto_increment: false,
     }).collect();
