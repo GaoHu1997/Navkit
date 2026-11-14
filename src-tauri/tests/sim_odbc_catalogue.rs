@@ -27,7 +27,7 @@ fn assert_rejected_dialect_message(error:&anyhow::Error)->anyhow::Result<()> {
  let msg=format!("{error:#}");anyhow::ensure!(msg.contains("42000")&&(msg.contains("dialect profile")||msg.contains("profile")),"must reject dialect before DuckDB parser/table lookup: {msg}"); Ok(())
 }
 fn page_request(id:&str,schema:&str,table:&str,offset:u64,limit:u64)->PageRequest {
- PageRequest {connection_id:id.into(),schema:schema.into(),table:table.into(),offset,limit,order_by:Some("id".into()),ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None}
+ PageRequest {connection_id:id.into(),schema:schema.into(),table:table.into(),offset,limit,include_total:true,order_by:Some("id".into()),ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None}
 }
 const STEP_NAMES: &[&str] = &[
  "open_product_odbc", "verify_odbc_route", "fresh_schema_directory", "create_schema", "set_schema", "create_table",

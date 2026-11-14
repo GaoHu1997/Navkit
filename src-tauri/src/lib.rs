@@ -75,6 +75,7 @@ mod mssql;
 mod batch_execution;
 mod batch_sql_reader;
 mod data_generator;
+mod generated_recipe;
 mod driver_manager;
 mod monitor;
 mod odbc_db;
@@ -83,6 +84,7 @@ pub use driver_manager::escape_value as escape_odbc_connection_value;
 pub use odbc_db::default_connection_string as default_odbc_connection_string;
 mod redis_db;
 pub mod schema;
+mod schema_diagram;
 pub mod storage;
 pub mod sql_history;
 pub mod sync;
@@ -202,6 +204,7 @@ pub fn run() {
             commands::close_connection,
             commands::close_all_connections,
             commands::list_databases,
+            commands::table_option_choices,
             commands::list_objects,
             commands::list_tables,
             commands::list_routines,
@@ -217,6 +220,7 @@ pub fn run() {
             object_commands::preview_routine_replacement,
             object_commands::execute_routine_replacement,
             commands::get_table_schema,
+            commands::get_diagram_metadata,
             commands::apply_table_design,
             table_workflows::read_table_design_snapshot,
             table_workflows::preview_table_design,
@@ -304,6 +308,7 @@ pub fn run() {
             monitor::kill_db_process,
             commands::run_sync_database,
             commands::sync_diff,
+            commands::preview_diff_memory,
             commands::db_kinds,
             driver_manager::list_custom_drivers,
             driver_manager::downloads::list_driver_statuses,
@@ -314,6 +319,7 @@ pub fn run() {
             batch_execution::register_batch_execution,
             batch_execution::run_batch_execution,
             batch_execution::batch_execution_status,
+            batch_execution::preview_generated_recipe,
             data_generator::insert_generated_rows,
             driver_manager::save_custom_driver,
             driver_manager::delete_custom_driver,

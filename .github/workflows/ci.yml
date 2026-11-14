@@ -29,6 +29,34 @@ jobs:
       - name: Type check and build
         run: npm run build
 
+  windows-acceptance:
+    name: Windows acceptance (UI + Rust regressions)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: acceptance-windows-x64
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify release identity
+        run: node tools/check-release.mjs
+      - name: Build frontend assets
+        run: npm run build
+      - name: Run UI safety regressions
+        run: npm run test:ui
+      - name: Run Rust regressions
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --test backup_roundtrip --test backup_dump_streaming --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance -- --test-threads=1
+
   rust-check:
     name: Rust check (Linux)
     runs-on: ubuntu-22.04

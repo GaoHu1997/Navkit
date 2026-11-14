@@ -21,6 +21,15 @@ export interface WizardStep {
   render: (host: HTMLElement) => void;
   /** 允许进入下一步的前置校验；返回错误文案则阻止前进。 */
   validate?: () => string | null;
+  /**
+   * 标记该步为完成步：按钮显示完成文案并触发 onFinish，而不是翻到下一步。
+   * 不设时只有最后一步才是完成步（旧行为）。
+   */
+  finish?: boolean;
+  /** 该完成步自己的按钮文案，覆盖 WizardOptions.finishLabel。 */
+  finishLabel?: string;
+  /** 该步隐藏「下一步/完成」按钮（步骤条仍保留，供只在记录面板里收尾的场景）。 */
+  hideNext?: boolean;
 }
 
 export interface WizardOptions {
@@ -63,6 +72,7 @@ export class Wizard {
   private readonly opts: WizardOptions;
   private busy = false;
   private finishing = false;
+  private completed = false;
   private readonly ariaId = `wizard-${++wizardSequence}`;
 
   constructor(opts: WizardOptions) {
@@ -121,7 +131,21 @@ export class Wizard {
   /** 跳到指定步（不校验）。 */
   go(index: number): void {
     if (this.busy || this.finishing) return;
+    this.goInternal(index);
+  }
+
+  /** 强制跳到指定步：供 onFinish 内切到结果页（此时 finishing 为真，go 会被锁住）。 */
+  jump(index: number): void {
+    this.goInternal(index);
+  }
+
+  private goInternal(index: number): void {
     const clamped = Math.max(0, Math.min(this.steps.length - 1, index));
+    if (clamped !== this.index) {
+      this.completed = false;
+      const hint = this.nodes[this.index]?.querySelector<HTMLElement>(".wizard-panel-hint");
+      if (hint) hint.textContent = this.steps[this.index]?.hint ?? "";
+    }
     this.index = clamped;
     this.stepEls.forEach((el, i) => {
       const done = i < clamped;
@@ -145,8 +169,10 @@ export class Wizard {
       node.hidden = i !== clamped;
     });
     this.clearError();
-    const last = clamped === this.steps.length - 1;
-    this.nextBtn.textContent = last ? (this.opts.finishLabel ?? "完成") : "下一步";
+    const step = this.steps[clamped];
+    const finishStep = step?.finish === true || clamped === this.steps.length - 1;
+    this.nextBtn.textContent = finishStep ? (step?.finishLabel ?? this.opts.finishLabel ?? "完成") : "下一步";
+    this.nextBtn.hidden = step?.hideNext === true;
     this.refreshControls();
     // 切换时内容回到顶部
     const pane = this.nodes[clamped]?.querySelector<HTMLElement>(".wizard-panel-inner");
@@ -167,14 +193,14 @@ export class Wizard {
 
   /** 下一步（含校验）；最后一步触发 onFinish。 */
   async next(): Promise<void> {
-    if (this.busy || this.finishing) return;
+    if (this.busy || this.finishing || this.completed) return;
     const step = this.steps[this.index];
     const problem = step?.validate?.() ?? null;
     if (problem) {
       this.showError(problem);
       return;
     }
-    if (this.index < this.steps.length - 1) {
+    if (this.index < this.steps.length - 1 && step?.finish !== true) {
       this.go(this.index + 1);
       return;
     }
@@ -233,12 +259,29 @@ export class Wizard {
     this.refreshControls();
   }
 
+  /** 标记当前执行步成功；只锁完成按钮，仍允许回退调整并开启下一次任务。 */
+  markComplete(label: string, hintText?: string): void {
+    this.completed = true;
+    const step = this.stepEls[this.index];
+    step.classList.add("done");
+    this.badges[this.index].innerHTML = CHECK_SVG;
+    this.nextBtn.textContent = label;
+    this.nextBtn.classList.remove("primary");
+    if (hintText !== undefined) {
+      const hint = this.nodes[this.index]?.querySelector<HTMLElement>(".wizard-panel-hint");
+      if (hint) hint.textContent = hintText;
+    }
+    this.refreshControls();
+  }
+
   /** 每次从同一条件求值，不能以旧 disabled 值或 finally 无条件解锁。 */
   refreshControls(): void {
     const locked = this.busy || this.finishing;
     this.bodyEl.setAttribute("aria-busy", String(locked));
-    const last = this.index === this.steps.length - 1;
-    this.nextBtn.disabled = locked || (last && this.opts.finishEligible !== undefined && !this.opts.finishEligible());
+    const step = this.steps[this.index];
+    const finishStep = step?.finish === true || this.index === this.steps.length - 1;
+    this.nextBtn.disabled = locked || this.completed || (finishStep && this.opts.finishEligible !== undefined && !this.opts.finishEligible());
+    this.nextBtn.classList.toggle("primary", !this.completed);
     this.backBtn.disabled = locked || this.index === 0;
     this.nextBtn.classList.toggle("busy", locked);
     for (const step of this.stepEls) step.setAttribute("aria-disabled", String(locked));

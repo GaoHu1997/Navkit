@@ -13,11 +13,74 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::Value;
 
 use crate::models::{ConnectionRequest, DbKind};
 
+/// 导出分页作用域内单页 HTTP 响应体的硬上限。
+///
+/// 只有 [`HttpDb::export_page`] 会进入该作用域；普通浏览 / 自由执行仍走
+/// 无上限的 `Response::text()`，避免改变既有交互行为。
+pub(crate) const EXPORT_PAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 本地全量抓取（不支持服务端游标）的导出行数上限。
+///
+/// 这类协议只能把整批数据读进内存后再切片；超过上限必须明确报错，不能把
+/// "响应体没有超过字节上限" 当成可以完整导出。
+pub(crate) const EXPORT_LOCAL_SCAN_MAX_ROWS: usize = 100_000;
+
+tokio::task_local! {
+    pub(crate) static EXPORT_MAX_BYTES: u64;
+}
+
+/// 在导出作用域内读取响应体；作用域外保持原来的无界读取语义。
+pub(crate) async fn read_response_text(resp: reqwest::Response) -> Result<String> {
+    match EXPORT_MAX_BYTES.try_with(|v| *v).ok() {
+        Some(max) => read_response_text_limited(resp, max).await,
+        None => resp.text().await.context("读取 HTTP 响应失败"),
+    }
+}
+
+/// 流式读取响应体并在 `max` 字节处硬停；供导出作用域与单测共用。
+pub(crate) async fn read_response_text_limited(
+    resp: reqwest::Response,
+    max: u64,
+) -> Result<String> {
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("读取 HTTP 响应失败")?;
+        let len = (buf.len() as u64)
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| anyhow!("HTTP 导出响应超过 {} 字节上限", max))?;
+        if len > max {
+            bail!(
+                "HTTP 导出单页响应超过 {} 字节上限（已读 {} 字节），请缩小分页重试",
+                max,
+                buf.len()
+            );
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8(buf).context("HTTP 导出响应不是合法 UTF-8")
+}
+
+/// 拒绝无法服务端分页、只能本地全量抓取的超大集合。
+pub(crate) fn reject_local_scan(name: &str, total: usize) -> Result<()> {
+    if total > EXPORT_LOCAL_SCAN_MAX_ROWS {
+        bail!(
+            "{} 不支持服务端分页，本地全量抓取发现 {} 行，超过导出上限 {} 行；请缩小查询范围或改用支持分页的存储",
+            name,
+            total,
+            EXPORT_LOCAL_SCAN_MAX_ROWS
+        );
+    }
+    Ok(())
+}
+
 /// 文本化结果集（列名 + 行），与 MssqlResult / OdbcResult 同形态。
+#[derive(Debug, Clone)]
 pub struct HttpRows {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
@@ -32,6 +95,16 @@ pub struct HttpColumn {
     pub primary_key: bool,
 }
 
+/// 导出一页结果：数据 + 下一页游标（`None` 表示已到末尾）。
+///
+/// 游标是不透明的、由适配器定义的字符串：关系型适配器默认用累计 offset，
+/// Qdrant 用真正的 `next_page_offset`，Cassandra 用 paging state，Kafka 用
+/// broker offset。判定结束只看空页 / 缺失游标，**绝不**把短页当作 EOF。
+pub struct HttpExportPage {
+    pub data: HttpRows,
+    pub next: Option<String>,
+}
+
 /// HTTP 适配器统一接口。
 #[path = "jdbc_mutation.rs"]
 pub mod relational;
@@ -41,6 +114,11 @@ pub trait HttpAdapter: Send + Sync {
     /// Only the certified SQL tunnel exposes owned cancellation/drain to C1.
     fn tunnel_runtime(&self) -> Option<std::sync::Arc<crate::http_tunnel::TunnelRuntime>> { None }
     async fn shutdown(&self) {}
+    /// Ordered SQL batches are executed under one owned physical session.
+    fn supports_sql_batch(&self) -> bool { false }
+    async fn run_sql_batch(&self, _container: &str, _sql: &str) -> Result<crate::models::MultiResult> {
+        bail!("UNSUPPORTED_CAPABILITY: adapter has no ordered SQL batch channel")
+    }
     /// Stateful JDBC adapters select namespaces within one serialized live session.
     fn shares_session_namespace(&self) -> bool { false }
     /// PL-20: only a certified relational adapter can override these methods.
@@ -73,6 +151,46 @@ pub trait HttpAdapter: Send + Sync {
         offset: u64,
         limit: u64,
     ) -> Result<HttpRows>;
+    /// 导出专用分页。默认用累计 offset 作游标返回单页；结束仅由空页判定，
+    /// 短页不等于结束。需要真正游标的适配器（Qdrant / Cassandra / Kafka 等）
+    /// 必须覆写本方法，禁止用浏览用的 `rows` 冒充全量分页。
+    async fn export_page(
+        &self,
+        container: &str,
+        object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        // limit=0 是“只探测能力/列结构”的请求：不抓任何行，但仍走适配器实现，
+        // 因此不支持导出的适配器（覆写本方法后直接报错）无法借 limit=0 绕过。
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let offset: u64 = match token {
+            None => 0,
+            Some(t) => t
+                .parse::<u64>()
+                .map_err(|_| anyhow!("导出分页游标无效: {t}"))?,
+        };
+        let data = self.rows(container, object, offset, limit).await?;
+        let count = data.rows.len() as u64;
+        let next = if count == 0 {
+            None
+        } else {
+            Some(
+                offset
+                    .checked_add(count)
+                    .ok_or_else(|| anyhow!("导出分页偏移溢出"))?
+                    .to_string(),
+            )
+        };
+        Ok(HttpExportPage { data, next })
+    }
+    /// 清理导出游标占用的服务端资源（例如 Elasticsearch/OpenSearch PIT）。
+    /// 调用方在正常结束、达到 limit 或任意错误后都应调用；默认无资源可清理。
+    async fn finish_export(&self, _token: Option<&str>) -> Result<()> {
+        Ok(())
+    }
     /// 查询标签页执行（自由文本）。
     async fn run(&self, container: &str, object: &str, sql: &str) -> Result<HttpRows>;
     /// 可选：表的真实列元数据。无元数据的适配器返回 None，由调用方用行样本推导。
@@ -131,7 +249,7 @@ impl Ctx {
 
     async fn response(resp: reqwest::Response) -> Result<(u16, Value)> {
         let status = resp.status().as_u16();
-        let text = resp.text().await.context("读取 HTTP 响应失败")?;
+        let text = read_response_text(resp).await?;
         let json = serde_json::from_str(&text)
             .unwrap_or(Value::String(text.trim().to_string()));
         Ok((status, json))
@@ -323,12 +441,238 @@ impl HttpAdapter for EsAdapter {
             Ok(hits_rows(&j))
         }
     }
+    async fn export_page(
+        &self,
+        _container: &str,
+        object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            // 能力探测：不打开 PIT、不抓行，避免探测本身留下服务端游标。
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let index = if object.is_empty() { "_all" } else { object };
+        let (pit, api, sort) = match token {
+            None => {
+                let (api, pit) = self.open_pit(index).await?;
+                (pit, api, Vec::new())
+            }
+            Some(t) => es_decode_pit_token(t)?,
+        };
+        let size = limit.min(1000);
+        let mut body = serde_json::json!({
+            "size": size,
+            "query": {"match_all": {}},
+            "sort": [{"_shard_doc": "asc"}],
+            "pit": {"id": pit, "keep_alive": ES_PIT_KEEP_ALIVE}
+        });
+        if !sort.is_empty() {
+            if let Some(map) = body.as_object_mut() {
+                map.insert("search_after".into(), Value::Array(sort));
+            }
+        }
+        let response = self.ctx.post_json("/_search", body).await;
+        let (s, j) = match response {
+            Ok(v) => v,
+            Err(e) => {
+                // 已知 PIT id 时，取页失败也必须尽力清理，避免泄漏服务端快照。
+                let _ = self.close_pit(&pit, &api).await;
+                return Err(e);
+            }
+        };
+        let pit = j.get("pit_id").and_then(Value::as_str).filter(|id| !id.is_empty()).unwrap_or(&pit).to_string();
+        if let Err(e) = Self::ctx_check(s, &j) {
+            let _ = self.close_pit(&pit, &api).await;
+            return Err(e);
+        }
+        // 超时、分片失败或缺失命中数组都不能冒充成功 EOF。
+        if j.get("timed_out").and_then(Value::as_bool) == Some(true)
+            || j.pointer("/_shards/failed").and_then(Value::as_u64).unwrap_or(0) > 0 {
+            let _ = self.close_pit(&pit, &api).await;
+            bail!("Elasticsearch PIT 搜索超时或分片失败，拒绝发布不完整导出");
+        }
+        let hit_arr = match j.pointer("/hits/hits").and_then(Value::as_array) {
+            Some(hits) => hits,
+            None => {
+                let _ = self.close_pit(&pit, &api).await;
+                bail!("Elasticsearch PIT 搜索响应缺少 hits.hits 数组，不能判定导出结束");
+            }
+        };
+        if hit_arr.is_empty() {
+            // PIT 游标只有服务端知道是否到 EOF；空命中页才是真正结束，并主动关闭 PIT。
+            self.close_pit(&pit, &api).await?;
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let last_sort = match hit_arr.last().and_then(|h| h.get("sort")).and_then(Value::as_array) {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => {
+                let _ = self.close_pit(&pit, &api).await;
+                bail!("Elasticsearch PIT 搜索结果缺少 sort 值，无法使用 search_after");
+            }
+        };
+        let next = match es_encode_pit_token(&pit, &api, &last_sort) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = self.close_pit(&pit, &api).await;
+                return Err(e);
+            }
+        };
+        Ok(HttpExportPage { data: hits_rows(&j), next: Some(next) })
+    }
+
+    async fn finish_export(&self, token: Option<&str>) -> Result<()> {
+        let Some(token) = token else { return Ok(()) };
+        let (pit, api, _) = es_decode_pit_token(token)?;
+        self.close_pit(&pit, &api).await
+    }
 }
 
 impl EsAdapter {
     fn ctx_check(s: u16, j: &Value) -> Result<()> {
         Ctx::check(s, j, "Elasticsearch 请求")
     }
+
+    /// 打开 PIT。先试 Elasticsearch 的 `/{index}/_pit`，再试 OpenSearch 的
+    /// `/{index}/_search/point_in_time`；两者都不支持时明确报错，绝不降级
+    /// 到 from/size（那会在 10000 处截断或报错丢数据）。
+    async fn open_pit(&self, index: &str) -> Result<(String, String)> {
+        let candidates = [
+            (
+                "es",
+                format!("/{}/_pit?keep_alive={}", urlencode(index), ES_PIT_KEEP_ALIVE),
+            ),
+            (
+                "os",
+                format!(
+                    "/{}/_search/point_in_time?keep_alive={}",
+                    urlencode(index),
+                    ES_PIT_KEEP_ALIVE
+                ),
+            ),
+        ];
+        let mut last: Option<String> = None;
+        for (api, path) in candidates {
+            let response = self.ctx.request(reqwest::Method::POST, &path).send().await;
+            let (status, j) = match response {
+                Ok(r) => Ctx::response(r).await?,
+                Err(e) => {
+                    last = Some(format!("{api}: {e}"));
+                    continue;
+                }
+            };
+            if (200..300).contains(&status) {
+                if let Some(id) = j
+                    .get("id")
+                    .or_else(|| j.get("pit_id"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    return Ok((api.to_string(), id.to_string()));
+                }
+                last = Some(format!("{api}: PIT 响应缺少 id: {}", jbody(&j)));
+                continue;
+            }
+            if status == 400 || status == 404 || status == 405 {
+                last = Some(format!("{api}: HTTP {status}: {}", jbody(&j)));
+                continue;
+            }
+            return Err(Ctx::err(status, &j, "创建 Elasticsearch/OpenSearch PIT"));
+        }
+        Err(anyhow!(
+            "Elasticsearch/OpenSearch 版本不支持 PIT（point-in-time）: {}；为保证完整导出拒绝降级 from/size（会截断在 10000）",
+            last.unwrap_or_default()
+        ))
+    }
+
+    /// 关闭 PIT。404 视为已经关闭；其他失败明确上报，不能假装资源已释放。
+    async fn close_pit(&self, pit: &str, api: &str) -> Result<()> {
+        let (path, body) = if api == "os" {
+            (
+                "/_search/point_in_time",
+                serde_json::json!({"pit_id": [pit]}),
+            )
+        } else {
+            ("/_pit", serde_json::json!({"id": pit}))
+        };
+        let (status, j) = self
+            .ctx
+            .send_json(reqwest::Method::DELETE, path, Some(body))
+            .await?;
+        if (200..300).contains(&status) || status == 404 {
+            return Ok(());
+        }
+        Err(Ctx::err(status, &j, "清理 Elasticsearch/OpenSearch PIT"))
+    }
+}
+
+const ES_PIT_KEEP_ALIVE: &str = "2m";
+const ES_PIT_TOKEN_MAX: usize = 64 * 1024;
+
+/// PIT 导出游标：`{ "pit": "...", "api": "es"|"os", "sort": [...] }`。
+/// `sort` 是上一页最后一条命中的 `sort` 值，用 serde JSON 原样保存以保证
+/// 数值/字符串类型不丢失；游标整体硬限 64 KiB。
+fn es_encode_pit_token(pit: &str, api: &str, sort: &[Value]) -> Result<String> {
+    let token = serde_json::json!({"pit": pit, "api": api, "sort": sort});
+    let text = serde_json::to_string(&token)
+        .map_err(|e| anyhow!("Elasticsearch 导出游标编码失败: {e}"))?;
+    if text.len() > ES_PIT_TOKEN_MAX {
+        bail!(
+            "Elasticsearch 导出游标超过 64 KiB（{} 字节），拒绝继续",
+            text.len()
+        );
+    }
+    Ok(text)
+}
+
+fn es_decode_pit_token(token: &str) -> Result<(String, String, Vec<Value>)> {
+    if token.len() > ES_PIT_TOKEN_MAX {
+        bail!("Elasticsearch 导出游标超过 64 KiB（{} 字节）", token.len());
+    }
+    let v: Value = serde_json::from_str(token)
+        .map_err(|_| anyhow!("Elasticsearch 导出游标无效"))?;
+    let pit = v
+        .get("pit")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("Elasticsearch 导出游标缺少 pit id"))?
+        .to_string();
+    let api = v
+        .get("api")
+        .and_then(Value::as_str)
+        .unwrap_or("es")
+        .to_string();
+    if api != "es" && api != "os" {
+        bail!("Elasticsearch 导出游标 api 非法: {api}");
+    }
+    let sort = v
+        .get("sort")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if sort.is_empty() {
+        bail!("Elasticsearch 导出游标缺少 sort 值，无法 search_after");
+    }
+    Ok((pit, api, sort))
+}
+
+/// 解析 Elasticsearch 导出游标：`offset:total`，total 未知时用 `-`。
+fn parse_es_export_token(t: &str) -> Result<(u64, Option<u64>)> {
+    let (o, tot) = t
+        .split_once(':')
+        .ok_or_else(|| anyhow!("Elasticsearch 导出游标无效: {t}"))?;
+    let offset: u64 = o
+        .parse()
+        .map_err(|_| anyhow!("Elasticsearch 导出游标无效: {t}"))?;
+    let total = if tot == "-" {
+        None
+    } else {
+        Some(
+            tot.parse::<u64>()
+                .map_err(|_| anyhow!("Elasticsearch 导出游标无效: {t}"))?,
+        )
+    };
+    Ok((offset, total))
 }
 
 /// Elasticsearch _search 命中结果 → 行（_id + _source 字段）。
@@ -414,6 +758,66 @@ impl HttpAdapter for SolrAdapter {
             .cloned()
             .unwrap_or_default();
         Ok(obj_cols_rows(&docs))
+    }
+    async fn export_page(
+        &self,
+        container: &str,
+        _object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let (offset, total) = match token {
+            None => (0u64, None),
+            Some(t) => parse_es_export_token(t)?,
+        };
+        if let Some(total) = total {
+            if offset >= total {
+                return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+            }
+        }
+        // Solr 默认没有稳定顺序；导出必须按 uniqueKey 升序，否则同一文档可能
+        // 跨页重复/遗漏。uniqueKey 由 schema API 查询，缺失时退回 id。
+        let (s, j) = self
+            .ctx
+            .get_json(&format!("/solr/{}/schema/uniquekey?wt=json", urlencode(container)))
+            .await?;
+        Ctx::check(s, &j, "Solr uniqueKey")?;
+        let sort = j.get("uniqueKey").and_then(Value::as_str).unwrap_or("id");
+        let size = limit.min(1000);
+        let (s, j) = self
+            .ctx
+            .get_json(&format!(
+                "/solr/{}/select?q=*:*&wt=json&rows={}&start={}&sort={}%20asc",
+                urlencode(container),
+                size,
+                offset,
+                urlencode(sort)
+            ))
+            .await?;
+        Ctx::check(s, &j, "Solr 导出查询")?;
+        let docs = j
+            .pointer("/response/docs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let data = obj_cols_rows(&docs);
+        let count = data.rows.len() as u64;
+        let total_now = j.pointer("/response/numFound").and_then(Value::as_u64).or(total);
+        let next = if count == 0 {
+            None
+        } else if total_now.map(|t| offset.saturating_add(count) >= t).unwrap_or(false) {
+            None
+        } else {
+            Some(format!(
+                "{}:{}",
+                offset + count,
+                total_now.map(|t| t.to_string()).unwrap_or_else(|| "-".into())
+            ))
+        };
+        Ok(HttpExportPage { data, next })
     }
     async fn run(&self, container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         let sql = sql.trim();
@@ -558,6 +962,54 @@ impl HttpAdapter for MeiliAdapter {
         let items = j.get("results").and_then(Value::as_array).cloned().unwrap_or_default();
         Ok(obj_cols_rows(&items))
     }
+    async fn export_page(
+        &self,
+        container: &str,
+        _object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let (offset, total) = match token {
+            None => (0u64, None),
+            Some(t) => parse_es_export_token(t)?,
+        };
+        if let Some(total) = total {
+            if offset >= total {
+                return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+            }
+        }
+        // 必须走 /documents（全量文档接口），不能走 /search：后者默认
+        // maxTotalHits=1000，offset 超限会返回空 hits 形成静默 EOF。
+        let (s, j) = self
+            .ctx
+            .get_json(&format!(
+                "/indexes/{}/documents?limit={}&offset={}",
+                urlencode(container),
+                limit.min(1000),
+                offset
+            ))
+            .await?;
+        Ctx::check(s, &j, "Meilisearch 导出文档")?;
+        let items = j.get("results").and_then(Value::as_array).cloned().unwrap_or_default();
+        let data = obj_cols_rows(&items);
+        let count = data.rows.len() as u64;
+        let total_now = j.get("total").and_then(Value::as_u64).or(total);
+        let next = if count == 0 {
+            None
+        } else if total_now.map(|t| offset.saturating_add(count) >= t).unwrap_or(false) {
+            None
+        } else {
+            Some(format!(
+                "{}:{}",
+                offset + count,
+                total_now.map(|t| t.to_string()).unwrap_or_else(|| "-".into())
+            ))
+        };
+        Ok(HttpExportPage { data, next })
+    }
     async fn run(&self, container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         let (s, j) = if sql.trim().starts_with('{') {
             let body: Value = serde_json::from_str(sql).context("Meilisearch 搜索请求不是合法 JSON")?;
@@ -608,6 +1060,63 @@ impl HttpAdapter for QdrantAdapter {
             "with_payload": true
         }))
         .await
+    }
+    /// Qdrant 真正的 scroll 游标：`offset` 是 opaque 的 `next_page_offset`
+    /// （point id），绝不是数字偏移；`with_vector` 打开以保留完整点结构。
+    /// 固定三列 id / payload / vector，payload 内的键不得覆盖 id。
+    async fn export_page(
+        &self,
+        container: &str,
+        _object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage {
+                data: HttpRows { columns: vec!["id".to_string(), "payload".to_string(), "vector".to_string()], rows: Vec::new() },
+                next: None,
+            });
+        }
+        let mut body = serde_json::json!({
+            "limit": limit.clamp(1, 1000),
+            "with_payload": true,
+            "with_vector": true,
+        });
+        if let Some(t) = token {
+            let off: Value =
+                serde_json::from_str(t).map_err(|_| anyhow!("Qdrant 导出游标无效: {t}"))?;
+            if off.is_null() {
+                bail!("Qdrant 导出游标不能为 null（首屏应省略游标）");
+            }
+            body["offset"] = off;
+        }
+        let (s, j) = self
+            .ctx
+            .post_json(&format!("/collections/{}/points/scroll", urlencode(container)), body)
+            .await?;
+        Ctx::check(s, &j, "Qdrant scroll")?;
+        let points = j
+            .pointer("/result/points")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let columns = vec!["id".to_string(), "payload".to_string(), "vector".to_string()];
+        let mut rows = Vec::with_capacity(points.len());
+        for p in &points {
+            rows.push(vec![
+                Some(p.get("id").cloned().unwrap_or(Value::Null).to_string()),
+                Some(p.get("payload").cloned().unwrap_or(Value::Null).to_string()),
+                Some(p.get("vector").cloned().unwrap_or(Value::Null).to_string()),
+            ]);
+        }
+        let next = if points.is_empty() {
+            None
+        } else {
+            j.pointer("/result/next_page_offset")
+                .filter(|v| !v.is_null())
+                .map(|v| v.to_string())
+        };
+        Ok(HttpExportPage { data: HttpRows { columns, rows }, next })
     }
     async fn run(&self, container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         let sql = sql.trim();
@@ -790,8 +1299,14 @@ impl HttpAdapter for WeaviateAdapter {
         offset: u64,
         limit: u64,
     ) -> Result<HttpRows> {
-        // /v1/objects 不支持 offset，取前 offset+limit 条后本地切片
-        let fetch = (offset + limit).min(100);
+        // /v1/objects 不支持 offset；预览走本地切片，但必须显式限制在服务端单次上限内，
+        // 绝不能用 min(100) 把超出部分静默当 EOF（深度导出请用 export_page 的 after 游标）。
+        let fetch = offset
+            .checked_add(limit)
+            .ok_or_else(|| anyhow!("Weaviate 浏览偏移溢出"))?;
+        if fetch > 10_000 {
+            bail!("Weaviate /v1/objects 单次可取上限 10000（offset={offset}, limit={limit}），无法继续本地切片浏览；请使用游标导出");
+        }
         let (s, j) = self
             .ctx
             .get_json(&format!(
@@ -825,6 +1340,71 @@ impl HttpAdapter for WeaviateAdapter {
             items.push(Value::Object(row));
         }
         Ok(obj_cols_rows(&items))
+    }
+    async fn export_page(
+        &self,
+        container: &str,
+        _object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let page = limit.clamp(1, 1000);
+        let mut path = format!(
+            "/v1/objects?class={}&limit={}&include=class",
+            urlencode(container),
+            page
+        );
+        if let Some(t) = token {
+            if !t.is_empty() {
+                path.push_str("&after=");
+                path.push_str(&urlencode(t));
+            }
+        }
+        let (s, j) = self.ctx.get_json(&path).await?;
+        Ctx::check(s, &j, "Weaviate 导出对象")?;
+        // 只有明确的空 objects 数组才是 EOF；缺字段/错误形状不能伪装成功结束。
+        let arr = j
+            .get("objects")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Weaviate 导出响应缺少必需的 objects 数组"))?;
+        if arr.is_empty() {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let mut items = Vec::with_capacity(arr.len());
+        let mut last_id = String::new();
+        for (index, o) in arr.iter().enumerate() {
+            let object = o
+                .as_object()
+                .ok_or_else(|| anyhow!("Weaviate 导出第 {} 行不是对象", index + 1))?;
+            let id = object
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| anyhow!("Weaviate 导出第 {} 行缺少有效对象 id（必须是非空字符串）", index + 1))?;
+            let mut row = serde_json::Map::new();
+            row.insert("id".into(), Value::String(id.to_string()));
+            match object.get("properties") {
+                Some(Value::Object(props)) => {
+                    for (k, v) in props {
+                        row.insert(k.clone(), v.clone());
+                    }
+                }
+                // 空对象可省略 properties 或返回 null，保持原有 id-only 行语义。
+                None | Some(Value::Null) => {}
+                Some(_) => bail!("Weaviate 导出第 {} 行 properties 必须是对象或 null", index + 1),
+            }
+            last_id = id.to_string();
+            items.push(Value::Object(row));
+        }
+        if let Some(t) = token {
+            if !t.is_empty() && t == last_id {
+                bail!("Weaviate 导出游标未推进（服务端未按 after 排序返回），拒绝重复读取同一页");
+            }
+        }
+        Ok(HttpExportPage { data: obj_cols_rows(&items), next: Some(last_id) })
     }
     async fn run(&self, _container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         let sql = sql.trim();
@@ -1478,6 +2058,38 @@ impl HttpAdapter for VmAdapter {
             .take(limit.min(1000) as usize).collect();
         Ok(rows)
     }
+    async fn export_page(
+        &self,
+        container: &str,
+        _object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let offset: u64 = match token {
+            None => 0,
+            Some(t) => t.parse().map_err(|_| anyhow!("导出分页游标无效: {t}"))?,
+        };
+        // VictoriaMetrics instant query 没有服务端分页，只能整批取回后本地切片。
+        let mut data = self.instant(container).await?;
+        let total = data.rows.len();
+        reject_local_scan("VictoriaMetrics instant query", total)?;
+        data.rows = data
+            .rows
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(limit as usize)
+            .collect();
+        let count = data.rows.len() as u64;
+        let next = if count == 0 {
+            None
+        } else {
+            Some(offset.checked_add(count).ok_or_else(|| anyhow!("导出分页偏移溢出"))?.to_string())
+        };
+        Ok(HttpExportPage { data, next })
+    }
     async fn run(&self, _container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         self.instant(sql.trim()).await
     }
@@ -1758,6 +2370,45 @@ impl HttpAdapter for PulsarAdapter {
         result.rows = result.rows.into_iter().skip(usize::try_from(offset).unwrap_or(usize::MAX)).take(limit.min(10000) as usize).collect();
         Ok(result)
     }
+    async fn export_page(
+        &self,
+        container: &str,
+        object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let offset: u64 = match token {
+            None => 0,
+            Some(t) => t.parse().map_err(|_| anyhow!("导出分页游标无效: {t}"))?,
+        };
+        // 只有“命名空间 → 主题列表”是本地全量抓取；主题统计本身只有一行。
+        let mut data = if object.is_empty() && !container.contains('/') {
+            let ns = self.objects(container).await?;
+            reject_local_scan("Pulsar 命名空间列表", ns.len())?;
+            HttpRows {
+                columns: vec!["namespace".into()],
+                rows: ns.into_iter().map(|n| vec![Some(n)]).collect(),
+            }
+        } else {
+            self.topic_stats(container, object).await?
+        };
+        data.rows = data
+            .rows
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(limit as usize)
+            .collect();
+        let count = data.rows.len() as u64;
+        let next = if count == 0 {
+            None
+        } else {
+            Some(offset.checked_add(count).ok_or_else(|| anyhow!("导出分页偏移溢出"))?.to_string())
+        };
+        Ok(HttpExportPage { data, next })
+    }
     async fn run(&self, container: &str, object: &str, sql: &str) -> Result<HttpRows> {
         let sql = sql.trim();
         // 支持 "/" 开头的原始管理 API 路径
@@ -1946,7 +2597,7 @@ impl NacosAdapter {
             .send()
             .await
             .context("Nacos 登录失败")?;
-        let text = resp.text().await.unwrap_or_default();
+        let text = read_response_text(resp).await.unwrap_or_default();
         let j: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         let token = j.get("accessToken").and_then(jtext);
         *self
@@ -2062,6 +2713,50 @@ impl HttpAdapter for NacosAdapter {
         result.rows = result.rows.into_iter().skip(usize::try_from(offset).unwrap_or(usize::MAX)).take(limit.min(10000) as usize).collect();
         Ok(result)
     }
+    async fn export_page(
+        &self,
+        container: &str,
+        object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let offset: u64 = match token {
+            None => 0,
+            Some(t) => t.parse().map_err(|_| anyhow!("导出分页游标无效: {t}"))?,
+        };
+        let mut data = if let Some(svc) = object.strip_prefix("svc:") {
+            // 实例列表没有服务端分页，必须整批取回并显式限制规模。
+            let j = self
+                .get(&format!(
+                    "/nacos/v1/ns/instance/list?serviceName={}&namespaceId={}",
+                    urlencode(svc),
+                    urlencode(container)
+                ))
+                .await?;
+            let hosts = j.get("hosts").and_then(Value::as_array).cloned().unwrap_or_default();
+            reject_local_scan("Nacos 服务实例列表", hosts.len())?;
+            obj_cols_rows(&hosts)
+        } else {
+            // cfg 配置只返回单行；取完整结果后再统一切片，避免二次偏移。
+            self.rows(container, object, 0, u64::MAX).await?
+        };
+        data.rows = data
+            .rows
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(limit as usize)
+            .collect();
+        let count = data.rows.len() as u64;
+        let next = if count == 0 {
+            None
+        } else {
+            Some(offset.checked_add(count).ok_or_else(|| anyhow!("导出分页偏移溢出"))?.to_string())
+        };
+        Ok(HttpExportPage { data, next })
+    }
     async fn run(&self, container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         let sql = sql.trim();
         if sql.starts_with("svc:") || sql.starts_with("cfg:") {
@@ -2170,6 +2865,45 @@ impl HttpAdapter for ConsulAdapter {
             ))
             .await?;
         Self::kv_rows(&j, offset, limit)
+    }
+    async fn export_page(
+        &self,
+        container: &str,
+        object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        if limit == 0 {
+            return Ok(HttpExportPage { data: HttpRows { columns: Vec::new(), rows: Vec::new() }, next: None });
+        }
+        let offset: u64 = match token {
+            None => 0,
+            Some(t) => t.parse().map_err(|_| anyhow!("导出分页游标无效: {t}"))?,
+        };
+        let (prefix, recurse) = match object.split_once(':') {
+            Some(("dir", p)) => (p, true),
+            Some(("kv", p)) => (p, false),
+            _ => (object, false),
+        };
+        // Consul KV 一次性返回整个前缀，没有服务端分页。
+        let j = self
+            .get(&format!(
+                "/v1/kv/{}?dc={}&recurse={}",
+                urlencode(prefix),
+                urlencode(container),
+                recurse
+            ))
+            .await?;
+        let total = j.as_array().map(|a| a.len()).unwrap_or(0);
+        reject_local_scan("Consul KV 前缀", total)?;
+        let data = Self::kv_rows(&j, offset, limit)?;
+        let count = data.rows.len() as u64;
+        let next = if count == 0 {
+            None
+        } else {
+            Some(offset.checked_add(count).ok_or_else(|| anyhow!("导出分页偏移溢出"))?.to_string())
+        };
+        Ok(HttpExportPage { data, next })
     }
     async fn run(&self, _container: &str, _object: &str, sql: &str) -> Result<HttpRows> {
         let sql = sql.trim();
@@ -2413,6 +3147,43 @@ impl HttpDb {
     /// 查询标签页执行。
     pub async fn run(&self, container: &str, object: &str, sql: &str) -> Result<HttpRows> {
         self.adapter.run(container, object, sql).await
+    }
+
+    /// 批量 SQL 能力通过门面转发，不暴露内部适配器。
+    pub(crate) fn supports_sql_batch(&self) -> bool {
+        self.adapter.supports_sql_batch()
+    }
+
+    pub(crate) async fn run_sql_batch(&self, container: &str, sql: &str) -> Result<crate::models::MultiResult> {
+        self.adapter.run_sql_batch(container, sql).await
+    }
+
+    /// 导出专用分页：返回一页数据与下一页游标（`None` 到末尾）。
+    /// 调用方按 `next` 递进，必须校验游标不重复以免死循环。
+    pub async fn export_page(
+        &self,
+        container: &str,
+        object: &str,
+        token: Option<&str>,
+        limit: u64,
+    ) -> Result<HttpExportPage> {
+        // 导出路径的响应体必须有界：仅本作用域内的 Ctx::response / ApiDb::post
+        // 走流式累加，超过 64 MiB 立刻报错，避免恶意/异常大页撑爆内存。
+        EXPORT_MAX_BYTES
+            .scope(EXPORT_PAGE_MAX_BYTES, async {
+                self.adapter.export_page(container, object, token, limit).await
+            })
+            .await
+    }
+
+    /// 清理导出游标占用的服务端资源（ES/OpenSearch PIT 等）。
+    /// 正常 EOF、达到行数上限、用户取消或任意错误后的统一清理入口。
+    pub async fn finish_export(&self, token: Option<&str>) -> Result<()> {
+        EXPORT_MAX_BYTES
+            .scope(EXPORT_PAGE_MAX_BYTES, async {
+                self.adapter.finish_export(token).await
+            })
+            .await
     }
 }
 

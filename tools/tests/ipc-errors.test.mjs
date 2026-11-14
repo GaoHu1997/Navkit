@@ -13,9 +13,9 @@ async function load(contents, plugins = []) {
     platform: "node", format: "esm", target: "es2021", write: false, loader: { ".css": "empty" }, plugins, logLevel: "silent" });
   return import(`data:text/javascript;base64,` + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
 }
-const { IpcError, asIpcError, formatError, ExecutionController, api, queryResultApi, Dialog, Wizard, createDatasourceSyncTab } = await load(`
+const { IpcError, asIpcError, formatError, ExecutionController, api, syncApi, queryResultApi, Dialog, Wizard, createDatasourceSyncTab } = await load(`
 export { IpcError, asIpcError, formatError, ExecutionController } from './src/core/execution';
-export { api } from './src/core/api';
+export { api, syncApi } from './src/core/api';
 export { queryResultApi } from './src/core/query-result-api';
 export { Dialog } from './src/ui/Dialog';
 export { Wizard } from './src/ui/Wizard';
@@ -67,6 +67,19 @@ test("native API refusal remains rejected, keeps command and never uses preview 
   restoreWindow(t, { __PREVIEW_MOCK__: { list_connections() { fixtures++; return []; } }, __TAURI_INTERNALS__: { async invoke(command) { calls++; assert.equal(command, "list_connections"); throw raw; } } });
   await assert.rejects(api.listConnections(), error => assertDiagnostic(error, raw, "list_connections")); assert.equal(fixtures, 0); assert.equal(calls, 1);
 });
+test("table paging and metadata forward no-count options while preserving legacy wire defaults", async t => {
+  const calls = [];
+  restoreWindow(t, { __TAURI_INTERNALS__: { async invoke(command, args) { calls.push({ command, args }); return {}; } } });
+  await api.getTableSchema("c1", "main", "items");
+  await api.getTableSchema("c1", "main", "items", false);
+  const req = { connection_id: "c1", schema: "main", table: "items", offset: 0, limit: 200, include_total: false };
+  await api.pageTable(req);
+  assert.deepEqual(calls, [
+    { command: "get_table_schema", args: { id: "c1", schemaName: "main", table: "items" } },
+    { command: "get_table_schema", args: { id: "c1", schemaName: "main", table: "items", includeRowCount: false } },
+    { command: "page_table", args: { req } },
+  ]);
+});
 test("explicit preview sync and async refusals use the same error contract", async t => {
   const raw = structured(); restoreWindow(t, { __PREVIEW_MOCK__: { list_connections() { throw raw; } } });
   await assert.rejects(api.listConnections(), error => assertDiagnostic(error, raw, "list_connections"));
@@ -111,6 +124,7 @@ class Element {
   insertBefore(node, before) { node.parent = this; const i = this.children.indexOf(before); this.children.splice(i < 0 ? this.children.length : i, 0, node); }
   remove() { this.isConnected = false; if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); } getAttribute(name) { return this.attributes.get(name); }
+  removeAttribute(name) { this.attributes.delete(name); }
   addEventListener(name, fn) { const listeners = this.listeners.get(name) ?? []; listeners.push(fn); this.listeners.set(name, listeners); }
   querySelector(selector) { if (selector === "pre") return this.pre; return this.children.find(x => selector.startsWith(".") ? x.className.split(" ").includes(selector.slice(1)) : x.tagName === selector) ?? this.children.map(x => x.querySelector(selector)).find(Boolean) ?? null; }
   focus() { this.ownerDocument.activeElement = this; }
@@ -148,6 +162,23 @@ function chooserCallbacks(path) {
     const callback = node.arguments[1]; if (callback && ts.isArrowFunction(callback) && /await (?:pickFile|save)\(/.test(callback.getText(ast))) callbacks.push(callback.getText(ast));
   } ts.forEachChild(node, visit); } visit(ast); return callbacks;
 }
+// The callbacks/mapping reader now share production lifetime and request-version state.
+// Include its actual initializers and closure functions instead of replacing safety gates with no-ops.
+function importMappingClosure() {
+  const path = "src/dialogs/ImportExportDialog.ts", source = fs.readFileSync(path, "utf8"), ast = ts.createSourceFile(path, source, ts.ScriptTarget.ES2021, true);
+  const owner = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "openImportWizard");
+  assert(owner, "production import wizard must exist");
+  const names = ["closed", "mappingInputs", "mappingError", "mappingLoading", "mappingRequest", "mappingSnapshot", "invalidateMapping"], declarations = new Map();
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) {
+      const name = node.name.getText(ast); assert(!declarations.has(name), `ambiguous production closure binding: ${name}`);
+      declarations.set(name, node.getText(ast));
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(owner);
+  return names.map(name => { assert(declarations.has(name), `missing production closure binding: ${name}`); return `let ${declarations.get(name)};`; }).join("\n");
+}
 test("all six audited file chooser callbacks show failures and keep existing paths; cancellation is not an error", async () => {
   let count = 0;
   for (const path of ["src/dialogs/ImportExportDialog.ts", "src/dialogs/BatchExportDialog.ts", "src/dialogs/ScheduleDialog.ts"]) for (const callback of chooserCallbacks(path)) {
@@ -158,7 +189,8 @@ test("all six audited file chooser callbacks show failures and keep existing pat
       useSave: true, title: "保存", filters: () => [], pickFile: async () => { throw raw; }, Event: class {}, refreshPreview: async () => {} };
     // Dynamic import is the desktop plugin boundary, fixture only.
     let source = callback.replace('await import("@tauri-apps/plugin-dialog")', 'await Promise.resolve({ save: pickFile })');
-    const js = ts.transpileModule(`const callback = (` + source + `); callback;`, { compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.None } }).outputText;
+    const closure = path === "src/dialogs/ImportExportDialog.ts" ? importMappingClosure() : "";
+    const js = ts.transpileModule(closure + `\nconst callback = (` + source + `); callback;`, { compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.None } }).outputText;
     const action = vm.runInNewContext(js, sandbox); await action(); assert.equal(file.value, "previous.csv"); assert.equal(logs.length, 1);
     const shown = notices[0] ?? errorBox.textContent; assert(shown.includes(raw.operation_id)); assert(shown.includes("retryable=true"));
     logs.length = 0; notices.length = 0; sandbox.pickFile = async () => null; await action(); assert.equal(file.value, "previous.csv"); assert.equal(logs.length, 0); assert.equal(notices.length, 0);
@@ -246,7 +278,7 @@ test("actual import mapping accepts only TABLE_NOT_FOUND for new tables and reta
       formatError, console: { error: (...args) => logs.push(args) }, formatSelect: { value: "csv" }, fileInput: { value: "chosen.csv" }, delimInput: { value: "," }, encodingSelect: { value: "utf-8" }, headerInput: { checked: true }, createInput: { checked }, connection: { id: "c1", read_only: false }, targetSchema: { value: "main" }, schema: "main", targetTableName: () => table.value,
       mapTable, mapNote, document: doc, select: (_items, value) => Object.assign(doc.createElement("select"), { value }), old,
       running: false, dlg: { showError: message => notices.push(message) }, transferTasks: { import() { assert.fail("failed or pending mapping must not send SQL"); } } };
-    const body = "let mappingInputs = old; let mappingError = '', mappingLoading = false; " + refresh + "; const runImport = " + run + "; ({ refreshMapping, runImport, inputs: () => mappingInputs, error: () => mappingError });";
+    const body = importMappingClosure() + "\nmappingInputs = old; " + refresh + "; const runImport = " + run + "; ({ refreshMapping, runImport, inputs: () => mappingInputs, error: () => mappingError });";
     const js = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2021 } }).outputText, actual = vm.runInNewContext(js, sandbox);
     await actual.refreshMapping(); const allowed = checked && code === "TABLE_NOT_FOUND";
     assert.equal(table.value, "chosen_table"); assert.equal(sandbox.fileInput.value, "chosen.csv");
@@ -261,4 +293,20 @@ test("actual import mapping accepts only TABLE_NOT_FOUND for new tables and reta
     assert.equal(actual.inputs(), saved); assert.deepEqual(mapTable.children, rows); assert.match(actual.error(), /列元数据为空/);
     pending = true; void actual.refreshMapping(); await tick(); assert.equal(await actual.runImport(), false); assert.match(notices.at(-1), /仍在读取/);
   }
+});
+
+test("数据同步的差异/整库/映射命令都把请求放在 req 键下（缺 req 会被后端判为参数错误）", async t => {
+  const calls = [];
+  restoreWindow(t, { __TAURI_INTERNALS__: { async invoke(command, args) { calls.push({ command, args }); return {}; } } });
+  const req = { source_connection: "c1", source_schema: "main", source_table: "items", target_connection: "c2", target_schema: "main", target_table: "items", where_clause: null };
+  await syncApi.diff(req);
+  await syncApi.runDatabase({ ...req });
+  await syncApi.typeMapping("c1", "main", "items", "c2");
+  assert.deepEqual(calls, [
+    { command: "sync_diff", args: { req } },
+    { command: "run_sync_database", args: { req: { ...req } } },
+    { command: "sync_type_mapping", args: { sourceConnection: "c1", sourceSchema: "main", sourceTable: "items", targetConnection: "c2" } },
+  ]);
+  await syncApi.diff(req, true);
+  assert.deepEqual(calls.at(-1), { command: "sync_diff", args: { req, bounded: true } });
 });

@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
 use sqlx::Row;
 use crate::{db::{self,Db}, models::{DbKind, FilterCondition, FilterLine, PageRequest, FilterLogic}};
-use super::{table_schema, typed_table_filter::{self, FilterType, column_type}};
+use super::{table_schema_for_page, typed_table_filter::{self, FilterType, column_type}};
 
 fn condition(kind: &DbKind, filter: &FilterCondition, ty: FilterType) -> Result<String> {
     let op=filter.operator.trim();
@@ -54,7 +54,7 @@ pub(super) async fn typed_clause(db: &Db, kind: &DbKind, request: &PageRequest) 
         let rows=crate::sql_history::query("WITH RECURSIVE types AS (SELECT a.attname,t.oid,t.typbasetype,t.typcategory,t.typname,0 AS depth FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped UNION ALL SELECT x.attname,t.oid,t.typbasetype,t.typcategory,t.typname,x.depth+1 FROM types x JOIN pg_type t ON t.oid=x.typbasetype WHERE x.typbasetype<>0 AND x.depth<16) SELECT attname,typname,typcategory::text AS category FROM types WHERE typbasetype=0").bind(&request.schema).bind(&request.table).fetch_all(pool).await?;
         for row in rows { let name:String=row.try_get("attname")?; let ty:String=row.try_get("typname")?; let category:String=row.try_get("category")?; types.insert(name,if category=="S" {FilterType::Text} else {column_type(&ty)}); }
     } else {
-        let metadata=table_schema(db,kind.clone(),&request.schema,&request.table).await?;
+        let metadata=table_schema_for_page(db,kind.clone(),&request.schema,&request.table).await?;
         for column in metadata.columns {
             let ty=if kind.is_sqlite() {
                 let affinity=column.data_type.to_ascii_uppercase();

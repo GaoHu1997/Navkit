@@ -258,12 +258,17 @@ export interface PageRequest {
   filter_logic?: FilterLogic;
   /** 提供时覆盖旧 order_by / ascending；空数组表示清除排序。 */
   order_rules?: SortRule[];
+  /** false 只读取当前页，不在首屏等待全表计数；省略兼容旧调用。 */
+  include_total?: boolean;
 }
 
 export interface PageResult {
   columns: ResultColumn[];
   rows: (string | null)[][];
+  /** total_exact=false 时是已知下界，不能当作总行数或末页。 */
   total: number;
+  total_exact?: boolean;
+  has_more?: boolean | null;
   primary_keys: string[];
   elapsed_ms: number;
 }
@@ -339,6 +344,12 @@ export interface ImportOptions {
   conflict_columns?: string[];
 }
 
+export interface ImportTaskOptions extends ImportOptions {
+  task_id: string;
+  column_mapping: { source: string; target: string }[];
+  write_strategy?: "row" | "pg_copy";
+}
+
 export interface ExportOptions {
   connection_id: string;
   schema: string;
@@ -350,6 +361,14 @@ export interface ExportOptions {
   encoding: string;
   where_clause: string | null;
   limit: number | null;
+}
+
+export interface ExportTaskOptions extends ExportOptions {
+  task_id: string;
+  /** 显式多行 SQL 恢复语义；0/1 或省略保持兼容单行。 */
+  sql_batch_rows?: number;
+  /** 单语句同时受目标编码字节及 UTF-8 缓冲硬限约束。 */
+  sql_batch_bytes?: number;
 }
 
 export interface TransferOptions {
@@ -397,6 +416,18 @@ export interface BackupOptions {
   file_name?: string | null;
   include_structure: boolean;
   include_data: boolean;
+  /** 显式允许跳过无法无损读取的整表；默认关闭，跳过会出现在备份回执警告中。 */
+  skip_incompatible_tables?: boolean;
+  /** 缺省/compat保留旧路径；显式模式不支持时拒绝，不按兼容协议降级。 */
+  source_consistency?: "compat" | "pg_snapshot" | "mysql_locked" | null;
+}
+
+/** 备份回执：数据行数、文件字节数、实际存储路径与跳过的表警告。 */
+export interface BackupResult {
+  rows: number;
+  bytes: number;
+  path: string;
+  warnings: string[];
 }
 
 export interface ServerInfo {
@@ -563,14 +594,27 @@ export interface RestoreStep {
   affected: number | null;
   error: string | null;
   skipped: boolean;
+  effect: "acked" | "committed" | "rolled_back" | "skipped" | "failed" | "unknown";
 }
 
-/** 还原备份：整份脚本的执行汇总。 */
+/** 还原备份：计数独立于至多2048条步骤，succeeded仅表示已确认提交。 */
 export interface RestoreReport {
   total: number;
   succeeded: number;
   failed: number;
   steps: RestoreStep[];
+  acked: number;
+  committed: number;
+  rolled_back: number;
+  skipped: number;
+  unknown: number;
+  attempted: number;
+  first_failed_index: number | null;
+  omitted_steps: number;
+  effects_unknown: boolean;
+  error: string | null;
+  cleanup_error: string | null;
+  warnings: string[];
 }
 
 /** 手动事务内的图形化行变更（表数据页事务路径保留；当前事务入口在查询页）。 */
@@ -637,6 +681,8 @@ export interface UpdateManifest {
   notes: string;
   pub_date: string;
   url: string;
+  /** 备用下载地址（镜像）。主地址失败时后端按序尝试。 */
+  mirrors?: string[];
   sha256: string;
   size: number;
 }

@@ -66,13 +66,13 @@ try {
   assert.deepEqual(report.initial.sent, ["SELECT * FROM t_big ORDER BY id"]);
   assert(report.initial.spool);
   check("Run with a residual selection sends the whole SQL exactly once; 12005 rows succeed with a 200-row page");
-  await page.getByRole("button", { name: "下一页（读取本次执行缓存）", exact: true }).click();
+  await page.getByRole("button", { name: "下一页（读取本次执行缓存，不重新执行 SQL）", exact: true }).click();
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
   report.next = await state(); assert.equal(report.next.first[0], "201"); assert.equal(report.next.rows, 200);
-  await page.getByRole("button", { name: "末页（读取本次执行缓存）", exact: true }).click();
+  await page.getByRole("button", { name: "末页（读取本次执行缓存，不重新执行 SQL）", exact: true }).click();
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
-  report.last = await state(); assert.equal(report.last.first[0], "11806"); assert.equal(report.last.last[0], "12005");
-  assert.equal(report.last.rows, 200); assert.equal(report.last.sent.length, 1);
+  report.last = await state(); assert.equal(report.last.first[0], "12001"); assert.equal(report.last.last[0], "12005");
+  assert.equal(report.last.rows, 5); assert.equal(report.last.sent.length, 1);
   check("Next and last buttons read the same cached execution beyond 10000 rows, without sending SQL again");
   for (const format of ["csv", "json", "sql"]) {
     const file = path.join(directory, `full.${format}`);
@@ -90,13 +90,12 @@ try {
   assert.equal((await state()).sent.length, 1);
   check("CSV, JSON and SQL each export all 12005 execution rows, including the last row, without a second query");
   await page.evaluate(() => window.__APP__.activeView().execute("SELECT * FROM missing_query_spool_table", false));
-  report.failed = await state(); assert.equal(report.failed.status, "failed"); assert.equal(report.failed.spool, report.initial.spool);
+  report.failed = await state(); assert.equal(report.failed.status, "failed"); assert.equal(report.failed.spool, undefined);
   assert.equal(report.failed.result, -1); assert.equal(report.failed.running, false); assert.equal(report.failed.busy, false);
-  await page.getByRole("button", { name: "结果 1", exact: true }).click();
-  await page.getByRole("button", { name: "首页（读取本次执行缓存）", exact: true }).click();
-  await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
-  assert.equal((await state()).first[0], "1");
-  check("A failed execution opens its message, preserves the old cached snapshot, and allows it to page again");
+  assert.equal(await page.getByRole("button", { name: "结果 1", exact: true }).count(), 0);
+  assert.equal(await page.evaluate(() => window.__APP__.activeView().tab.results), null);
+  assert.equal(await page.evaluate(() => window.__APP__.activeView().resultPages.scope), null);
+  check("A failed rerun clears the old snapshot and paging scope rather than exposing stale successful data");
   await page.evaluate(() => window.__APP__.activeView().execute("SELECT 42 AS value; SELECT '第二结果' AS label", false));
   report.recovered = await state(); assert.equal(report.recovered.status, "succeeded"); assert.deepEqual(report.recovered.first, ["42"]);
   assert.notEqual(report.recovered.spool, report.initial.spool);

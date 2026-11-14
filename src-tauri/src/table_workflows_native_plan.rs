@@ -152,19 +152,41 @@ fn normalize(s:&str)->String{
     let Ok(mut ts)=tokens(s)else{return s.into()};while ts.first().is_some_and(|t|t.symbol("("))&&ts.last().is_some_and(|t|t.symbol(")")){let mut depth=0;let mut wraps=true;for(i,t)in ts.iter().enumerate(){if t.symbol("("){depth+=1;}if t.symbol(")"){depth-=1;if depth==0&&i+1<ts.len(){wraps=false;break;}}}if !wraps{break;}ts.remove(0);ts.pop();}
     let mut out=String::new();for t in ts{let value=if t.kind==TokenKind::Word{t.text.to_ascii_lowercase()}else if t.kind==TokenKind::Identifier{let id=identifier(&t).unwrap_or_else(|_|t.text.into());if id.bytes().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||b==b'_'){id}else{format!("\"{}\"",id.replace('"',"\"\""))}}else{t.text.into()};let word=|c:char|c.is_alphanumeric()||c=='_';if out.chars().last().is_some_and(word)&&value.chars().next().is_some_and(word){out.push(' ');}out.push_str(&value);}out
 }
-fn mysql_copy_definition_parts(sql:&str)->Result<(Vec<String>,String)>{
+fn mysql_copy_definition_parts(sql:&str,namespace:&str)->Result<(Vec<String>,String)>{
     let ts=tokens(sql)?;ensure!(ts.first().is_some_and(|t|t.word("CREATE"))&&ts.get(1).is_some_and(|t|t.word("TABLE")),"TABLE_COPY_MYSQL_HEADER_UNSUPPORTED");
     let (start,end)=qualified_span(sql,&ts,2)?;let open=ts.iter().position(|t|t.symbol("(")).ok_or_else(||anyhow!("TABLE_COPY_MYSQL_HEADER_UNSUPPORTED"))?;
     ensure!(open>2&&ts[open-1].end==end,"TABLE_COPY_MYSQL_HEADER_UNSUPPORTED");
     // 原生计划使用完整 database.table，而 SHOW CREATE 可只返回 table；仅归一化已解析的头部身份，列/约束/选项仍由原解析器完整核验。
-    let unqualified=patch(sql,vec![(start,end,"__copy_readback".into())])?;let (_,parts,suffix)=crate::table_copy::table_parts(&unqualified)?;Ok((parts,suffix))
+    let unqualified=patch(sql,vec![(start,end,"__copy_readback".into())])?;let (_,parts,suffix)=crate::table_copy::table_parts(&unqualified)?;
+    let parts=parts.into_iter().map(|part|->Result<String>{
+        let ts=tokens(&part)?;let mut edits=Vec::new();
+        // SHOW CREATE 会省略同库 REFERENCES 的数据库名；只归一化确认为当前库的引用，不改跨库引用、目标名或字面量。
+        for (i,t) in ts.iter().enumerate(){if t.word("REFERENCES"){
+            let (a,z)=qualified_span(&part,&ts,i+1)?;
+            if ts.get(i+2).is_some_and(|t|t.text==".")&&identifier(&ts[i+1])?==namespace{
+                edits.push((a,z,part[ts[i+3].start..z].to_string()));
+            }
+        }}
+        patch(&part,edits)
+    }).collect::<Result<Vec<_>>>()?;
+    Ok((parts,suffix))
+}
+fn mysql_copy_trigger_definition(sql:&str,namespace:&str)->Result<String>{
+    let ts=tokens(sql)?;ensure!(ts.first().is_some_and(|t|t.word("CREATE")),"TABLE_TRIGGER_HEADER_UNKNOWN");
+    let tr=ts.iter().position(|t|t.word("TRIGGER")).ok_or_else(||anyhow!("TABLE_TRIGGER_HEADER_UNKNOWN"))?;
+    let on=ts.iter().enumerate().skip(tr+2).find(|(_,t)|t.word("ON")).map(|(i,_)|i).ok_or_else(||anyhow!("TABLE_TRIGGER_PARENT_UNKNOWN"))?;
+    let mut edits=Vec::new();
+    // SHOW CREATE omits the current schema for the trigger name and ON parent only.
+    // Preserve DEFINER, event/timing, body references and literals for full verification.
+    for i in [tr+1,on+1]{let (a,z)=qualified_span(sql,&ts,i)?;if ts.get(i+1).is_some_and(|t|t.text==".")&&identifier(&ts[i])?==namespace{edits.push((a,z,sql[ts[i+2].start..z].to_string()));}}
+    Ok(normalize(&patch(sql,edits)?))
 }
 pub(super) fn verify_copy(before:&Stored,after:&Stored,target:&str)->Result<()>{
     let old=native(before)?;let new=native(after)?;ensure!(before.public.options==after.public.options&&before.public.schema.comment==after.public.schema.comment,"TABLE_COPY_OPTIONS_COMMENT_MISMATCH");
     ensure!(old.columns.len()==new.columns.len()&&old.indexes.len()==new.indexes.len()&&old.triggers.len()==new.triggers.len(),"TABLE_COPY_OBJECT_COUNT_MISMATCH");
     for (a,b) in old.columns.iter().zip(&new.columns){let mut a=a.clone();let mut b=b.clone();a.remove("ordinal");b.remove("ordinal");if before.kind.is_pg_family()&&get(&a,"auto")?=="1"{a.remove("default");b.remove("default");}ensure!(a==b,"TABLE_COPY_FULL_COLUMN_MISMATCH");}
     if before.kind.is_mysql_family(){
-        let expected=operation_steps(before,&workflow::TableOperation{connection_id:String::new(),schema:before.public.schema.database.clone(),table:before.public.schema.table.clone(),kind:"copy_structure".into(),target_table:Some(target.into()),base_revision:String::new(),source_fingerprint:String::new()})?[0].sql.clone();let (a,suffix)=mysql_copy_definition_parts(&expected)?;let (b,actual_suffix)=mysql_copy_definition_parts(&after.ddl)?;ensure!(a.iter().map(|s|normalize(s)).collect::<Vec<_>>()==b.iter().map(|s|normalize(s)).collect::<Vec<_>>(),"TABLE_COPY_MYSQL_FULL_DEFINITION_MISMATCH");ensure!(normalize(&strip_auto(&suffix))==normalize(&strip_auto(&actual_suffix)),"TABLE_COPY_MYSQL_FULL_OPTIONS_MISMATCH");ensure!(auto_increment_value(&suffix)?==auto_increment_value(&actual_suffix)?,"TABLE_COPY_MYSQL_SEQUENCE_READBACK_MISMATCH");
+        let expected=operation_steps(before,&workflow::TableOperation{connection_id:String::new(),schema:before.public.schema.database.clone(),table:before.public.schema.table.clone(),kind:"copy_structure".into(),target_table:Some(target.into()),base_revision:String::new(),source_fingerprint:String::new()})?[0].sql.clone();let (a,suffix)=mysql_copy_definition_parts(&expected,&before.public.schema.database)?;let (b,actual_suffix)=mysql_copy_definition_parts(&after.ddl,&after.public.schema.database)?;ensure!(a.iter().map(|s|normalize(s)).collect::<Vec<_>>()==b.iter().map(|s|normalize(s)).collect::<Vec<_>>(),"TABLE_COPY_MYSQL_FULL_DEFINITION_MISMATCH");ensure!(normalize(&strip_auto(&suffix))==normalize(&strip_auto(&actual_suffix)),"TABLE_COPY_MYSQL_FULL_OPTIONS_MISMATCH");ensure!(auto_increment_value(&suffix)?==auto_increment_value(&actual_suffix)?,"TABLE_COPY_MYSQL_SEQUENCE_READBACK_MISMATCH");
     }else{
         ensure!(old.constraints.len()==new.constraints.len()&&old.sequences.len()==new.sequences.len(),"TABLE_COPY_PG_CONSTRAINT_SEQUENCE_COUNT");
         let mut expected=old.constraints.iter().map(|r|rewrite_reference(get(r,"definition")?,before,target).map(|s|normalize(&s))).collect::<Result<Vec<_>>>()?;let mut actual=new.constraints.iter().map(|r|Ok(normalize(get(r,"definition")?))).collect::<Result<Vec<_>>>()?;expected.sort();actual.sort();ensure!(expected==actual,"TABLE_COPY_PG_CONSTRAINT_DEFINITION_MISMATCH");
@@ -172,7 +194,7 @@ pub(super) fn verify_copy(before:&Stored,after:&Stored,target:&str)->Result<()>{
         let shape=|r:&Record|->Result<String>{let def=get(r,"definition")?;let ts=tokens(def)?;let on=ts.iter().position(|t|t.word("ON")).ok_or_else(||anyhow!("TABLE_INDEX_DEFINITION_UNKNOWN"))?;let (_,end)=qualified_span(def,&ts,on+1)?;Ok(format!("{}:{}:{}",get(r,"unique")?,get(r,"primary")?,format!("{}:{}",normalize(&def[end..]),opt(r,"comment")?.unwrap_or_default())))};let mut a=old.indexes.iter().map(shape).collect::<Result<Vec<_>>>()?;let mut b=new.indexes.iter().map(shape).collect::<Result<Vec<_>>>()?;a.sort();b.sort();ensure!(a==b,"TABLE_COPY_PG_FULL_INDEX_MISMATCH");
         for seq in &old.sequences{let new=new.sequences.iter().find(|s|get(s,"column").ok()==get(seq,"column").ok()).ok_or_else(||anyhow!("TABLE_COPY_OWNED_SEQUENCE_MISSING"))?;for field in ["type","start","increment","min","max","cache","cycle","identity"]{ensure!(get(seq,field)?==get(new,field)?,"TABLE_COPY_SEQUENCE_OPTIONS_MISMATCH");}ensure!(get(seq,"name")?!=get(new,"name")?,"TABLE_COPY_SEQUENCE_SHARED");}
     }
-    for r in &old.triggers{let new_name=generated_name(&before.kind,target,get(r,"name")?);let actual=new.triggers.iter().find(|a|get(a,"name").ok()==Some(new_name.as_str())).ok_or_else(||anyhow!("TABLE_COPY_TRIGGER_MISSING"))?;let expected=copy_trigger(get(r,"definition")?,before,target,&new_name)?;ensure!(normalize(&expected)==normalize(get(actual,"definition")?),"TABLE_COPY_TRIGGER_DEFINITION_MISMATCH");if before.kind.is_mysql_family(){verify_mysql_trigger_environment(r,actual)?;}if before.kind.is_pg_family(){ensure!(get(r,"enabled")?==get(actual,"enabled")?,"TABLE_COPY_TRIGGER_ENABLE_MISMATCH");ensure!(opt(r,"comment")?==opt(actual,"comment")?,"TABLE_COPY_TRIGGER_COMMENT_MISMATCH");}}
+    for r in &old.triggers{let new_name=generated_name(&before.kind,target,get(r,"name")?);let actual=new.triggers.iter().find(|a|get(a,"name").ok()==Some(new_name.as_str())).ok_or_else(||anyhow!("TABLE_COPY_TRIGGER_MISSING"))?;let expected=copy_trigger(get(r,"definition")?,before,target,&new_name)?;let matches=if before.kind.is_mysql_family(){mysql_copy_trigger_definition(&expected,&before.public.schema.database)?==mysql_copy_trigger_definition(get(actual,"definition")?,&after.public.schema.database)?}else{normalize(&expected)==normalize(get(actual,"definition")?)};ensure!(matches,"TABLE_COPY_TRIGGER_DEFINITION_MISMATCH");if before.kind.is_mysql_family(){verify_mysql_trigger_environment(r,actual)?;}if before.kind.is_pg_family(){ensure!(get(r,"enabled")?==get(actual,"enabled")?,"TABLE_COPY_TRIGGER_ENABLE_MISMATCH");ensure!(opt(r,"comment")?==opt(actual,"comment")?,"TABLE_COPY_TRIGGER_COMMENT_MISMATCH");}}
     Ok(())}
 fn auto_increment_value(s:&str)->Result<Option<u64>>{let ts=tokens(s)?;for(i,t)in ts.iter().enumerate(){if let Some(n)=t.text.to_ascii_uppercase().strip_prefix("AUTO_INCREMENT="){return Ok(Some(n.parse()?));}if t.word("AUTO_INCREMENT")&&ts.get(i+1).is_some_and(|t|t.text=="="){return Ok(Some(ts.get(i+2).ok_or_else(||anyhow!("TABLE_SEQUENCE_VALUE_UNKNOWN"))?.text.parse()?));}}Ok(None)}
 fn strip_auto(s:&str)->String{let Ok(ts)=tokens(s)else{return s.into()};let mut edits=Vec::new();for(i,t)in ts.iter().enumerate(){if t.text.to_ascii_uppercase().starts_with("AUTO_INCREMENT="){edits.push((t.start,t.end,String::new()));}else if t.word("AUTO_INCREMENT"){if let Some(v)=ts.get(i+1){edits.push((t.start,v.end,String::new()));}}}patch(s,edits).unwrap_or_else(|_|s.into())}
@@ -256,10 +278,24 @@ fn strip_auto(s:&str)->String{let Ok(ts)=tokens(s)else{return s.into()};let mut 
         after.native.as_mut().unwrap().triggers[0].insert("name".into(),Some(renamed));after.native.as_mut().unwrap().triggers[0].insert("definition".into(),Some(definition.clone()));verify_copy(&before,&after,target).unwrap();
         // 计划完整名称与真实 SHOW CREATE 无数据库前缀两种头部都必须通过完整读回。
         after.ddl=after.ddl.replacen("CREATE TABLE `fixture`.`copied`","CREATE TABLE `copied`",1);verify_copy(&before,&after,target).unwrap();
-        let complete=after.ddl.clone();for (from,to) in [("CHECK(id>0)","CHECK(id>1)"),("REFERENCES `fixture`.`copied`(id)","REFERENCES `fixture`.`src`(id)")]{assert!(complete.contains(from));after.ddl=complete.replacen(from,to,1);assert!(verify_copy(&before,&after,target).unwrap_err().to_string().contains("TABLE_COPY_MYSQL_FULL_DEFINITION_MISMATCH"));}after.ddl=complete;
+        let complete=after.ddl.clone();for (from,to) in [("CHECK(id>0)","CHECK(id>1)"),("REFERENCES `fixture`.`copied`(id)","REFERENCES `fixture`.`src`(id)")]{assert!(complete.contains(from));after.ddl=complete.replacen(from,to,1);assert!(verify_copy(&before,&after,target).unwrap_err().to_string().contains("TABLE_COPY_MYSQL_FULL_DEFINITION_MISMATCH"));}after.ddl=complete.clone();
         for (field,value) in [("charset","latin1"),("collation","utf8mb4_bin"),("mode","STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES")]{let old=after.native.as_mut().unwrap().triggers[0].insert(field.into(),Some(value.into()));assert_eq!(get(&after.native.as_ref().unwrap().triggers[0],"definition").unwrap(),definition);assert!(verify_copy(&before,&after,target).unwrap_err().to_string().contains("TABLE_COPY_TRIGGER_ENVIRONMENT_READBACK_MISMATCH"),"readback {field}");after.native.as_mut().unwrap().triggers[0].insert(field.into(),old.unwrap());}
         for field in ["charset","collation"]{let old=after.native.as_mut().unwrap().triggers[0].remove(field).unwrap();assert!(verify_copy(&before,&after,target).is_err(),"missing readback {field}");after.native.as_mut().unwrap().triggers[0].insert(field.into(),old);}
         assert!(verify_copy(&before,&after,target).is_ok());
+        // 真实 SHOW CREATE 同时省略表头及同库 REFERENCES 前缀；跨库、错误目标与 CHECK 改写仍不得通过。
+        after.ddl=complete.replace("REFERENCES `fixture`.`copied`(id)","REFERENCES `copied`(id)");
+        verify_copy(&before,&after,target).unwrap();let canonical=after.ddl.clone();
+        for (from,to) in [("REFERENCES `copied`(id)","REFERENCES `other_db`.`copied`(id)"),("REFERENCES `copied`(id)","REFERENCES `src`(id)"),("CHECK(id>0)","CHECK(id>1)")]{
+            after.ddl=canonical.replacen(from,to,1);assert!(verify_copy(&before,&after,target).unwrap_err().to_string().contains("TABLE_COPY_MYSQL_FULL_DEFINITION_MISMATCH"));
+        }
+    }
+    #[test]fn mysql_trigger_readback_normalizes_only_same_schema_header_identities(){
+        let expected="CREATE DEFINER=`root`@`localhost` TRIGGER `fixture`.`copied_trigger` AFTER INSERT ON `fixture`.`copied` FOR EACH ROW INSERT INTO `fixture`.`audit` VALUES('ON `fixture`.`copied`')";
+        let actual=expected.replacen("TRIGGER `fixture`.`copied_trigger`","TRIGGER `copied_trigger`",1).replacen("ON `fixture`.`copied`","ON `copied`",1);
+        let canonical=mysql_copy_trigger_definition(expected,"fixture").unwrap();assert_eq!(canonical,mysql_copy_trigger_definition(&actual,"fixture").unwrap());
+        for (from,to) in [("TRIGGER `copied_trigger`","TRIGGER `other_db`.`copied_trigger`"),("ON `copied`","ON `other_db`.`copied`"),("TRIGGER `copied_trigger`","TRIGGER `wrong_trigger`"),("ON `copied`","ON `src`"),("DEFINER=`root`","DEFINER=`someone_else`"),("AFTER INSERT","BEFORE INSERT"),("INTO `fixture`.`audit`","INTO `audit`"),("VALUES('ON `fixture`.`copied`')","VALUES('changed')")]{
+            let wrong=actual.replacen(from,to,1);assert_ne!(canonical,mysql_copy_trigger_definition(&wrong,"fixture").unwrap(),"{from} -> {to}");
+        }
     }
     #[test]fn mysql_trigger_mode_and_backslash_protection_remain_enforced(){
         let mut b=fixture(true);let mut trigger=mysql_trigger();trigger.insert("mode".into(),Some("STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES".into()));b.native.as_mut().unwrap().triggers.push(trigger);assert!(operation_steps(&b,&operation()).is_err());

@@ -17,14 +17,64 @@ use crate::error::{AppError, CmdResult};
 /// 当前版本号（由 Cargo.toml 提供，与 tauri.conf.json / package.json 保持一致）。
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 默认更新清单地址：挂在自有镜像仓库 Navkit-drivers 上，与驱动下载同一托管域。
-const DEFAULT_FEED_URL: &str =
-    "https://raw.githubusercontent.com/GaoHu1997/Navkit-drivers/main/updates/navkit-win64.json";
+/// 更新清单地址：发布在 GitHub Releases 的资产（每次随版本在 Release 页上传 `navkit-win64.json`）。
+/// 用 `latest/download` 指向最新正式版 Release，**无需每次改代码**；
+/// 注意：`latest` 只认正式版（预发布 prerelease 不算）；v1.0.0 正式版发布后该地址即可直接命中，
+/// 若仓库暂时只有预发布版本则该地址会 404，此时可用 `data/update/feed.json` 指向具体 tag 的清单地址。
+const FEED_URL: &str =
+    "https://github.com/GaoHu1997/Navkit/releases/latest/download/navkit-win64.json";
+
+/// GitHub 加速镜像（前缀拼接式：`{加速器}{原始 GitHub/raw URL}`）。
+///
+/// 数组顺序即首选顺序：拉取清单/下载安装包时按顺序尝试，某个源连不上或
+/// 校验失败会自动切到下一个。因此顺序只影响首选速度、不影响正确性——
+/// 靠后的慢源只在前面的源都失败时才用。
+///
+/// 排序依据：用户本机测速（GitHub 加速选择器，ms 越小越快）。各代理的
+/// 可用性会随网络与时间波动，这里保留全部作为逐级兜底；`gh-proxy.com`
+/// 为通用稳定代理，实测可用，置于末尾兜底。
+const GITHUB_ACCELERATORS: &[&str] = &[
+    "https://git.tangbao.cc/",           // 48ms（用户图最快）
+    "https://github.dpik.top/",          // 117ms
+    "https://github-proxy.lixxing.top/", // 190ms
+    "https://ghpxy.hwinzniej.top/",      // 268ms
+    "https://kenyu.ggff.net/",           // 379ms
+    "https://gh.aaa.team/",              // 509ms
+    "https://hub.ddayh.com/",            // 662ms
+    "https://gh.ddlc.top/",              // 773ms
+    "https://y.whereisdoge.work/",       // 855ms
+    "https://gh-proxy.com/",             // 新增，通用稳定代理，兜底
+];
+
+/// 把一个原始 GitHub / raw 地址展开为「直连 + 各加速器」候选列表。
+/// 用于清单候选，也可用于生成清单 `mirrors`（安装包镜像）。
+pub fn accelerated_urls(original: &str) -> Vec<String> {
+    let mut urls = Vec::with_capacity(GITHUB_ACCELERATORS.len() + 1);
+    urls.push(original.to_string());
+    for acc in GITHUB_ACCELERATORS {
+        urls.push(format!("{acc}{original}"));
+    }
+    urls
+}
+
+/// 默认清单候选：直连优先（可信），失败后逐个用加速器代理同一份清单。
+/// 清单在 Release 资产上；jsDelivr 只镜像仓库文件、不镜像 Release 资产，故不用它兜底。
+fn default_feed_urls() -> Vec<String> {
+    accelerated_urls(FEED_URL)
+}
 
 /// 单块读取超时（视为网络停滞）。
 const CHUNK_TIMEOUT_SECS: u64 = 30;
-/// 网络类失败的最大重试次数。
+/// 单个源网络类失败的最大重试次数（用尽后切换到下一个源/镜像）。
 const MAX_RETRIES: u32 = 3;
+/// 清单探测的连接超时：连接不上要快速失败并切源，不能干等。
+const MANIFEST_CONNECT_TIMEOUT_SECS: u64 = 8;
+/// 清单探测的整体超时。
+const MANIFEST_TOTAL_TIMEOUT_SECS: u64 = 15;
+/// 更新包下载的连接超时。
+const DOWNLOAD_CONNECT_TIMEOUT_SECS: u64 = 10;
+/// 下载源测速探测：单个源的首字节超时（超时即视为该源本次不可用，排在兜底位）。
+const PROBE_TIMEOUT_MS: u64 = 4000;
 
 // ---------------------------------------------------------------- 数据结构
 
@@ -36,11 +86,60 @@ pub struct UpdateManifest {
     pub notes: String,
     #[serde(default)]
     pub pub_date: String,
+    /// 主下载地址。
     pub url: String,
+    /// 备用下载地址（镜像）。主地址网络失败时按顺序尝试，每个源都独立做完整校验。
+    #[serde(default)]
+    pub mirrors: Vec<String>,
     #[serde(default)]
     pub sha256: String,
     #[serde(default)]
     pub size: u64,
+}
+
+impl UpdateManifest {
+    /// 下载候选地址：主地址优先（GitHub 直链会自动展开为「直连 + 各加速器」），
+    /// 其次清单显式声明的镜像；去重、过滤非 http(s) 与空白项。
+    fn download_urls(&self) -> Vec<String> {
+        let mut urls: Vec<String> = Vec::new();
+        for candidate in expand_github_download(&self.url) {
+            push_unique(&mut urls, &candidate);
+        }
+        for mirror in &self.mirrors {
+            push_unique(&mut urls, mirror);
+        }
+        urls
+    }
+}
+
+/// 追加一个 HTTP(S) 候选，去重并过滤空白/非法项。
+fn push_unique(urls: &mut Vec<String>, candidate: &str) {
+    let url = candidate.trim();
+    if (url.starts_with("https://") || url.starts_with("http://")) && !urls.iter().any(|u| u == url) {
+        urls.push(url.to_string());
+    }
+}
+
+/// 若地址是 GitHub 直链（github.com / raw / release 资产域），展开为「直连 + 各加速器」；
+/// 否则原样返回。加速器只负责传输，安装包仍以清单里的 SHA-256 完整校验兜底。
+fn expand_github_download(url: &str) -> Vec<String> {
+    let u = url.trim();
+    if u.is_empty() {
+        return Vec::new();
+    }
+    let is_github = [
+        "://github.com/",
+        "://raw.githubusercontent.com/",
+        "://objects.githubusercontent.com/",
+        "://release-assets.githubusercontent.com/",
+    ]
+    .iter()
+    .any(|needle| u.contains(needle));
+    if is_github {
+        accelerated_urls(u)
+    } else {
+        vec![u.to_string()]
+    }
 }
 
 /// 检查结果。
@@ -91,21 +190,33 @@ fn partial_path() -> PathBuf {
     update_dir().join("navkit-new.exe.part")
 }
 
-/// feed 地址优先级：环境变量 NAVKIT_UPDATE_FEED → data/update/feed.json（内容即 URL）→ 默认清单地址。
-fn feed_url() -> String {
+/// 解析 feed 覆盖内容：支持单行一个 URL，或逗号/空白/换行分隔的多个 URL。
+fn parse_feed_override(text: &str) -> Vec<String> {
+    text.split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// feed 地址候选，按优先级返回：
+/// 1. 环境变量 `NAVKIT_UPDATE_FEED`（设置即只用它，便于强制指定单一源）；
+/// 2. `data/update/feed.json`（内容可为单个或多个 URL）；
+/// 3. 内置默认候选 `default_feed_urls()`（直连 + 各加速器 + jsDelivr）。
+fn feed_urls() -> Vec<String> {
     if let Ok(url) = std::env::var("NAVKIT_UPDATE_FEED") {
-        if !url.trim().is_empty() {
-            return url.trim().to_string();
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            return vec![trimmed.to_string()];
         }
     }
-    let override_file = update_dir().join("feed.json");
-    if let Ok(text) = std::fs::read_to_string(&override_file) {
-        let url = text.trim().to_string();
-        if url.starts_with("http://") || url.starts_with("https://") {
-            return url;
+    if let Ok(text) = std::fs::read_to_string(update_dir().join("feed.json")) {
+        let urls = parse_feed_override(&text);
+        if !urls.is_empty() {
+            return urls;
         }
     }
-    DEFAULT_FEED_URL.to_string()
+    default_feed_urls()
 }
 
 /// 启动时清理：删除上次替换留下的旧版 exe 与下载残留。删除失败（仍被占用）静默留给下次。
@@ -171,42 +282,95 @@ fn parse_segments(v: &str) -> Vec<u64> {
 
 // ---------------------------------------------------------------- HTTP
 
+/// 从环境变量取代理地址并构造 reqwest 代理。
+/// 优先专用变量 `NAVKIT_UPDATE_PROXY`，其次通用 `HTTPS_PROXY` / `ALL_PROXY` / `HTTP_PROXY`
+/// （大小写两种写法都认）。取不到返回 None，此时沿用 reqwest 自身的环境变量代理行为。
+fn proxy_from_env() -> Option<reqwest::Proxy> {
+    const KEYS: &[&str] = &[
+        "NAVKIT_UPDATE_PROXY",
+        "HTTPS_PROXY", "https_proxy",
+        "ALL_PROXY", "all_proxy",
+        "HTTP_PROXY", "http_proxy",
+    ];
+    for key in KEYS {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                if let Ok(proxy) = reqwest::Proxy::all(value) {
+                    return Some(proxy);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn http_client(total_timeout_secs: u64) -> anyhow::Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(MANIFEST_CONNECT_TIMEOUT_SECS))
         .timeout(std::time::Duration::from_secs(total_timeout_secs))
-        .user_agent(concat!("NavKit/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("NavKit/", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = proxy_from_env() {
+        builder = builder.proxy(proxy);
+    }
+    builder
         .build()
         .map_err(|e| anyhow::anyhow!("HTTP 客户端构建失败: {e}"))
 }
 
-/// 拉取并解析更新清单。
+/// 下载用客户端：不设整体超时（大文件），连接超时较短，源不可用时尽快切镜像。
+fn download_client() -> anyhow::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(DOWNLOAD_CONNECT_TIMEOUT_SECS))
+        .user_agent(concat!("NavKit/", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = proxy_from_env() {
+        builder = builder.proxy(proxy);
+    }
+    builder
+        .build()
+        .map_err(|e| anyhow::anyhow!("HTTP 客户端构建失败: {e}"))
+}
+
+/// 拉取并解析更新清单：逐个候选地址尝试，任一成功即返回。
 async fn fetch_manifest() -> anyhow::Result<UpdateManifest> {
-    let url = feed_url();
-    let client = http_client(30)?;
-    let mut last_err = String::new();
-    for attempt in 0..MAX_RETRIES {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(1000 * (1 << attempt))).await;
-        }
-        match client.get(&url).send().await {
-            Ok(resp) => match resp.error_for_status() {
-                Ok(resp) => match resp.json::<UpdateManifest>().await {
-                    Ok(m) => {
-                        if m.version.trim().is_empty() || m.url.trim().is_empty() {
-                            last_err = "清单缺少 version 或 url 字段".to_string();
-                        } else {
-                            return Ok(m);
-                        }
-                    }
-                    Err(e) => last_err = format!("清单解析失败: {e}"),
-                },
-                Err(e) => last_err = format!("清单下载失败: {e}"),
-            },
-            Err(e) => last_err = format!("清单请求失败: {e}"),
+    let client = http_client(MANIFEST_TOTAL_TIMEOUT_SECS)?;
+    let urls = feed_urls();
+    let mut errors: Vec<String> = Vec::new();
+    for url in &urls {
+        // 每个源最多探测 2 次：连接不上就尽快换源，不对单源长重试。
+        for attempt in 0..2u32 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            }
+            match fetch_manifest_once(&client, url).await {
+                Ok(m) => return Ok(m),
+                Err(e) => errors.push(format!("{url}（第 {} 次）: {e:#}", attempt + 1)),
+            }
         }
     }
-    Err(anyhow::anyhow!("{last_err}"))
+    Err(anyhow::anyhow!(
+        "拉取更新清单失败，所有候选源均不可用：{}",
+        errors.join("；")
+    ))
+}
+
+/// 从单个地址拉取并解析清单，校验必要字段。
+async fn fetch_manifest_once(client: &reqwest::Client, url: &str) -> anyhow::Result<UpdateManifest> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("请求失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| anyhow::anyhow!("清单下载失败: {e}"))?;
+    let manifest = resp
+        .json::<UpdateManifest>()
+        .await
+        .map_err(|e| anyhow::anyhow!("清单解析失败: {e}"))?;
+    if manifest.version.trim().is_empty() || manifest.url.trim().is_empty() {
+        return Err(anyhow::anyhow!("清单缺少 version 或 url 字段"));
+    }
+    Ok(manifest)
 }
 
 /// 检查更新。
@@ -255,88 +419,187 @@ pub async fn download(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     result
 }
 
+/// 并发探测各候选源的首字节延迟（发 Range 0-1023 的轻量请求），
+/// 返回按延迟升序的可用源在前、探测失败的源按原序附后（仍作兜底，不丢弃）。
+async fn rank_by_latency(client: &reqwest::Client, urls: &[String]) -> Vec<String> {
+    let probes = urls.iter().map(|url| {
+        let client = client.clone();
+        let url = url.clone();
+        async move {
+            let started = Instant::now();
+            let deadline = std::time::Duration::from_millis(PROBE_TIMEOUT_MS);
+            let ok = match tokio::time::timeout(deadline, async {
+                let resp = client
+                    .get(&url)
+                    .header(reqwest::header::RANGE, "bytes=0-1023")
+                    .send()
+                    .await?;
+                let status = resp.status();
+                // 206（分段）或 200（整段）都说明该源能提供此文件。
+                Ok::<bool, reqwest::Error>(
+                    status == reqwest::StatusCode::PARTIAL_CONTENT || status.is_success(),
+                )
+            })
+            .await
+            {
+                Ok(Ok(v)) => v,
+                _ => false, // 超时 / 连接 / 状态错误：本次不可用
+            };
+            (url, ok, started.elapsed().as_millis() as u64)
+        }
+    });
+    let mut results = futures::future::join_all(probes).await;
+    // 可用源排前（延迟升序）；不可用源随后（也按延迟升序，尽量把快速失败的排前面）。
+    results.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
+    results.into_iter().map(|(url, _, _)| url).collect()
+}
+
+/// 从 URL 取 host，用于提示当前选用的下载源。
+fn host_of(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(url)
+        .to_string()
+}
+
 async fn download_inner(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     let manifest = fetch_manifest().await?;
     let expected_hash = manifest.sha256.trim().to_lowercase();
     let known_size = manifest.size;
+    let mut urls = manifest.download_urls();
+    if urls.is_empty() {
+        return Err(anyhow::anyhow!("更新清单未提供有效的下载地址"));
+    }
 
-    emit(app, "downloading", 0, known_size, 0, "开始下载");
-    // 下载请求不设整体超时（大文件），由单块 30s 停滞检测兜底。
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .user_agent(concat!("NavKit/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| anyhow::anyhow!("HTTP 客户端构建失败: {e}"))?;
+    // 下载请求不设整体超时（大文件），由单块 30s 停滞检测兜底；连接超时较短以便切源。
+    let client = download_client()?;
 
-    let mut last_err = String::new();
-    for attempt in 0..MAX_RETRIES {
-        if attempt > 0 {
-            let wait = 2000u64 * (1 << attempt);
+    // 每次下载前并发探测各候选源的首字节延迟，选最快的先下（其余按延迟顺序做兜底）。
+    if urls.len() > 1 {
+        emit(app, "downloading", 0, known_size, 0, "正在探测各下载源速度…");
+        urls = rank_by_latency(&client, &urls).await;
+        if let Some(fastest) = urls.first() {
             emit(
                 app,
                 "downloading",
                 0,
                 known_size,
                 0,
-                &format!("下载失败，{wait} 毫秒后重试（第 {attempt}/{MAX_RETRIES} 次）"),
+                &format!("已选择最快下载源：{}", host_of(fastest)),
             );
-            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
         }
-        match download_once(&client, &manifest, app).await {
-            Ok(done) => {
-                emit(app, "verifying", done, known_size.max(done), 0, "校验 SHA-256");
-                let file_bytes = tokio::fs::read(partial_path())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("读取下载文件失败: {e}"))?;
-                if known_size > 0 && file_bytes.len() as u64 != known_size {
-                    last_err = format!("文件大小不匹配（期望 {known_size} 字节，实际 {}）", file_bytes.len());
-                    let _ = tokio::fs::remove_file(partial_path()).await;
-                    continue;
-                }
-                let mut hasher = Sha256::new();
-                hasher.update(&file_bytes);
-                let actual = format!("{:x}", hasher.finalize());
-                if !expected_hash.is_empty() && actual != expected_hash {
-                    let _ = tokio::fs::remove_file(partial_path()).await;
-                    last_err = "SHA-256 校验不匹配，已清除损坏数据".to_string();
-                    continue;
-                }
-                tokio::fs::rename(partial_path(), staged_path())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("落位失败: {e}"))?;
-                emit(app, "ready", file_bytes.len() as u64, known_size.max(file_bytes.len() as u64), 0, "更新已就绪，重启后生效");
-                crate::storage::log_line("info", &format!("更新包下载完成：{} 字节，版本 {}", file_bytes.len(), manifest.version));
-                return Ok(staged_path());
+    }
+
+    emit(app, "downloading", 0, known_size, 0, "开始下载");
+    let mut last_err = String::new();
+    // 外层：逐个下载源（已按测速排序）。某个源失败时切到下一个，每个源独立做完整校验。
+    for (origin_index, url) in urls.iter().enumerate() {
+        if origin_index > 0 {
+            // 切换下载源：清掉上一个源留下的半成品，绝不跨源拼接字节。
+            let _ = tokio::fs::remove_file(partial_path()).await;
+            emit(
+                app,
+                "downloading",
+                0,
+                known_size,
+                0,
+                &format!("当前下载源不可用，切换备用源（第 {} 个）", origin_index + 1),
+            );
+        }
+        // 内层：同一源内断点续传 + 重试。
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                let wait = 2000u64 * (1 << attempt);
+                emit(
+                    app,
+                    "downloading",
+                    0,
+                    known_size,
+                    0,
+                    &format!("下载失败，{wait} 毫秒后重试（第 {attempt}/{MAX_RETRIES} 次）"),
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
             }
-            Err(e) => {
-                // 网络失败保留 .part 供断点续传
-                last_err = format!("{e}");
-                crate::storage::log_line("error", &format!("更新下载失败（第 {} 次）：{e}", attempt + 1));
+            match download_once(&client, url, known_size, app).await {
+                Ok(done) => {
+                    emit(app, "verifying", done, known_size.max(done), 0, "校验 SHA-256");
+                    match verify_partial(&expected_hash, known_size).await {
+                        Ok(len) => {
+                            tokio::fs::rename(partial_path(), staged_path())
+                                .await
+                                .map_err(|e| anyhow::anyhow!("落位失败: {e}"))?;
+                            emit(app, "ready", len, known_size.max(len), 0, "更新已就绪，重启后生效");
+                            crate::storage::log_line(
+                                "info",
+                                &format!("更新包下载完成：{} 字节，版本 {}（源 {url}）", len, manifest.version),
+                            );
+                            return Ok(staged_path());
+                        }
+                        Err(e) => {
+                            // 校验失败：清掉坏包并换下一个源（同源重试大概率仍是坏包）。
+                            let _ = tokio::fs::remove_file(partial_path()).await;
+                            last_err = format!("{e}");
+                            crate::storage::log_line("error", &format!("更新包校验失败（{url}）：{e}"));
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    // 网络失败保留 .part 供同源断点续传
+                    last_err = format!("{e}");
+                    crate::storage::log_line(
+                        "error",
+                        &format!("更新下载失败（第 {} 次，{url}）：{e}", attempt + 1),
+                    );
+                }
             }
         }
     }
-    Err(anyhow::anyhow!("下载更新失败：{last_err}"))
+    Err(anyhow::anyhow!("下载更新失败，已尝试所有下载源：{last_err}"))
+}
+
+/// 校验已下载的 `.part`：文件大小 + SHA-256。通过返回实际字节数；失败返回错误。
+/// 是否删除 `.part` 由调用方决定（切源时要清掉旧源半成品）。
+async fn verify_partial(expected_hash: &str, known_size: u64) -> anyhow::Result<u64> {
+    let file_bytes = tokio::fs::read(partial_path())
+        .await
+        .map_err(|e| anyhow::anyhow!("读取下载文件失败: {e}"))?;
+    let actual_len = file_bytes.len() as u64;
+    if known_size > 0 && actual_len != known_size {
+        return Err(anyhow::anyhow!("文件大小不匹配（期望 {known_size} 字节，实际 {actual_len}）"));
+    }
+    if !expected_hash.is_empty() {
+        let mut hasher = Sha256::new();
+        hasher.update(&file_bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != expected_hash {
+            return Err(anyhow::anyhow!("SHA-256 校验不匹配，已清除损坏数据"));
+        }
+    }
+    Ok(actual_len)
 }
 
 async fn download_once(
     client: &reqwest::Client,
-    manifest: &UpdateManifest,
+    url: &str,
+    known_size: u64,
     app: &tauri::AppHandle,
 ) -> anyhow::Result<u64> {
     let mut have: u64 = tokio::fs::metadata(partial_path())
         .await
         .map(|m| m.len())
         .unwrap_or(0);
-    if manifest.size > 0 && have == manifest.size {
+    if known_size > 0 && have == known_size {
         // 已完整但尚未校验：直接返回交给校验环节
         return Ok(have);
     }
 
-    let mut response = send_range_request(client, manifest, have).await?;
+    let mut response = send_range_request(client, url, have).await?;
     // 416 = Range 起点越界（文件损坏）；200 = 服务器不支持续传（从头写）
     if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
         have = 0;
-        response = send_range_request(client, manifest, 0).await?;
+        response = send_range_request(client, url, 0).await?;
     }
     if response.status() == reqwest::StatusCode::OK && have > 0 {
         have = 0; // 服务器忽略 Range：整段重来
@@ -362,7 +625,7 @@ async fn download_once(
 
     let mut done: u64 = have;
     let mut meter = SpeedMeter::new();
-    let mut total = if manifest.size > 0 { manifest.size } else { have };
+    let mut total = if known_size > 0 { known_size } else { have };
     use std::io::Write as _;
 
     loop {
@@ -382,7 +645,7 @@ async fn download_once(
         };
         file.write_all(&next)?;
         done += next.len() as u64;
-        if manifest.size == 0 {
+        if known_size == 0 {
             total = done;
         }
         let speed = meter.sample(next.len() as u64);
@@ -394,10 +657,10 @@ async fn download_once(
 
 async fn send_range_request(
     client: &reqwest::Client,
-    manifest: &UpdateManifest,
+    url: &str,
     have: u64,
 ) -> anyhow::Result<reqwest::Response> {
-    let mut request = client.get(&manifest.url);
+    let mut request = client.get(url);
     if have > 0 {
         request = request.header("Range", format!("bytes={have}-"));
     }
@@ -632,6 +895,114 @@ mod tests {
         assert_eq!(m.notes, "");
         assert_eq!(m.sha256, "");
         assert_eq!(m.size, 0);
+    }
+
+    #[test]
+    fn 清单解析_含镜像() {
+        let text = r#"{"version":"1.2.0","url":"https://example.com/navkit.exe","mirrors":["https://mirror.example.com/navkit.exe"],"size":9}"#;
+        let m: UpdateManifest = serde_json::from_str(text).unwrap();
+        assert_eq!(m.mirrors, vec!["https://mirror.example.com/navkit.exe".to_string()]);
+        assert_eq!(
+            m.download_urls(),
+            vec![
+                "https://example.com/navkit.exe".to_string(),
+                "https://mirror.example.com/navkit.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn 下载地址候选_主源优先且去重过滤() {
+        let m = UpdateManifest {
+            version: "1.0.0".into(),
+            notes: String::new(),
+            pub_date: String::new(),
+            url: "https://main.example.com/navkit.exe".into(),
+            mirrors: vec![
+                "https://main.example.com/navkit.exe".into(), // 与主源重复
+                "  ".into(),                                  // 空白
+                "ftp://bad.example.com/x".into(),             // 非 http(s)
+                "https://mirror.example.com/navkit.exe".into(),
+            ],
+            sha256: String::new(),
+            size: 0,
+        };
+        assert_eq!(
+            m.download_urls(),
+            vec![
+                "https://main.example.com/navkit.exe".to_string(),
+                "https://mirror.example.com/navkit.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feed覆盖解析_多地址() {
+        let text = "https://a.example.com/feed.json,\nhttps://b.example.com/feed.json  not-a-url";
+        assert_eq!(
+            parse_feed_override(text),
+            vec![
+                "https://a.example.com/feed.json".to_string(),
+                "https://b.example.com/feed.json".to_string(),
+            ]
+        );
+        assert!(parse_feed_override("   ").is_empty());
+    }
+
+    #[test]
+    fn 下载候选_GitHub直链自动展开加速器() {
+        let m = UpdateManifest {
+            version: "1.0.0".into(),
+            notes: String::new(),
+            pub_date: String::new(),
+            url: "https://github.com/GaoHu1997/Navkit-drivers/releases/download/v1.0.1/navkit.exe".into(),
+            mirrors: vec!["https://cdn.example.com/navkit.exe".into()],
+            sha256: String::new(),
+            size: 0,
+        };
+        let urls = m.download_urls();
+        assert_eq!(urls[0], m.url);
+        for acc in GITHUB_ACCELERATORS {
+            assert!(urls.contains(&format!("{acc}{}", m.url)), "缺少加速候选");
+        }
+        assert_eq!(urls.last().unwrap(), "https://cdn.example.com/navkit.exe");
+        assert_eq!(urls.len(), 1 + GITHUB_ACCELERATORS.len() + 1);
+    }
+
+    #[test]
+    fn 下载候选_非GitHub地址不展开() {
+        let m = UpdateManifest {
+            version: "1.0.0".into(),
+            notes: String::new(),
+            pub_date: String::new(),
+            url: "https://my-oss.example.com/navkit.exe".into(),
+            mirrors: vec![],
+            sha256: String::new(),
+            size: 0,
+        };
+        assert_eq!(
+            m.download_urls(),
+            vec!["https://my-oss.example.com/navkit.exe".to_string()]
+        );
+    }
+
+    #[test]
+    fn 默认清单候选_直连优先并拼接加速器() {
+        let urls = default_feed_urls();
+        // 首项是可信直连
+        assert_eq!(urls[0], FEED_URL);
+        // 每个加速器都拼出一份清单候选
+        for acc in GITHUB_ACCELERATORS {
+            let expected = format!("{acc}{FEED_URL}");
+            assert!(urls.contains(&expected), "缺少加速候选 {expected}");
+        }
+        // 直连 + 各加速器
+        assert_eq!(urls.len(), GITHUB_ACCELERATORS.len() + 1);
+        assert!(urls.iter().all(|u| u.starts_with("https://")));
+        // accelerated_urls 只含直连 + 加速器
+        let accelerated = accelerated_urls(FEED_URL);
+        assert_eq!(accelerated[0], FEED_URL);
+        assert_eq!(accelerated.len(), GITHUB_ACCELERATORS.len() + 1);
     }
 
     #[test]

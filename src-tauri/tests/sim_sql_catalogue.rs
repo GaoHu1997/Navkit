@@ -22,7 +22,7 @@ fn literal(s: &str) -> String { format!("'{}'",s.replace('\'',"''")) }
 fn contains(result: &MultiResult, expected: &str) -> bool { result.sets.iter().flat_map(|s|&s.rows).flat_map(|r|r.iter()).any(|v|v.as_deref()==Some(expected)) }
 fn has_null(result: &MultiResult) -> bool { result.sets.iter().flat_map(|s|&s.rows).any(|r|r.iter().any(Option::is_none)) }
 fn page_request(id: &str, namespace: &str, table: &str, offset: u64, limit: u64) -> PageRequest {
-    PageRequest { connection_id:id.into(),schema:namespace.into(),table:table.into(),offset,limit,filters:vec![],filter_logic:Default::default(),order_by:Some("id".into()),ascending:true,order_rules:None }
+    PageRequest { connection_id:id.into(),schema:namespace.into(),table:table.into(),offset,limit,include_total:true,filters:vec![],filter_logic:Default::default(),order_by:Some("id".into()),ascending:true,order_rules:None }
 }
 fn owned_dir(token: &str) -> Result<PathBuf> {
     let dir=std::env::temp_dir().join(format!("navkit-sim-sql-{token}"));

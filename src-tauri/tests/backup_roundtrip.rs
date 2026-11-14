@@ -1,4 +1,4 @@
-//! SQLite 整库备份 / 还原往返测试（使用 testdata/demo.db 的副本）。
+//! SQLite 整库备份 / 还原往返测试（自建隔离夹具，不依赖未跟踪的 demo.db）。
 
 use navkit_lib::db::{self, Db};
 
@@ -20,6 +20,21 @@ fn sqlite_req(file: &str) -> ConnectionRequest {
     }
 }
 
+async fn demo_db(file: &std::path::Path) -> Db {
+    let db = db::open(&sqlite_req(&file.to_string_lossy())).await.unwrap();
+    let Db::Sqlite(pool) = &db else { panic!("sqlite only") };
+    sqlx::raw_sql(
+        "CREATE TABLE customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
+         CREATE TABLE orders(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id)); \
+         CREATE VIEW active_users AS SELECT id,name FROM customers; \
+         WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<25) \
+         INSERT INTO customers SELECT id,'客户-' || id FROM ids; \
+         WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<50) \
+         INSERT INTO orders SELECT id,(id-1)%25+1 FROM ids;"
+    ).execute(pool).await.unwrap();
+    db
+}
+
 async fn count_rows(db: &Db, table: &str) -> i64 {
     match db {
         Db::Sqlite(pool) => {
@@ -35,10 +50,9 @@ async fn sqlite_dump_and_restore_roundtrip() {
     let dir = std::env::temp_dir().join(format!("navkit-bk-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
-    // 1. 源库：demo.db 副本
+    // 1. 源库：独立生成相同规模的确定性数据，干净检出也可复现。
     let src = dir.join("src.db");
-    std::fs::copy("../testdata/demo.db", &src).unwrap();
-    let src_db = db::open(&sqlite_req(&src.to_string_lossy())).await.unwrap();
+    let src_db = demo_db(&src).await;
 
     // 2. 整库备份（带 schema 名，验证 qualified() 对 SQLite 忽略 schema 的修复）
     let dump_file = dir.join("demo_20261103_000000.sql");
@@ -110,8 +124,7 @@ async fn sqlite_view_definition_readable() {
     let dir = std::env::temp_dir().join(format!("navkit-view-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join("src.db");
-    std::fs::copy("../testdata/demo.db", &src).unwrap();
-    let db = navkit_lib::db::open(&sqlite_req(&src.to_string_lossy())).await.unwrap();
+    let db = demo_db(&src).await;
     let def = navkit_lib::schema::view_definition(
         &db,
         DbKind::of("sqlite"),

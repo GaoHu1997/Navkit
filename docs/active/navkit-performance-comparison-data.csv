@@ -1,0 +1,14 @@
+﻿改动/测试场景,修改前,修改后,倍率与耗时变化,提高还是降低,条件与原因,证据日志标记
+SQLite CSV导入 1000行,0.059940 s,0.023039 s,2.602x; 耗时-61.56%,提高：当前隔离条件下重复A/B,一个完整目标事务，读取/转换/执行/COMMIT均计入；完整列且无trigger/FK的普通表；literal多行批,import-ab-1000.log:IMPORT_AB_MEDIAN
+SQLite CSV导入 100000行,10.504273 s,2.455240 s,4.278x; 耗时-76.63%,提高：当前隔离条件下重复A/B,一个完整目标事务，读取/转换/执行/COMMIT均计入；完整列且无trigger/FK的普通表；literal多行批,import-ab-100000-final.log:IMPORT_AB_MEDIAN
+"CSV预览 23,977,785B有效文件/200000行，返回20行",0.667592 s; 观测RSS中位峰94.14 MiB,0.001602 s; 观测RSS中位峰20.15 MiB,416.724x; 耗时-99.76%,提高，但不再校验窗口外整文件,旧实现完整读/解析后截断，新实现读取到样本即停；RSS是进程级20ms采样，2ms快路径可能漏瞬时峰，非每任务硬保证,preview-ab-20261114.log:PREVIEW_AB/PREVIEW_MEDIAN
+SQL导出单独耗时 10000行,0.577878 s,0.570695 s,1.013x; 耗时-1.24%,单独导出变化接近噪声，不能证明提速,逐行SQL对比每256行SQL；恢复同一原子事务；只能用于无语句副作用的隔离表，真实trigger/default语义可能不同，仍显式选项,sql-cycle-round1.log:SQL_CYCLE_AB/SQL_CYCLE_MEDIAN
+SQL文件恢复单独耗时 10000行,2.187588 s,0.393268 s,5.563x; 耗时-82.02%,提高（显式批量恢复语义）,逐行SQL对比每256行SQL；恢复同一原子事务；只能用于无语句副作用的隔离表，真实trigger/default语义可能不同，仍显式选项,sql-cycle-round1.log:SQL_CYCLE_AB/SQL_CYCLE_MEDIAN
+SQL导出+恢复完整周期 10000行,2.790693 s,0.970726 s,2.875x; 耗时-65.22%,提高（显式批量恢复语义）,逐行SQL对比每256行SQL；恢复同一原子事务；只能用于无语句副作用的隔离表，真实trigger/default语义可能不同，仍显式选项,sql-cycle-round1.log:SQL_CYCLE_AB/SQL_CYCLE_MEDIAN
+SQLite有键差异比较 100000行/侧,1.754858 s,24.227887 s,0.072x; 耗时+1280.62%,降低：负优化，不默认启用,新模式以快照和有界内存/磁盘换成本；已改显式低内存选项，默认兼容旧路径；单次对照不是稳定分位数结论,sync-diff-ab-final.log:actual diff/actual small diff
+SQLite有键差异比较 50行/侧,9.465500 ms,19.514200 ms,0.485x; 耗时+106.16%,降低：负优化，不默认启用,新模式以快照和有界内存/磁盘换成本；已改显式低内存选项，默认兼容旧路径；单次对照不是稳定分位数结论,sync-diff-ab-final.log:actual diff/actual small diff
+最新独立进程diff 50行/侧（3轮中位）,0.004977 s; RSS基线21.70/峰25.83/增量4.13 MiB,0.011462 s; RSS基线21.71/峰26.50/增量4.79 MiB,0.434x; 耗时+130.30%; 峰值内存+2.59%,小样本未观测到省内存，耗时也回退,当前真实默认与bounded公共入口；INTEGER/短TEXT/3字节BLOB，报告一致；20ms工作集采样含SQLite缓存，不是WebView/严格任务heap；小任务可能漏瞬时峰,diff-memory-three-rounds-20261114.log:SUMMARY
+最新独立进程diff 100000行/侧（3轮中位）,1.918499 s; RSS基线26.18/峰104.12/增量77.94 MiB,10.340559 s; RSS基线26.19/峰36.15/增量9.98 MiB,0.186x; 耗时+438.99%; 峰值内存-65.28%,耗时回退；大样本省峰值内存，仍显式选项,当前真实默认与bounded公共入口；INTEGER/短TEXT/3字节BLOB，报告一致；20ms工作集采样含SQLite缓存，不是WebView/严格任务heap；小任务可能漏瞬时峰,diff-memory-three-rounds-20261114.log:SUMMARY
+原子recipe生成 100000行,旧入口总量≤500行；同规模不可执行,2.681 s; 观测进程RSS峰32.30 MiB,不可计算提升百分比,新增规模能力，不是提速对照,真实pinned SQLite，生成/逐行绑定/最终COMMIT/校验计时；100k和1m在同一测试进程依次执行，RSS20ms采样，不外推宽表/PG/MySQL,recipe-rss-20261114.log:actual pinned/PROCESS_RSS
+原子recipe生成 1000000行,旧入口总量≤500行；同规模不可执行,28.306 s; 观测进程RSS峰32.55 MiB,不可计算提升百分比,新增规模能力，不是提速对照,真实pinned SQLite，生成/逐行绑定/最终COMMIT/校验计时；100k和1m在同一测试进程依次执行，RSS20ms采样，不外推宽表/PG/MySQL,recipe-rss-20261114.log:actual pinned/PROCESS_RSS
+原子recipe生成 10000000行,旧入口总量≤500行；同规模不可执行,279.487 s; 观测进程RSS峰32.38 MiB,不可计算提升百分比,新增规模能力，不是提速对照,真实pinned SQLite独立新测试进程；确认10000000 generated/sent/acked/committed和count/distinct；20ms采样13773次，不是WebView或服务端硬内存保证,recipe-10m-20261114.log:actual pinned/PROCESS_RSS

@@ -5,7 +5,7 @@ use base64::Engine;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use serde_json::{json, Value};
-use crate::{http_db::{HttpAdapter, HttpRows, jtext}, models::ConnectionRequest, native_db::Params};
+use crate::{http_db::{HttpAdapter, HttpExportPage, HttpRows, jtext}, models::ConnectionRequest, native_db::Params};
 
 pub struct ApiDb { kind: String, client: reqwest::Client, base: reqwest::Url, user: String, password: String, params: Params, token: tokio::sync::RwLock<Option<String>> }
 fn b64(s: &[u8]) -> String { base64::engine::general_purpose::STANDARD.encode(s) }
@@ -51,7 +51,7 @@ impl ApiDb {
             r=r.header("content-type","application/x-amz-json-1.0").header("x-amz-date",timestamp).header("x-amz-target",target).header("authorization",format!("AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",access,scope,signed,signature));
         } else if self.kind=="etcd" { if let Some(token)=self.token.read().await.clone() { r=r.header("authorization",token); } }
         else if !self.user.is_empty() { r=r.basic_auth(&self.user,Some(&self.password)); }
-        let response=r.body(text).send().await.context("原生API请求失败")?; let status=response.status(); let text=response.text().await?;
+        let response=r.body(text).send().await.context("原生API请求失败")?; let status=response.status(); let text=crate::http_db::read_response_text(response).await?;
         let value:Value=serde_json::from_str(&text).with_context(||format!("{}返回非JSON（HTTP {}）：{}",self.kind,status,text.chars().take(200).collect::<String>()))?;
         if !status.is_success() || value.get("error").is_some() || value.get("__type").is_some() { bail!("{} API失败（HTTP {}）：{}",self.kind,status,value); }
         Ok(value)
@@ -92,12 +92,93 @@ fn etcd_rows(v:&Value)->Result<HttpRows>{
     }
     Ok(HttpRows{columns:vec!["key".into(),"value".into(),"version".into(),"mod_revision".into()],rows})
 }
+const EXPORT_TOKEN_MAX_BYTES: usize = 64 * 1024;
+
+// Scan 游标绑定表名，保持 DynamoDB AttributeValue（包括 N/B）原始 JSON 表示。
+fn scan_start_key(token: &str, table: &str) -> Result<Value> {
+    if token.len() > EXPORT_TOKEN_MAX_BYTES { bail!("DynamoDB 导出游标超过 64 KiB 上限"); }
+    let value: Value = serde_json::from_str(token).context("DynamoDB 导出游标不是合法 JSON")?;
+    if value.get("table").and_then(Value::as_str) != Some(table) {
+        bail!("DynamoDB 导出游标不属于当前表");
+    }
+    match value.get("key") {
+        Some(key) if key.as_object().is_some_and(|key| !key.is_empty()) => Ok(key.clone()),
+        _ => bail!("DynamoDB 导出游标缺少非空 ExclusiveStartKey"),
+    }
+}
+fn scan_next_token(table: &str, key: Option<&Value>) -> Result<Option<String>> {
+    let Some(key) = key else { return Ok(None) };
+    let object = key.as_object().ok_or_else(|| anyhow!("DynamoDB LastEvaluatedKey 不是对象"))?;
+    if object.is_empty() { return Ok(None); }
+    let token = serde_json::to_string(&json!({"table":table,"key":key}))?;
+    if token.len() > EXPORT_TOKEN_MAX_BYTES { bail!("DynamoDB 导出游标超过 64 KiB 上限"); }
+    Ok(Some(token))
+}
+fn etcd_export_columns() -> Vec<String> {
+    ["key", "value", "version", "mod_revision"].into_iter().map(str::to_owned).collect()
+}
+
 #[async_trait]
 impl HttpAdapter for ApiDb {
  async fn ping(&self)->Result<String>{match self.kind.as_str(){"druid"|"rqlite"=>{let r=self.sql("SELECT 1").await?;if r.columns.is_empty()||r.rows.is_empty(){bail!("SQL健康查询未返回真实行");}} "dynamodb"=>{let v=self.dynamo("ListTables",json!({"Limit":1})).await?;if !v["TableNames"].is_array(){bail!("DynamoDB ListTables缺少TableNames数组");}} "etcd"=>{let v=self.post("/v3/maintenance/status",json!({}),None).await?;if !v["version"].is_string()||!v["header"].is_object(){bail!("etcd maintenance status缺少version/header");}} _=>bail!("未知API数据源")} Ok(format!("{} API已验证",self.kind))}
  async fn containers(&self)->Result<Vec<(String,String)>>{let names=match self.kind.as_str(){"druid"=>first_column(self.sql("SELECT DISTINCT TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES").await?),"rqlite"=>{self.sql("SELECT 1").await?;vec!["main".into()]},"dynamodb"=>{self.list_tables().await?;vec![self.params.get("region").unwrap_or("us-east-1").to_string()]},"etcd"=>{self.etcd_range("\0",true,1).await?;vec!["/".into()]},_=>bail!("未知API数据源")};Ok(names.into_iter().map(|n|(n,self.kind.clone())).collect())}
  async fn objects(&self,container:&str)->Result<Vec<String>>{match self.kind.as_str(){"druid"=>Ok(first_column(self.sql(&format!("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA={}",crate::db::quote_literal(container))).await?)),"rqlite"=>Ok(first_column(self.sql("SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name").await?)),"dynamodb"=>self.list_tables().await,"etcd"=>{let key=if container=="/" {"\0"} else {container};let v=self.etcd_range(key,true,10000).await?;if v.get("more").and_then(Value::as_bool)==Some(true){bail!("etcd目录超过10000个key，请指定更窄前缀");}Ok(first_column(etcd_rows(&v)?))},_=>bail!("未知API数据源")}}
  async fn rows(&self,container:&str,object:&str,offset:u64,limit:u64)->Result<HttpRows>{match self.kind.as_str(){"druid"|"rqlite"=>{let kind=crate::models::DbKind::of(&self.kind);self.sql(&format!("SELECT * FROM {} LIMIT {} OFFSET {}",crate::db::qualified(&kind,if self.kind=="rqlite" {""} else {container},object),limit.min(10000),offset)).await},"dynamodb"=>{if offset.saturating_add(limit)>10000 { bail!("DynamoDB浏览窗口最多10000行，请缩小offset/limit"); } let target=offset.saturating_add(limit);let mut items=Vec::new();let mut last=None;while items.len()<(target as usize){let mut p=json!({"TableName":object,"Limit":(target-items.len() as u64).max(1)});if let Some(k)=last{p["ExclusiveStartKey"]=k;}let v=self.dynamo("Scan",p).await?;items.extend(v["Items"].as_array().ok_or_else(||anyhow!("DynamoDB Scan响应缺少Items"))?.iter().cloned());last=v.get("LastEvaluatedKey").cloned().filter(|v|v.as_object().is_some_and(|o|!o.is_empty()));if last.is_none(){break;}}let selected=items.into_iter().skip(offset as usize).take(limit.min(10000) as usize).collect::<Vec<_>>();Ok(table_rows(&selected))},"etcd"=>{let mut r=etcd_rows(&self.etcd_range(object,false,limit.min(10000)).await?)?;r.rows=r.rows.into_iter().skip(offset as usize).take(limit as usize).collect();Ok(r)},_=>bail!("未知API数据源")}}
+ /// 导出不复用 DynamoDB 浏览窗口：每次 Scan 仅请求当前页，依 LastEvaluatedKey 续接。
+ /// etcd 的目录对象是一个实际 key，只导出该 key 当前值，不虚构表或历史扫描。
+ async fn export_page(&self,container:&str,object:&str,token:Option<&str>,limit:u64)->Result<HttpExportPage>{
+    if limit == 0 {
+        return Ok(HttpExportPage {
+            data: HttpRows { columns: if self.kind == "etcd" { etcd_export_columns() } else { vec![] }, rows: vec![] },
+            next: None,
+        });
+    }
+    match self.kind.as_str() {
+        "dynamodb" => {
+            let mut request = json!({"TableName":object,"Limit":limit.clamp(1, 1000)});
+            let start_key = token.map(|token| scan_start_key(token, object)).transpose()?;
+            if let Some(key) = &start_key { request["ExclusiveStartKey"] = key.clone(); }
+            let value = self.dynamo("Scan", request).await?;
+            let items = value["Items"].as_array().ok_or_else(|| anyhow!("DynamoDB Scan 响应缺少 Items"))?;
+            if items.iter().any(|item| !item.is_object()) { bail!("DynamoDB Scan Items 包含非对象记录"); }
+            let next = scan_next_token(object, value.get("LastEvaluatedKey"))?;
+            if next.is_some() && start_key.as_ref() == value.get("LastEvaluatedKey") { bail!("DynamoDB Scan 导出游标未推进"); }
+            // 空 Items 页仍可能有 LastEvaluatedKey：是否 EOF 只能由 next 决定。
+            Ok(HttpExportPage { data: table_rows(items), next })
+        }
+        "etcd" => {
+            if token.is_some() { bail!("etcd 单 key 导出没有续页游标"); }
+            let key = match object.strip_prefix("base64:") {
+                Some(raw) => base64::engine::general_purpose::STANDARD.decode(raw).context("etcd 目录 key 不是有效 base64")?,
+                None => object.as_bytes().to_vec(),
+            };
+            if key.is_empty() { bail!("etcd 导出 key 不能为空"); }
+            let value = self.post("/v3/kv/range", json!({"key":b64(&key),"limit":"1"}), None).await?;
+            if value.get("more").and_then(Value::as_bool) == Some(true) { bail!("etcd 单 key 查询错误地返回了更多记录"); }
+            let data = etcd_rows(&value)?;
+            if data.rows.len() > 1 { bail!("etcd 单 key 查询返回多条记录"); }
+            if let Some(kvs) = value.get("kvs").and_then(Value::as_array) {
+                for kv in kvs {
+                    let actual = kv.get("key").and_then(Value::as_str).ok_or_else(|| anyhow!("etcd key 缺少 base64 字符串"))?;
+                    if !kv.get("value").is_some_and(Value::is_string) { bail!("etcd 单 key 查询缺少 base64 value"); }
+                    if base64::engine::general_purpose::STANDARD.decode(actual)? != key { bail!("etcd 单 key 查询返回了不同 key"); }
+                }
+            }
+            Ok(HttpExportPage { data, next: None })
+        }
+        _ => {
+            let offset = match token { None => 0, Some(t) => t.parse::<u64>().context("导出分页游标无效")? };
+            let data = self.rows(container, object, offset, limit).await?;
+            let count = data.rows.len() as u64;
+            let next = if count == 0 { None } else { Some(offset.checked_add(count).ok_or_else(|| anyhow!("导出分页偏移溢出"))?.to_string()) };
+            Ok(HttpExportPage { data, next })
+        }
+    }
+ }
  async fn run(&self,_:&str,_:&str,text:&str)->Result<HttpRows>{match self.kind.as_str(){"druid"|"rqlite"=>self.sql(text).await,"dynamodb"=>{let (op,payload)=if text.trim().starts_with('{'){let v:Value=serde_json::from_str(text)?;(v["operation"].as_str().ok_or_else(||anyhow!("需operation字段"))?.to_string(),v.get("payload").cloned().unwrap_or(json!({})))}else{("ExecuteStatement".into(),json!({"Statement":text}))};let v=self.dynamo(&op,payload).await?;Ok(if let Some(items)=v.get("Items").and_then(Value::as_array){table_rows(items)}else{table_rows(&[v])})},"etcd"=>{let v:Value=serde_json::from_str(text).context("etcd命令为JSON {operation:get|range|put|delete,key,value}")?;let key=v["key"].as_str().ok_or_else(||anyhow!("etcd需要key"))?;match v["operation"].as_str(){Some("get")=>etcd_rows(&self.etcd_range(key,false,10000).await?),Some("range")=>etcd_rows(&self.etcd_range(key,true,10000).await?),Some("put")=>{let val=v["value"].as_str().ok_or_else(||anyhow!("put需要value字符串"))?;Ok(table_rows(&[self.post("/v3/kv/put",json!({"key":b64(key.as_bytes()),"value":b64(val.as_bytes())}),None).await?]))},Some("delete")=>Ok(table_rows(&[self.post("/v3/kv/deleterange",json!({"key":b64(key.as_bytes())}),None).await?])),_=>bail!("未知etcd operation")}},_=>bail!("未知API数据源")}}
 }
+#[cfg(test)]
+#[path = "native_api_export_tests.rs"]
+mod native_api_export_tests;
+
 #[cfg(test)]mod tests{use super::*;#[test]fn prefix_end_preserves_bytes(){assert_eq!(prefix_end(b"/app/"),b"/app0");assert_eq!(prefix_end(&[255]),vec![0]);}#[test]fn etcd_unicode_null(){let r=etcd_rows(&json!({"header":{},"kvs":[{"key":b64("键".as_bytes()),"value":b64("值;尾".as_bytes())}]})).unwrap();assert_eq!(r.rows[0][1].as_deref(),Some("值;尾"));}#[test]fn signing_key_is_256_bits(){assert_eq!(signing_key("secret","20260101","us-east-1").len(),32);}}

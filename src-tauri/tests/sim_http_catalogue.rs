@@ -12,7 +12,7 @@ fn request(s:&sim_http::Server)->ConnectionRequest{
     if d.kind=="pulsar"{params.push_str(";tenant=tenant");}
     ConnectionRequest{kind:DbKind::of(&d.kind),host:"127.0.0.1".into(),port:s.port,user:"sim_user".into(),password:"sim_password".into(),database:d.container,file:String::new(),params,timeout_secs:10}
 }
-fn page(id:&str,d:&sim_http::Data,offset:u64,limit:u64)->PageRequest{PageRequest{connection_id:id.into(),schema:d.container.clone(),table:d.object.clone(),offset,limit,order_by:None,ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None}}
+fn page(id:&str,d:&sim_http::Data,offset:u64,limit:u64)->PageRequest{PageRequest{connection_id:id.into(),schema:d.container.clone(),table:d.object.clone(),offset,limit,include_total:true,order_by:None,ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None}}
 fn contains(rows:&[Vec<Option<String>>],text:&str)->bool {
     fn value(v:&Value,text:&str)->bool { match v {
         Value::String(s)=>s==text || (0..4).any(|i|s==&format!("{text}-row{i}")) || serde_json::from_str::<Value>(s).is_ok_and(|v| !v.is_string() && value(&v,text)),

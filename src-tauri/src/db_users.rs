@@ -553,14 +553,14 @@ pub fn build_user_plan(current: &DbUserDetail, draft: &DbUserDraft) -> DbUserPla
     let grant: BTreeSet<String> = desired_granted.difference(&current_granted).cloned().collect();
     let revoke: BTreeSet<String> = current_granted.difference(&desired_granted).cloned().collect();
     if !grant.is_empty() {
-        let list = grant.iter().map(|key| display_privilege(key)).collect::<Vec<_>>().join(", ");
+        let list = grant.iter().map(|key| display_privilege(key).to_ascii_uppercase()).collect::<Vec<_>>().join(", ");
         let with_option = if desired_grant_option && !current_grant_option { " WITH GRANT OPTION" } else { "" };
         statements.push(format!("GRANT {} ON *.* TO {}{}", list, target, with_option));
     } else if desired_grant_option && !current_grant_option {
         statements.push(format!("GRANT USAGE ON *.* TO {} WITH GRANT OPTION", target));
     }
     if !revoke.is_empty() {
-        let list = revoke.iter().map(|key| display_privilege(key)).collect::<Vec<_>>().join(", ");
+        let list = revoke.iter().map(|key| display_privilege(key).to_ascii_uppercase()).collect::<Vec<_>>().join(", ");
         statements.push(format!("REVOKE {} ON *.* FROM {}", list, target));
     }
     if current_grant_option && !desired_grant_option {
@@ -592,12 +592,12 @@ pub fn build_user_plan(current: &DbUserDetail, draft: &DbUserDraft) -> DbUserPla
         let granted: BTreeSet<String> = desired.difference(&current_set).cloned().collect();
         let revoked: BTreeSet<String> = current_set.difference(desired).cloned().collect();
         if !granted.is_empty() {
-            let list = granted.iter().map(|key| display_privilege(key)).collect::<Vec<_>>().join(", ");
+            let list = granted.iter().map(|key| display_privilege(key).to_ascii_uppercase()).collect::<Vec<_>>().join(", ");
             let with_option = if !current_grantable { "" } else { "" };
             statements.push(format!("GRANT {} ON {} TO {}{}", list, reference, target, with_option));
         }
         if !revoked.is_empty() {
-            let list = revoked.iter().map(|key| display_privilege(key)).collect::<Vec<_>>().join(", ");
+            let list = revoked.iter().map(|key| display_privilege(key).to_ascii_uppercase()).collect::<Vec<_>>().join(", ");
             statements.push(format!("REVOKE {} ON {} FROM {}", list, reference, target));
         }
     }
@@ -608,7 +608,7 @@ pub fn build_user_plan(current: &DbUserDetail, draft: &DbUserDraft) -> DbUserPla
         if current_set.is_empty() {
             continue;
         }
-        let list = current_set.iter().map(|key| display_privilege(key)).collect::<Vec<_>>().join(", ");
+        let list = current_set.iter().map(|key| display_privilege(key).to_ascii_uppercase()).collect::<Vec<_>>().join(", ");
         statements.push(format!("REVOKE {} ON {} FROM {}", list, object_ref(database, name), target));
     }
 
@@ -790,7 +790,8 @@ mod tests {
         let plan = build_user_plan(&detail(), &draft());
         assert!(plan.statements.iter().any(|item| item == "GRANT INSERT ON *.* TO 'app'@'%'"));
         assert!(plan.statements.iter().any(|item| item == "GRANT UPDATE ON \u{0060}shop\u{0060}.* TO 'app'@'%'"));
-        assert!(plan.statements.iter().any(|item| item == "GRANT \u{0060}writer\u{0060}@\u{0060}%\u{0060} TO 'app'@'%'"));
+        // MySQL role accounts use the same quoted user@host syntax as principals.
+        assert!(plan.statements.iter().any(|item| item == "GRANT 'writer'@'%' TO 'app'@'%'"));
     }
 
     #[test]

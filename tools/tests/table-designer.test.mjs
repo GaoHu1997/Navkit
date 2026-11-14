@@ -29,7 +29,44 @@ test('real DOM flushes focused edits before add/insert/delete and late blur stay
   assert.equal(await newType.inputValue(), 'bigint');
   assert.equal(await page.evaluate(() => designer.draft.columns[1].data_type), 'bigint');
   const height = await page.getByRole('textbox', { name: '字段 new_field 名称', exact: true }).evaluate(el => getComputedStyle(el).height);
-  assert.equal(height, '26px');
+  assert.equal(height, '30px');
+});
+
+test('field grid edits defaults inline with type-aware choices, shows key only for primary fields and fixes the index dialog size', async t => {
+  const page = await designerPage(browser); t.after(() => page.close());
+  // 字段属性面板已并入表格列
+  assert.equal(await page.locator('.designer-field-props').count(), 0);
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.designer-grid.designer-fields thead th')].map(th => th.textContent)), ['名称', '类型', '长度', '小数位', '默认值', '主键', '自增', '无符号', '填充零', '允许 NULL', '注释']);
+  // 表头、colgroup 与每行单元格数必须一致，否则表格会多出空白列把内容挤到左边
+  assert.equal(await page.evaluate(() => {
+    const table = document.querySelector('.designer-grid.designer-fields');
+    const count = table.querySelectorAll('thead th').length;
+    return table.querySelectorAll('colgroup col').length === count && [...table.querySelectorAll('tbody tr')].every(tr => tr.children.length === count);
+  }), true);
+  // 候选随字段类型变化：整数 0/1、时间 CURRENT_*、字符 ' '，且都能手动输入
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('[aria-label="字段 computed 默认值选择"]').options].map(o => o.value).slice(1)), ['0', '1', 'NULL']);
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('[aria-label="字段 updated 默认值选择"]').options].map(o => o.value).slice(1)), ['CURRENT_TIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIME', 'NULL']);
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('[aria-label="字段 title 默认值选择"]').options].map(o => o.value).slice(1)), ["' '", "''", 'NULL']);
+  await page.getByRole('combobox', { name: '字段 computed 默认值选择', exact: true }).selectOption('0');
+  assert.equal(await page.evaluate(() => designer.draft.columns[2].default_value), '0');
+  assert.equal(await page.getByRole('textbox', { name: '字段 computed 默认值', exact: true }).inputValue(), '0');
+  await page.getByRole('textbox', { name: '字段 computed 默认值', exact: true }).fill('CURRENT_TIMESTAMP');
+  assert.equal(await page.evaluate(() => designer.draft.columns[2].default_value), 'CURRENT_TIMESTAMP');
+  // 主键钥匙只出现在真正的主键字段上；未设主键时不出现任何钥匙
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.designer-grid.designer-fields .designer-key')].map(el => el.getAttribute('aria-label'))), ['字段 id 主键', '字段 title 主键']);
+  await page.evaluate(() => { designer.draft.primary_key = []; designer.render(); });
+  assert.equal(await page.locator('.designer-grid.designer-fields .designer-key').count(), 0);
+  // 自增只对数值类型可勾选（updated 是 timestamp）
+  assert.equal(await page.getByRole('checkbox', { name: '字段 updated 自增', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('checkbox', { name: '字段 computed 自增', exact: true }).isDisabled(), false);
+  // 索引字段浮层：加字段只滚动内容，弹窗尺寸不变
+  await tab(page, '索引');
+  await page.getByRole('button', { name: '索引 1 字段选择', exact: true }).click();
+  const before = await page.locator('.dialog').last().boundingBox();
+  await page.getByRole('button', { name: '为索引 1添加字段', exact: true }).click();
+  await page.getByRole('button', { name: '为索引 1添加字段', exact: true }).click();
+  const after = await page.locator('.dialog').last().boundingBox();
+  assert.equal(after.width, before.width); assert.equal(after.height, before.height);
 });
 
 test('real numeric validation accepts digits and rejects malformed length, scale, blank expressions and fillfactor', async t => {
@@ -63,17 +100,21 @@ test('column type params are split into length and scale for display', async t =
 test('index and foreign-key controls preserve compound order, real reference columns and ref_schema in one C1 save', async t => {
   const page = await designerPage(browser); t.after(() => page.close());
   await tab(page, '索引');
-  // 主键行与索引行都用「字段 + 排序」编辑器维护有序多字段
+  // 主键行与索引行都用「字段选择」浮层维护有序多字段：点开浮层 → 编辑 → 确定
   assert.deepEqual(await page.evaluate(() => designer.draft.primary_key), ['title', 'id']);
+  await page.getByRole('button', { name: '主键 字段选择', exact: true }).click();
   assert.equal(await page.getByRole('combobox', { name: '主键 字段 1', exact: true }).inputValue(), 'title');
   assert.equal(await page.getByRole('combobox', { name: '主键 字段 2', exact: true }).inputValue(), 'id');
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '索引 1 字段选择', exact: true }).click();
   await page.getByRole('combobox', { name: '索引 1 字段 1', exact: true }).selectOption('id');
   await page.getByRole('button', { name: '为索引 1添加字段', exact: true }).click();
   await page.getByRole('combobox', { name: '索引 1 字段 2', exact: true }).selectOption('title');
   await page.getByRole('combobox', { name: '索引 1 字段 2 排序', exact: true }).selectOption('DESC');
+  await page.getByRole('button', { name: '确定', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => designer.draft.indexes[0].columns), ['id', 'title']);
   assert.deepEqual(await page.evaluate(() => designer.draft.indexes[0].descending), ['title']);
-  await tab(page, '外键'); await page.getByRole('button', { name: '新增外键', exact: true }).click();
+  await tab(page, '外键'); await page.evaluate(() => designer.addForeignKey());
   await page.getByRole('textbox', { name: '外键 1 名称', exact: true }).fill('fk_pair');
   await page.getByRole('combobox', { name: '外键 1 引用库', exact: true }).selectOption('other_schema');
   await page.getByRole('combobox', { name: '外键 1 引用表', exact: true }).selectOption('parents');
@@ -100,13 +141,14 @@ test('index and foreign-key controls preserve compound order, real reference col
 
 test('checks, triggers, table options and full comment are captured, saved and discarded as one draft', async t => {
   const page = await designerPage(browser); t.after(() => page.close());
-  await tab(page, '检查'); await page.getByRole('button', { name: '新增检查约束', exact: true }).click();
+  await tab(page, '检查'); await page.evaluate(() => designer.addCheck());
   await page.getByRole('textbox', { name: '检查约束 1 名称', exact: true }).fill('ck_positive'); await page.getByRole('textbox', { name: '检查约束 1 CHECK 表达式', exact: true }).fill('id > 0');
-  await tab(page, '触发器'); await page.getByRole('button', { name: '新增触发器', exact: true }).click();
+  await tab(page, '触发器'); await page.evaluate(() => designer.addTrigger());
   await page.getByRole('textbox', { name: '触发器 1 名称', exact: true }).fill('tr_update');
   await page.getByRole('combobox', { name: '触发器 1 时机', exact: true }).selectOption('AFTER'); await page.getByRole('combobox', { name: '触发器 1 事件', exact: true }).selectOption('UPDATE');
   await page.getByRole('textbox', { name: '触发器 1 触发语句', exact: true }).fill('BEGIN SET @seen = NEW.id; END');
-  await tab(page, '选项'); await page.getByRole('textbox', { name: '存储引擎', exact: true }).fill('InnoDB'); await page.getByRole('textbox', { name: '行格式', exact: true }).fill('DYNAMIC');
+  await tab(page, '选项'); await page.waitForFunction(() => designer.optionChoices.values !== null);
+  await page.getByRole('combobox', { name: '存储引擎', exact: true }).selectOption('InnoDB'); await page.getByRole('combobox', { name: '行格式', exact: true }).selectOption('DYNAMIC');
   await tab(page, '注释'); const comment = '第一行\n完整注释，保留引号 \' 与 Unicode'; await page.getByRole('textbox', { name: '表注释', exact: true }).fill(comment);
   const capture = await page.evaluate(() => designer.captureDraft()); assert.equal(capture.payload.draft.checks[0].expression, 'id > 0'); assert.equal(capture.payload.draft.triggers[0].event, 'UPDATE'); assert.equal(capture.payload.draft.options.row_format, 'DYNAMIC'); assert.equal(capture.payload.draft.comment, comment);
   await saving(page); await finishSave(page);
@@ -127,7 +169,7 @@ test('partial metadata, undefined collections and incomplete rows cannot become 
     fixture.snapshot.completeness = 'unknown'; try { DesignerModules.draftFromSnapshot(fixture.snapshot); out.unknown = false; } catch { out.unknown = true; } return out;
   });
   assert.equal(results.undefinedPreserved, true); assert.deepEqual(results.explicitClear, []); assert.ok(results.invalid.every(Boolean)); assert.equal(results.unknown, true);
-  await tab(page, '索引'); await page.getByRole('button', { name: '新增索引', exact: true }).click(); await page.evaluate(async () => designer.saveChanges());
+  await tab(page, '索引'); await page.evaluate(() => designer.addIndex()); await page.evaluate(async () => designer.saveChanges());
   assert.equal(await page.evaluate(() => fixture.previews.length), 0); assert.equal(await page.evaluate(() => fixture.executions.length), 0); assert.equal(await page.evaluate(() => designer.draftDirty()), true);
 });
 
@@ -179,10 +221,10 @@ test('keyboard tabs, modal focus containment and actual SQL text are accessible'
 });
 
 test('SQLite unsupported options/comments and capability-disabled checks/triggers show concrete reasons', async t => {
-  const page = await designerPage(browser, 'sqlite'); t.after(() => page.close()); await tab(page, '选项'); assert.equal(await page.getByRole('textbox', { name: '存储引擎', exact: true }).isDisabled(), true); assert.equal(await page.getByRole('textbox', { name: '排序规则', exact: true }).isDisabled(), true); assert.match(await page.getByRole('tabpanel').textContent(), /SQLite 没有此表级选项/);
+  const page = await designerPage(browser, 'sqlite'); t.after(() => page.close()); await tab(page, '选项'); assert.equal(await page.getByRole('combobox', { name: '存储引擎', exact: true }).isDisabled(), true); assert.equal(await page.getByRole('combobox', { name: '排序规则', exact: true }).isDisabled(), true); assert.match(await page.getByRole('tabpanel').textContent(), /SQLite 没有此表级选项/);
   await tab(page, '注释'); assert.equal(await page.getByRole('textbox', { name: '表注释', exact: true }).isDisabled(), true); assert.match(await page.getByRole('tabpanel').textContent(), /SQLite 没有表注释 DDL/);
   await page.evaluate(() => { designer.snapshot.capabilities.checks = { supported: false, reason: 'DDL checks cannot be safely rebuilt' }; designer.snapshot.capabilities.triggers = { supported: false, reason: 'trigger protocol unavailable' }; });
-  await tab(page, '检查'); assert.equal(await page.getByRole('button', { name: '新增检查约束', exact: true }).isDisabled(), true); assert.match(await page.getByRole('tabpanel').textContent(), /DDL checks cannot/); await tab(page, '触发器'); assert.equal(await page.getByRole('button', { name: '新增触发器', exact: true }).isDisabled(), true);
+  await tab(page, '检查'); assert.equal(await page.getByRole('button', { name: '新增检查约束', exact: true }).count(), 0); assert.match(await page.getByRole('tabpanel').textContent(), /DDL checks cannot/); await tab(page, '触发器'); assert.equal(await page.getByRole('button', { name: '新增触发器', exact: true }).count(), 0);
 });
 
 for (const kind of ['clear', 'copy_structure', 'copy_data']) test(`${kind} operation requires backend preview, keeps confirmation and refreshes only the receipt target`, async t => {

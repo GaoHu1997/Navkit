@@ -33,13 +33,13 @@ function atop(appBg, dlg) {
 /* 一个简化的应用背景（对话框后面） */
 function dimApp() {
   return `<div style="flex:1;display:flex;flex-direction:column;min-height:0">
-    <div style="height:38px;border-bottom:1px solid var(--border-subtle);background:var(--bg-surface);display:flex;align-items:center;padding:0 12px;gap:8px">
+    <div style="height:36px;border-bottom:1px solid var(--border-subtle);background:var(--bg-surface);display:flex;align-items:center;padding:0 12px;gap:8px">
       <span style="display:grid;place-items:center">${navkitLogo(20)}</span>
       <span style="font-size:13px;font-weight:600">NavKit</span>
       <span style="width:1px;height:14px;background:var(--border)"></span>
       <span style="font-size:12px;color:var(--text-tertiary)">dbswitch — localhost</span>
     </div>
-    <div style="height:46px;border-bottom:1px solid var(--border);background:var(--bg-surface)"></div>
+    <div style="height:44px;border-bottom:1px solid var(--border);background:var(--bg-surface)"></div>
     <div style="flex:1;display:flex;min-height:0;background:var(--bg-surface)">
       <div style="width:264px;border-right:1px solid var(--border);background:var(--bg-surface)"></div>
       <div style="flex:1"></div>

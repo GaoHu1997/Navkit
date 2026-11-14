@@ -2051,11 +2051,96 @@ svg {
   margin-left: auto;
   min-width: 0;
   max-width: 26em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-secondary);
   font-size: var(--fs-12);
+  transition: color 120ms ease;
+}
+/* 状态点是形状提示，文字始终是主要信息。 */
+.query-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+}
+.query-transaction-status[data-state="queued"] .query-status-dot,
+.query-transaction-status[data-state="running"] .query-status-dot {
+  opacity: 1;
+  animation: query-status-pulse 1.6s ease-in-out infinite;
+}
+.query-transaction-status[data-state="cancel_requested"] .query-status-dot {
+  opacity: 1;
+  border-radius: 2px;
+  animation: query-status-blink 1s steps(2, start) infinite;
+}
+/* 终态是结论而不是活动：圆点换成可读的符号徽标，避免和「进行中」抢注意。 */
+.query-transaction-status[data-state="succeeded"] .query-status-dot,
+.query-transaction-status[data-state="failed"] .query-status-dot,
+.query-transaction-status[data-state="unknown"] .query-status-dot,
+.query-transaction-status[data-state="cancelled"] .query-status-dot,
+.query-transaction-status[data-state="timed_out"] .query-status-dot {
+  opacity: 1;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid currentColor;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.query-transaction-status[data-state="succeeded"] .query-status-dot::before { content: "✓"; }
+.query-transaction-status[data-state="failed"] .query-status-dot::before { content: "!"; font-weight: 800; }
+.query-transaction-status[data-state="unknown"] .query-status-dot::before { content: "!"; font-weight: 800; }
+.query-transaction-status[data-state="cancelled"] .query-status-dot::before { content: "■"; font-size: 6px; }
+.query-transaction-status[data-state="timed_out"] .query-status-dot::before { content: "!"; font-weight: 800; }
+/* 毫秒计时：等宽数字，避免每 50ms 刷新时宽度跳动。 */
+.query-status-timer,
+.query-message-timer {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.query-status-timer {
+  min-width: 7ch;
+  flex: 0 0 auto;
+  text-align: right;
+  color: var(--text-secondary);
+}
+.query-transaction-status[data-state="queued"] .query-status-timer,
+.query-transaction-status[data-state="running"] .query-status-timer {
+  color: var(--accent-600);
+}
+.query-status-timer:empty { display: none; }
+.query-transaction-status[data-state="queued"],
+.query-transaction-status[data-state="running"] { color: var(--accent-600); }
+.query-transaction-status[data-state="cancel_requested"],
+.query-transaction-status[data-state="cancelled"],
+.query-transaction-status[data-state="timed_out"] { color: var(--warn-600); }
+.query-transaction-status[data-state="succeeded"] { color: var(--ok-600); }
+.query-transaction-status[data-state="failed"],
+.query-transaction-status[data-state="unknown"] { color: var(--danger-600); }
+@keyframes query-status-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.72); }
+}
+@keyframes query-status-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .query-status-dot { animation: none !important; }
 }
 .query-runbar .run-select {
   height: var(--h-control);
@@ -2128,6 +2213,31 @@ svg {
 }
 .result-messages .msg-ok {
   color: var(--ok-600);
+}
+/* 正在执行：第一行是活的行内计时。 */
+.result-messages .msg-running {
+  color: var(--accent-600);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+/* 旋转环用伪元素，不额外造节点；减速动画用户在系统设置里关掉时一并静止。 */
+.result-messages .msg-running::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  align-self: center;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: query-status-spin 0.9s linear infinite;
+}
+@keyframes query-status-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .result-messages .msg-running::before { animation: none; }
 }
 
 /* ==========================================================================
@@ -2380,34 +2490,6 @@ svg {
   font-size: var(--fs-12);
   color: var(--text-tertiary);
   text-align: center;
-}
-
-/* 对象列表（查询页右侧的表清单 / 备份文件行） */
-.info-list-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 26px;
-  margin: 0 var(--sp-2);
-  padding: 2px var(--sp-2);
-  border-radius: var(--r-2);
-  font-size: var(--fs-12);
-  color: var(--text-secondary);
-  cursor: default;
-  min-width: 0;
-}
-.info-list-row > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.info-list-row:hover {
-  background: var(--bg-hover);
-}
-.info-list-row svg {
-  width: 14px;
-  height: 14px;
 }
 
 /* DDL 代码块 */
@@ -4966,6 +5048,62 @@ select {
 .sync-map .mini-table { min-width: 0; }
 .sync-map-tools > .btn { flex: 0 0 auto; }
 .sync-map-tools > .sync-table-only { margin-left: auto; }
+/* 数据比较及其策略是同一组，不能被结构工具的 auto margin 拉开。 */
+.sync-map-tools > .sync-diff-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: 0;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+}
+.sync-diff-controls > select,
+.sync-diff-controls > input[type="number"] { min-width: 0; max-width: 100%; }
+.sync-diff-controls > .wizard-panel-note {
+  flex: 1 0 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 104px;
+  margin: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.sync-map-tools > .sync-structure-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.sync-diff-memory-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sync-diff-memory-option[hidden] { display: none; }
+.sync-diff-memory-option input { margin: 0; }
+.sync-diff-memory-option:has(input:disabled) { cursor: default; color: var(--text-tertiary); }
+@media (max-width: 640px) {
+  /* 工具组换行后改为整页滚动，不能压缩结果文字使其盖住复选框。 */
+  .sync-map-panel { flex: 0 0 auto; }
+  .sync-map-panel .sync-map-scroll { flex: 0 1 auto; max-height: 160px; }
+}
+/* 「允许删除目标多余的列/索引」是破坏性选项：独占一行，与结构操作按钮拉开间距，避免误点。 */
+.sync-map-option-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+  flex-wrap: wrap;
+}
+.sync-map-option-row > .checkbox { margin-left: 0; }
 
 /* 导入 / 导出向导：执行日志独立页与提示行 */
 .transfer-hint {

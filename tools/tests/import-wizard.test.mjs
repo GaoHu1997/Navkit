@@ -39,7 +39,11 @@ test('导入向导：真实浏览器预览布局与目标回显回归（隔离 I
           if (f.csvMode === 'wide') return [Array.from({ length: 8 }, (_, i) => 'very_long_column_' + i), Array.from({ length: 10 }, (_, i) => Array.from({ length: 8 }, () => String(i) + '_long_sample_'.repeat(50)))];
           return [['id', 'note'], Array.from({ length: 10 }, (_, i) => [String(i + 1), i === 0 ? '备注1' : i === 1 ? String.fromCharCode(92) + 'N' : i === 2 ? '' : i + '_sample_note'])];
         },
-        get_table_schema: () => ({ columns: [{ name: 'id' }, { name: 'note' }] }),
+        get_table_schema: args => {
+          f.metaCalls ??= []; f.metaGates ??= []; f.metaCalls.push(args);
+          if (f.metaMode === 'wait') return new Promise((resolve, reject) => f.metaGates.push({ args, resolve, reject }));
+          return { columns: [{ name: 'id' }, { name: 'note' }] };
+        },
         run_import_task: ({ opts }) => { f.imports.push(opts); return 10; },
         transfer_task_progress: ({ taskId }) => ({ task_id: taskId, status: 'completed', processed: 10, total: 10, message: 'fixture' }),
       };
@@ -47,7 +51,7 @@ test('导入向导：真实浏览器预览布局与目标回显回归（隔离 I
     });
     const open = async (tableMode = '', csvMode = '', table = 't_comment') => page.evaluate(({ tableMode, csvMode, table }) => {
       window.dialog?.close();
-      Object.assign(window.f, { tableMode, csvMode, tableGates: [], csvGates: [], csvCalls: [], imports: [] });
+      Object.assign(window.f, { tableMode, csvMode, tableGates: [], csvGates: [], csvCalls: [], imports: [], metaMode: '', metaGates: [], metaCalls: [] });
       window.dialog = ImportFixture.openImportWizard(window.connection, 'main', table, () => {});
     }, { tableMode, csvMode, table });
     const next = () => page.getByRole('button', { name: '下一步', exact: true }).click();
@@ -173,6 +177,54 @@ test('导入向导：真实浏览器预览布局与目标回显回归（隔离 I
       const displayed = await summary().inputValue();
       await next(); await page.waitForFunction(() => f.imports.length === 1);
       assert.deepEqual(await page.evaluate(() => ({ table: f.imports[0].table, schema: f.imports[0].schema, file: f.imports[0].file })), { table: displayed, schema: 'main', file: 'C:/fixture/comments.json' });
+    });
+
+    await t.test('旧 CSV 映射不能覆盖新文件映射或进入实际导入 payload', async () => {
+      await open('', 'wait'); await waitTables();
+      await file().fill('C:/fixture/old.csv'); await file().press('Tab');
+      await page.waitForFunction(() => f.csvGates.length === 1);
+      await page.evaluate(() => f.csvGates[0].resolve([['id'], [['1']]])); await waitPreview();
+      await next(); await next(); await page.waitForFunction(() => f.csvGates.length === 2);
+      await back(); await back();
+      await file().fill('C:/fixture/new.csv'); await file().press('Tab');
+      await page.waitForFunction(() => f.csvGates.length === 3);
+      await page.evaluate(() => f.csvGates[2].resolve([['note', 'id'], [['new', '2']]])); await waitPreview();
+      await next(); await next(); await page.waitForFunction(() => f.csvGates.length === 4);
+      await page.evaluate(() => f.csvGates[3].resolve([['note', 'id'], [['new', '2']]]));
+      await page.getByLabel('note 对应目标列', { exact: true }).waitFor();
+      await page.evaluate(() => f.csvGates[1].resolve([['old_column'], [['old']]]));
+      assert.equal(await page.getByLabel('old_column 对应目标列', { exact: true }).count(), 0);
+      assert.equal(await page.evaluate(() => f.metaCalls.length), 1, '旧 CSV 回执不应再启动目标元数据读取');
+      await next(); await next(); await page.waitForFunction(() => f.imports.length === 1);
+      assert.deepEqual(await page.evaluate(() => ({ file: f.imports[0].file, mapping: f.imports[0].column_mapping })), { file: 'C:/fixture/new.csv', mapping: [{ source: 'note', target: 'note' }, { source: 'id', target: 'id' }] });
+    });
+
+    await t.test('换目标后的旧结构回执不覆盖新映射；旧 finally 不提前解锁新请求', async () => {
+      await open(); await waitTables();
+      await file().fill('C:/fixture/comments.csv'); await file().press('Tab'); await waitPreview();
+      await page.evaluate(() => f.metaMode = 'wait');
+      await next(); await next(); await page.waitForFunction(() => f.metaGates.length === 1);
+      await back(); await table().selectOption('alternate'); await next();
+      await page.waitForFunction(() => f.metaGates.length === 2);
+      await page.evaluate(() => f.metaGates[0].resolve({ columns: [{ name: 'stale_target' }] }));
+      await next(); await next();
+      assert.equal(await page.evaluate(() => f.imports.length), 0);
+      await page.getByText('列映射仍在读取，不能导入', { exact: true }).waitFor();
+      await page.evaluate(() => f.metaGates[1].resolve({ columns: [{ name: 'fresh_target' }] }));
+      await page.waitForFunction(() => [...document.querySelectorAll('select[aria-label$="对应目标列"] option')].some(option => option.value === 'fresh_target'));
+      assert.equal(await page.locator('select[aria-label$="对应目标列"] option[value="stale_target"]').count(), 0);
+      assert.deepEqual(await page.evaluate(() => f.metaCalls.map(call => call.table)), ['t_comment', 'alternate']);
+    });
+
+    await t.test('关闭后迟到映射不再读取目标或写回已关闭对话框', async () => {
+      await open('', 'wait'); await waitTables();
+      await file().fill('C:/fixture/closed.csv'); await file().press('Tab');
+      await page.waitForFunction(() => f.csvGates.length === 1);
+      await page.evaluate(() => f.csvGates[0].resolve([['id'], [['1']]])); await waitPreview();
+      await next(); await next(); await page.waitForFunction(() => f.csvGates.length === 2);
+      await page.evaluate(() => { dialog.close(); f.csvGates[1].resolve([['late'], [['1']]]); });
+      assert.equal(await page.evaluate(() => f.metaCalls.length), 0);
+      assert.equal(await page.evaluate(() => dialog.body.querySelectorAll('select[aria-label$="对应目标列"]').length), 0);
     });
 
     await page.evaluate(() => dialog.close());

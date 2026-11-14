@@ -14,11 +14,12 @@ const LOG_BYTES: usize = 256 * 1024;
 const RECORD_LIMIT: usize = 2048;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum BatchTaskKind { GeneratedRows, SqlFile }
+pub enum BatchTaskKind { GeneratedRows, GeneratedRecipe, SqlFile }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BatchTask {
     GeneratedRows { request: GeneratedRowsRequest },
+    GeneratedRecipe { recipe: crate::generated_recipe::Recipe },
     SqlFile { path: String, #[serde(default = "utf8")] encoding: String, stop_on_error: bool },
 }
 fn utf8() -> String { "utf-8".into() }
@@ -29,13 +30,14 @@ pub struct BatchContext { pub execution_id:String, pub connection_id:String, pub
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BatchExecutionTicket { #[serde(flatten)] pub context:BatchContext, pub task_kind:BatchTaskKind, pub execution_grant:String, pub expires_in_ms:u64, pub summary:String, pub total_rows:Option<u64>, pub source_bytes:Option<u64> }
 #[derive(Debug, Clone, Serialize)]
-pub struct BatchMetrics { pub scanned:u64, pub executed:u64, pub errors:u64, pub elapsed_ms:u64 }
+pub struct BatchMetrics { pub scanned:u64, pub executed:u64, pub errors:u64, pub elapsed_ms:u64, pub generated:u64, pub sent:u64, pub acknowledged:u64, pub committed:u64 }
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchLog { pub sequence:u64, pub level:String, pub phase:String, pub statement:Option<u64>, pub row:Option<u64>, pub message:String, pub sql_template:Option<String>, pub ts_ms:u64, pub elapsed_ms:Option<u64>, pub affected_rows:Option<u64>, pub error_code:Option<String> }
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchExecutionSnapshot { pub context:BatchContext, pub kind:BatchTaskKind, pub status:ExecutionStatus, pub metrics:BatchMetrics, pub scan_complete:bool, pub parse_error:Option<String>, pub affected_rows:u64, pub total_rows:Option<u64>, pub transaction_state:String, pub logs:Vec<BatchLog>, pub next_sequence:u64, pub dropped_before_sequence:u64, pub outcome:Option<ExecutionOutcome> }
-enum Payload { Generated(GeneratedRowsRequest), File { source:SourceFile, encoding:String, stop_on_error:bool } }
-struct Progress { scanned:u64, executed:u64, errors:u64, scan_complete:bool, parse_error:Option<String>, affected:u64, transaction:String, logs:VecDeque<BatchLog>, bytes:usize, next:u64, dropped:u64, outcome:Option<ExecutionOutcome> }
+struct RecipeWork { recipe: crate::generated_recipe::Recipe, preview: bool, sample: Arc<Mutex<Option<crate::generated_recipe::Preview>>>, lease: Option<crate::generated_recipe::Lease> }
+enum Payload { Generated(GeneratedRowsRequest), Recipe(RecipeWork), File { source:SourceFile, encoding:String, stop_on_error:bool } }
+struct Progress { scanned:u64, sent:u64, executed:u64, errors:u64, scan_complete:bool, parse_error:Option<String>, affected:u64, committed_prefix:Option<(u64,u64)>, transaction:String, logs:VecDeque<BatchLog>, bytes:usize, next:u64, dropped:u64, outcome:Option<ExecutionOutcome> }
 struct BatchRecord { ticket:BatchExecutionTicket, entry:Arc<Entry>, payload:Mutex<Option<Payload>>, ordinary:Mutex<Option<Box<dyn Send>>>, started:AtomicBool, wake:tokio::sync::Notify, registered:Instant, progress:Mutex<Progress> }
 static RECORDS:OnceLock<Mutex<HashMap<String,Arc<BatchRecord>>>>=OnceLock::new();
 fn records()->&'static Mutex<HashMap<String,Arc<BatchRecord>>> { RECORDS.get_or_init(||Mutex::new(HashMap::new())) }
@@ -64,13 +66,21 @@ impl BatchRecord {
     }
     fn snapshot(&self, after:u64)->BatchExecutionSnapshot {
         let status=self.entry.status(); let p=self.progress.lock();
-        BatchExecutionSnapshot{context:self.ticket.context.clone(),kind:self.ticket.task_kind.clone(),metrics:BatchMetrics{scanned:p.scanned,executed:p.executed,errors:p.errors,elapsed_ms:status.deadline.elapsed_ms},scan_complete:p.scan_complete,parse_error:p.parse_error.clone(),affected_rows:p.affected,total_rows:self.ticket.total_rows,transaction_state:p.transaction.clone(),logs:p.logs.iter().filter(|l|l.sequence>after).cloned().collect(),next_sequence:p.next,dropped_before_sequence:p.dropped,status,outcome:p.outcome.clone()}
+        BatchExecutionSnapshot{context:self.ticket.context.clone(),kind:self.ticket.task_kind.clone(),metrics:BatchMetrics{scanned:p.scanned,executed:p.executed,errors:p.errors,elapsed_ms:status.deadline.elapsed_ms,generated:if self.ticket.task_kind==BatchTaskKind::GeneratedRecipe{p.scanned}else{0},sent:p.sent,acknowledged:p.executed,committed:p.committed_prefix.map_or_else(||if p.transaction=="committed"{p.executed.saturating_sub(p.errors)}else{0},|prefix|prefix.0)},scan_complete:p.scan_complete,parse_error:p.parse_error.clone(),affected_rows:p.committed_prefix.map_or(p.affected,|prefix|prefix.1),total_rows:self.ticket.total_rows,transaction_state:p.transaction.clone(),logs:p.logs.iter().filter(|l|l.sequence>after).cloned().collect(),next_sequence:p.next,dropped_before_sequence:p.dropped,status,outcome:p.outcome.clone()}
     }
     fn transaction(&self, state:&str) { self.progress.lock().transaction=state.into(); if matches!(state,"committed"|"rolled_back"|"none"|"unknown") { self.entry.record_remote_transaction(state); } }
     fn result(&self)->MultiResult { let p=self.progress.lock(); MultiResult{sets:vec![],messages:vec![format!("已扫描 {}，执行回执 {}，错误 {}，影响行 {}",p.scanned,p.executed,p.errors,p.affected)],elapsed_ms:self.entry.status().deadline.elapsed_ms,spool_id:None} }
     fn publish(&self, result:CmdResult<MultiResult>, confirmed:bool) {
-        let generated=self.ticket.task_kind==BatchTaskKind::GeneratedRows;
-        let outcome=self.entry.finish(result,confirmed,generated);
+        let generated=matches!(self.ticket.task_kind,BatchTaskKind::GeneratedRows|BatchTaskKind::GeneratedRecipe);
+        let mut outcome=self.entry.finish(result,confirmed,generated);
+        // Entry's rolled_back/none describes only the last segment, not a committed prefix.
+        let prefix=self.progress.lock().committed_prefix;
+        if let Some((rows,affected))=prefix.filter(|(rows,_)|*rows>0) {
+            if outcome.state!=crate::execution_contracts::ExecutionState::Succeeded {
+                outcome.effects=if outcome.state==crate::execution_contracts::ExecutionState::Unknown{"possibly_applied"}else{"possibly_partial"}.into();
+                if let Some(error)=&mut outcome.error {error.message=format!("{}；已确认提交前缀 {rows} 行 / 持久影响 {affected} 行，当前段失败/取消不能撤销此前缀",error.message);}
+            }
+        }
         // 最终 Unknown 只能保留/排空，不接受迟到成功覆盖。事务状态来自真实 COMMIT/ROLLBACK 回执。
         if outcome.transaction_state=="unknown" { self.progress.lock().transaction="unknown".into(); }
         let message=match outcome.state { crate::execution_contracts::ExecutionState::Succeeded=>"任务完成",crate::execution_contracts::ExecutionState::Cancelled=>"停止已确认；请查看真实事务/已有写入状态",crate::execution_contracts::ExecutionState::TimedOut=>"执行时限已到且停止已确认",crate::execution_contracts::ExecutionState::Unknown=>"写入/排空结果未知，禁止重放；资源仍由后台任务持有",_=>"任务失败" };
@@ -87,12 +97,14 @@ fn require_request(request:&BatchExecutionRequest,cfg:&ConnectionConfig)->CmdRes
     if cfg.kind.is_sqlite()&&!matches!(request.namespace.as_str(),""|"main") { return Err(AppError::coded("SQLITE_NAMESPACE_UNSUPPORTED","受控批任务只允许固定 SQLite main 数据库")); }
     match &request.task {
         BatchTask::GeneratedRows{request:rows}=>{ data_generator::validate_shape(rows).map_err(AppError::from)?; if rows.connection_id!=request.connection_id||rows.schema!=request.namespace||rows.table.len()>1024||rows.columns.iter().any(|c|c.len()>1024) { return Err(AppError::coded("BATCH_PAYLOAD_SCOPE_MISMATCH","生成批次连接/表/字段与授权目标不一致或超出上限")); } }
+        BatchTask::GeneratedRecipe{recipe}=>{ recipe.validate(false).map_err(AppError::from)?; if recipe.connection_id!=request.connection_id||recipe.schema!=request.namespace { return Err(AppError::coded("BATCH_PAYLOAD_SCOPE_MISMATCH","recipe 与授权目标不一致")); } if recipe.transaction_mode=="segmented"&&!cfg.kind.is_sqlite() {return Err(recipe_segmented_unsupported(&cfg.kind));} }
         BatchTask::SqlFile{path,encoding,..}=>{ if path.is_empty()||path.len()>32768||!matches!(encoding.as_str(),"utf-8"|"gbk"|"gb18030"|"big5"|"latin1") { return Err(AppError::coded("BATCH_SOURCE_INVALID","SQL 文件路径/编码无效")); } }
     } Ok(())
 }
 fn scope(request:&BatchExecutionRequest,payload:&Payload)->CmdResult<String> {
-    let detail=match payload { Payload::Generated(rows)=>serde_json::to_value(rows)?,Payload::File{source,encoding,stop_on_error}=>serde_json::json!({"source":source.identity(),"encoding":encoding,"stop_on_error":stop_on_error}) };
-    let bytes=serde_json::to_vec(&serde_json::json!({"task_kind":match payload{Payload::Generated(_)=>"generated_rows",Payload::File{..}=>"sql_file"},"connection_id":request.connection_id,"namespace":request.namespace,"owner":request.owner_id,"timeout_ms":request.timeout_ms,"policy":"native-pinned/v2;generated-one-bound-transaction;file-exact-dump-guards/v1;no-replay;logs-lexical/v1","payload":detail}))?;
+    let detail=match payload { Payload::Generated(rows)=>serde_json::to_value(rows)?,Payload::Recipe(work)=>serde_json::to_value(&work.recipe)?,Payload::File{source,encoding,stop_on_error}=>serde_json::json!({"source":source.identity(),"encoding":encoding,"stop_on_error":stop_on_error}) };
+    let policy=if matches!(payload,Payload::Recipe(work) if work.recipe.transaction_mode=="segmented"){"native-pinned/v2;sqlite-recipe-segments/v1;rows=1000;bound-bytes=8388608;no-replay;logs-lexical/v1"}else{"native-pinned/v2;generated-one-bound-transaction;file-exact-dump-guards/v1;no-replay;logs-lexical/v1"};
+    let bytes=serde_json::to_vec(&serde_json::json!({"task_kind":match payload{Payload::Generated(_)=>"generated_rows",Payload::Recipe(_)=>"generated_recipe",Payload::File{..}=>"sql_file"},"connection_id":request.connection_id,"namespace":request.namespace,"owner":request.owner_id,"timeout_ms":request.timeout_ms,"policy":policy,"payload":detail}))?;
     Ok(format!("typed/v1:batch:{:x}",Sha256::digest(bytes)))
 }
 fn authorized(state:&AppState,principal:&str,context:&BatchContext)->CmdResult<Arc<BatchRecord>> {
@@ -110,13 +122,14 @@ pub async fn register_batch_execution(window:WebviewWindow,state:State<'_,AppSta
     let binding=execution_binding(&state,&cfg,window.label(),&request.owner_id,&request.namespace)?;
     let (payload,kind,total_rows,source_bytes,summary)=match &request.task {
         BatchTask::GeneratedRows{request:rows}=>(Payload::Generated(rows.clone()),BatchTaskKind::GeneratedRows,Some(rows.rows.len() as u64),None,format!("参数绑定生成 {} 行 / {} 字段到 {}",rows.rows.len(),rows.columns.len(),rows.table)),
+        BatchTask::GeneratedRecipe{recipe}=>{ let lease=crate::generated_recipe::Lease::acquire("native-recipe-single-writer".into()).map_err(AppError::from)?; (Payload::Recipe(RecipeWork{recipe:recipe.clone(),preview:false,sample:Arc::new(Mutex::new(None)),lease:Some(lease)}),BatchTaskKind::GeneratedRecipe,Some(recipe.total),None,if recipe.transaction_mode=="segmented" {format!("原生 SQLite recipe 分段生成 {} 行到 {}；每 1000 行或 8 MiB 绑定预算先到提交，已提交前缀失败/取消不能撤销",recipe.total,recipe.table)}else{format!("原生 recipe 单事务生成 {} 行到 {}；保留约束/default/trigger，取消回滚整批",recipe.total,recipe.table)}) }
         BatchTask::SqlFile{path,encoding,stop_on_error}=>{ let path=path.clone(); let source=tokio::task::spawn_blocking(move||SourceFile::open(&path)).await.map_err(|_|AppError::coded("BATCH_SOURCE_INVALID","SQL 源句柄固定任务异常"))??; let bytes=source.identity().bytes; (Payload::File{source,encoding:encoding.clone(),stop_on_error:*stop_on_error},BatchTaskKind::SqlFile,None,Some(bytes),format!("流式执行 SQL 文件（{} 字节，{}）",bytes,encoding)) }
     };
     let grant=state.executions.grant_typed_scope(binding.clone(),&scope(&request,&payload)?)?;
     let entry=state.query_results.register_execution(&binding,&grant.execution_id,||state.executions.register_typed_scope(&grant.execution_id,&grant.token,binding.clone(),&scope(&request,&payload)?,request.timeout_ms,state.store.settings().query_timeout_secs))?;
     entry.own_activity(activity);
     let ticket=BatchExecutionTicket{context:BatchContext{execution_id:grant.execution_id,connection_id:request.connection_id,namespace:request.namespace,owner_id:request.owner_id},task_kind:kind,execution_grant:grant.token,expires_in_ms:grant.expires_in_ms,summary,total_rows,source_bytes};
-    let record=Arc::new(BatchRecord{ticket:ticket.clone(),entry,payload:Mutex::new(Some(payload)),ordinary:Mutex::new(None),started:AtomicBool::new(false),wake:tokio::sync::Notify::new(),registered:Instant::now(),progress:Mutex::new(Progress{scanned:0,executed:0,errors:0,scan_complete:false,parse_error:None,affected:0,transaction:"none".into(),logs:VecDeque::new(),bytes:0,next:0,dropped:0,outcome:None})});
+    let record=Arc::new(BatchRecord{ticket:ticket.clone(),entry,payload:Mutex::new(Some(payload)),ordinary:Mutex::new(None),started:AtomicBool::new(false),wake:tokio::sync::Notify::new(),registered:Instant::now(),progress:Mutex::new(Progress{scanned:0,sent:0,executed:0,errors:0,scan_complete:false,parse_error:None,affected:0,committed_prefix:None,transaction:"none".into(),logs:VecDeque::new(),bytes:0,next:0,dropped:0,outcome:None})});
     { let mut map=records().lock(); map.retain(|_,r| { let s=r.entry.status(); !s.state.terminal()||s.resources_pending||r.registered.elapsed()<Duration::from_secs(300) }); if map.len()>=RECORD_LIMIT { let oldest=map.iter().filter(|(_,r)| { let s=r.entry.status(); s.state.terminal()&&!s.resources_pending }).min_by_key(|(_,r)|r.registered).map(|(id,_)|id.clone()); if let Some(id)=oldest { map.remove(&id); } } map.insert(ticket.context.execution_id.clone(),record.clone()); }
     record.log("info","queued",None,None,"已注册冻结的 typed 批次；尚未提交数据库 SQL",None);
     tauri::async_runtime::spawn(queued_watchdog(record.clone())); Ok(ticket)
@@ -204,7 +217,12 @@ fn run_owned(app:tauri::AppHandle,record:Arc<BatchRecord>,payload:Payload)->futu
 async fn acquire_sqlite(pool:&sqlx::SqlitePool,entry:&Arc<Entry>)->Result<sqlx::pool::PoolConnection<sqlx::Sqlite>> { tokio::select! { biased; _=entry.wait_stop()=>Err(stop_error()),conn=pool.acquire()=>Ok(conn?) } }
 async fn acquire_mysql(pool:&sqlx::MySqlPool,entry:&Arc<Entry>)->Result<sqlx::pool::PoolConnection<sqlx::MySql>> { tokio::select! { biased; _=entry.wait_stop()=>Err(stop_error()),conn=pool.acquire()=>Ok(conn?) } }
 async fn acquire_pg(pool:&sqlx::PgPool,entry:&Arc<Entry>)->Result<sqlx::pool::PoolConnection<sqlx::Postgres>> { tokio::select! { biased; _=entry.wait_stop()=>Err(stop_error()),conn=pool.acquire()=>Ok(conn?) } }
-async fn run_pinned(db:Arc<Db>,kind:DbKind,record:Arc<BatchRecord>,payload:Payload)->(Result<MultiResult>,bool) {
+async fn run_pinned(db:Arc<Db>,kind:DbKind,record:Arc<BatchRecord>,mut payload:Payload)->(Result<MultiResult>,bool) {
+    // Keep the admission lease through cancellation drain AND physical close (including Unknown).
+    let _recipe_lease=match &mut payload {Payload::Recipe(work)=>work.lease.take(),_=>None};
+    if matches!(&payload,Payload::Recipe(work) if work.recipe.transaction_mode=="segmented")&&!matches!(db.as_ref(),Db::Sqlite(_)) {
+        record.transaction("none");return (Err(recipe_segmented_unsupported(&kind).into()),true);
+    }
     let __sql_history_context = crate::sql_history::db_context(db.as_ref());
     crate::sql_history::scope(__sql_history_context, async {
     let entry=&record.entry;
@@ -214,7 +232,8 @@ async fn run_pinned(db:Arc<Db>,kind:DbKind,record:Arc<BatchRecord>,payload:Paylo
             conn.close_on_drop();
             if let Err(e)=execution::install_sqlite(&mut conn,entry,false).await { let _cleared=execution::clear_sqlite(&mut conn).await; if conn.close().await.is_err(){return(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","SQLite 控制安装失败且会话关闭未确认").into()),false);}return(Err(e),true); }
             let (mut result,mut confirmed)=match payload {
-                Payload::Generated(rows)=>{ let work=send_work(Box::pin(generate_sqlite(&mut conn,&kind,&record,&rows))); let pair=execution::drive(work,entry,||async{Ok(())}).await; match execution::clear_sqlite(&mut conn).await { Ok(())=>generated_cleanup_sqlite(&mut conn,&record,pair).await,Err(_)=>{record.transaction("unknown");(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","SQLite 控制解除未确认；不能把后续回滚声称为成功").into()),false)} } },
+                Payload::Generated(rows)=>{ let work=send_work(Box::pin(generate_sqlite(&mut conn,&kind,&record,&rows,None))); let pair=execution::drive(work,entry,||async{Ok(())}).await; match execution::clear_sqlite(&mut conn).await { Ok(())=>generated_cleanup_sqlite(&mut conn,&record,pair).await,Err(_)=>{record.transaction("unknown");(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","SQLite 控制解除未确认；不能把后续回滚声称为成功").into()),false)} } },
+                Payload::Recipe(work)=>{ let rows=work.recipe.shape();let future=send_work(Box::pin(generate_sqlite(&mut conn,&kind,&record,&rows,Some(&work))));let pair=execution::drive(future,entry,||async{Ok(())}).await;match execution::clear_sqlite(&mut conn).await{Ok(())=>generated_cleanup_sqlite(&mut conn,&record,pair).await,Err(_)=>{record.transaction("unknown");(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","SQLite 控制解除未确认").into()),false)}} },
                 Payload::File{source,encoding,stop_on_error}=>{ let work=send_work(Box::pin(file_sqlite(&mut conn,record.clone(),source,encoding,stop_on_error))); let pair=execution::drive(work,entry,||async{Ok(())}).await; match execution::clear_sqlite(&mut conn).await { Ok(())=>file_cleanup(pair,&record),Err(_)=>(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","SQLite 控制解除未确认；等待物理会话关闭，禁止重放已有前缀").into()),false) } }
             };
             if let Err(e)=conn.close().await { if record.progress.lock().transaction=="active" { record.transaction("unknown"); } result=Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN",format!("固定 SQLite 会话关闭失败；不可重放；原因：{e}")).into()); confirmed=false; }
@@ -224,14 +243,14 @@ async fn run_pinned(db:Arc<Db>,kind:DbKind,record:Arc<BatchRecord>,payload:Paylo
             let mut conn=match acquire_mysql(pool,entry).await {Ok(c)=>c,Err(e)=>return(Err(e),true)}; conn.close_on_drop();
             let id:u64=match crate::sql_history::query_scalar("SELECT CONNECTION_ID()").fetch_one(&mut *conn).await {Ok(id)=>id,Err(e)=>{if conn.close().await.is_err(){return(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","MySQL 会话身份读取及关闭未确认").into()),false);}return(Err(e.into()),true);}};
             let opts=pool.connect_options(); let control=move||async move { let mut c=sqlx::MySqlConnection::connect_with(&opts).await?; let outcome=crate::sql_history::query(&format!("KILL QUERY {}",id)).execute(&mut c).await.map(|_|()); let close=c.close().await; match(outcome,close){(Ok(()),Ok(()))=>Ok(()),(Err(e),_)|(_,Err(e))=>Err(e.into())} };
-            let (mut result,mut confirmed)=match payload { Payload::Generated(rows)=>{ let pair=execution::drive(Box::pin(generate_mysql(&mut conn,&kind,&record,&rows)),entry,control).await; generated_cleanup_mysql(&mut conn,&record,pair).await },Payload::File{source,encoding,stop_on_error}=>file_cleanup(execution::drive(Box::pin(file_mysql(&mut conn,record.clone(),source,encoding,stop_on_error)),entry,control).await,&record) };
+            let (mut result,mut confirmed)=match payload { Payload::Generated(rows)=>{ let pair=execution::drive(Box::pin(generate_mysql(&mut conn,&kind,&record,&rows,None)),entry,control).await; generated_cleanup_mysql(&mut conn,&record,pair).await },Payload::Recipe(work)=>{let rows=work.recipe.shape();let pair=execution::drive(Box::pin(generate_mysql(&mut conn,&kind,&record,&rows,Some(&work))),entry,control).await;generated_cleanup_mysql(&mut conn,&record,pair).await},Payload::File{source,encoding,stop_on_error}=>file_cleanup(execution::drive(Box::pin(file_mysql(&mut conn,record.clone(),source,encoding,stop_on_error)),entry,control).await,&record) };
             if conn.close().await.is_err() { result=Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","固定 MySQL 会话关闭失败；不可重放").into()); confirmed=false; } (result,confirmed)
         }
         Db::Postgres(pool)=>{
             let mut conn=match acquire_pg(pool,entry).await {Ok(c)=>c,Err(e)=>return(Err(e),true)}; conn.close_on_drop();
             let id:i32=match crate::sql_history::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut *conn).await {Ok(id)=>id,Err(e)=>{if conn.close().await.is_err(){return(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","PostgreSQL 会话身份读取及关闭未确认").into()),false);}return(Err(e.into()),true);}};
             let opts=pool.connect_options(); let control=move||async move { let mut c=sqlx::PgConnection::connect_with(&opts).await?; let outcome=crate::sql_history::query_scalar::<_,bool>("SELECT pg_cancel_backend($1)").bind(id).fetch_one(&mut c).await; let close=c.close().await; match(outcome,close){(Ok(true),Ok(()))=>Ok(()),(Ok(false),Ok(()))=>Err(anyhow!("服务器没有确认定向取消")),(Err(e),_)|(_,Err(e))=>Err(e.into())} };
-            let (mut result,mut confirmed)=match payload { Payload::Generated(rows)=>{ let pair=execution::drive(Box::pin(generate_pg(&mut conn,&kind,&record,&rows)),entry,control).await; generated_cleanup_pg(&mut conn,&record,pair).await },Payload::File{source,encoding,stop_on_error}=>file_cleanup(execution::drive(Box::pin(file_pg(&mut conn,record.clone(),source,encoding,stop_on_error)),entry,control).await,&record) };
+            let (mut result,mut confirmed)=match payload { Payload::Generated(rows)=>{ let pair=execution::drive(Box::pin(generate_pg(&mut conn,&kind,&record,&rows,None)),entry,control).await; generated_cleanup_pg(&mut conn,&record,pair).await },Payload::Recipe(work)=>{let rows=work.recipe.shape();let pair=execution::drive(Box::pin(generate_pg(&mut conn,&kind,&record,&rows,Some(&work))),entry,control).await;generated_cleanup_pg(&mut conn,&record,pair).await},Payload::File{source,encoding,stop_on_error}=>file_cleanup(execution::drive(Box::pin(file_pg(&mut conn,record.clone(),source,encoding,stop_on_error)),entry,control).await,&record) };
             if conn.close().await.is_err() { result=Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","固定 PostgreSQL 会话关闭失败；不可重放").into()); confirmed=false; } (result,confirmed)
         }
         _=>(Err(AppError::coded("BATCH_NATIVE_REQUIRED","当前适配器没有受控单会话取消与排空契约").into()),true)
@@ -241,7 +260,7 @@ async fn run_pinned(db:Arc<Db>,kind:DbKind,record:Arc<BatchRecord>,payload:Paylo
 }
 fn column(name:String,ty:String,nullable:bool,default:Option<String>,pk:bool,auto:bool)->ColumnInfo { ColumnInfo{name,data_type:ty,nullable,default,primary_key:pk,auto_increment:auto,comment:None,length:None,precision:None,scale:None} }
 fn table_info(req:&GeneratedRowsRequest,columns:Vec<ColumnInfo>)->TableSchema { TableSchema{table:req.table.clone(),database:req.schema.clone(),columns,indexes:vec![],foreign_keys:vec![],comment:None,engine:None,collation:None,row_count:None} }
-fn generated_validated(record:&BatchRecord,req:&GeneratedRowsRequest,sql:&str) { {let mut p=record.progress.lock();p.scanned=req.rows.len() as u64;p.scan_complete=true;} record.log("info","execute",None,None,"真实字段/生成列/必填/主键及参数宽度校验通过；一个固定物理会话的单批事务",Some(sql)); }
+fn generated_validated(record:&BatchRecord,req:&GeneratedRowsRequest,sql:&str) { {let mut p=record.progress.lock();if record.ticket.task_kind!=BatchTaskKind::GeneratedRecipe{p.scanned=req.rows.len() as u64;p.scan_complete=true;}} record.log("info","execute",None,None,if record.progress.lock().committed_prefix.is_some(){"真实字段/生成列/必填/主键及参数宽度校验通过；固定 SQLite 会话显式分段事务"}else{"真实字段/生成列/必填/主键及参数宽度校验通过；一个固定物理会话的单批事务"},Some(sql)); }
 fn received_ack(result:&std::result::Result<u64,sqlx::Error>)->bool {
     result.as_ref().map_or_else(|error|error.as_database_error().is_some(),|_|true)
 }
@@ -254,27 +273,31 @@ fn generated_row(record:&BatchRecord,row:u64,sql:&str,result:&std::result::Resul
     count_ack(record,result);
     // 一行一条成功回执会淹没语句本身：成功行只计入 metrics，真正失败的绑定才落一条错误记录。
     if result.is_ok() { return; }
-    let summary=if received_ack(result){"参数绑定行收到数据库错误回执；准备排空后回滚整批"}else{"参数绑定行缺少完整数据库回执；不计执行/错误次数，写入结果待确认"};
+    let summary=if received_ack(result){if record.progress.lock().committed_prefix.is_some(){"参数绑定行收到数据库错误回执；准备排空后仅回滚当前段，已提交前缀保留"}else{"参数绑定行收到数据库错误回执；准备排空后回滚整批"}}else{"参数绑定行缺少完整数据库回执；不计执行/错误次数，写入结果待确认"};
     let message=format!("{summary}；原因：{}",result.as_ref().unwrap_err());
     record.log_detail("error","execute",Some(1),Some(row),&message,Some(sql),Some(elapsed_ms),None,db_error_code(result));
 }
-async fn generate_sqlite(conn:&mut sqlx::SqliteConnection,kind:&DbKind,record:&BatchRecord,req:&GeneratedRowsRequest)->Result<MultiResult> {
+async fn generate_sqlite(conn:&mut sqlx::SqliteConnection,kind:&DbKind,record:&BatchRecord,req:&GeneratedRowsRequest,recipe:Option<&RecipeWork>)->Result<MultiResult> {
     data_generator::validate_shape(req)?;
+    if let Some(work)=recipe.filter(|w|!w.preview&&w.recipe.transaction_mode=="segmented") {return generate_sqlite_segments(conn,kind,record,req,work).await;}
     if record.entry.stopping(){return Err(stop_error());}
     crate::sql_history::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;record.transaction("active");
     // 事务锁取得后读取 main 元数据，避免验证与写入之间被 DDL 替换。
-    let definition:Option<String>=crate::sql_history::query_scalar("SELECT sql FROM main.sqlite_master WHERE type='table' AND name=?").bind(&req.table).fetch_optional(&mut *conn).await?;
-    let definition=definition.ok_or_else(||anyhow!("目标必须为固定 main 中的真实表"))?;
-    let metadata=crate::sql_history::query(&format!("PRAGMA main.table_xinfo({})",db::quote_ident(kind,&req.table))).fetch_all(&mut *conn).await?;
-    let mut cols=vec![]; for row in metadata { let name:String=row.try_get("name")?;let hidden:i64=row.try_get("hidden")?;if hidden!=0 {if req.columns.contains(&name){bail!("生成/隐藏字段不可写入");}continue;}cols.push(column(name,row.try_get("type")?,row.try_get::<i64,_>("notnull")?==0,row.try_get("dflt_value")?,row.try_get::<i64,_>("pk")?>0,false)); }
-    let primary=cols.iter().filter(|c|c.primary_key).count(); if primary==1&&!definition.to_ascii_uppercase().contains("WITHOUT ROWID"){for c in &mut cols{if c.primary_key&&c.data_type.eq_ignore_ascii_case("INTEGER")&&!req.columns.contains(&c.name){c.auto_increment=true;}}}
-    data_generator::validate_columns(req,&table_info(req,cols))?;
-    let unqualified=data_generator::insert_sql(kind,req,&[]);let table=db::quote_ident(kind,&req.table);let sql=unqualified.replacen(&format!("INSERT INTO {}",table),&format!("INSERT INTO \"main\".{}",table),1);
+    let info=sqlite_generated_info(conn,kind,req).await?;
+    let engine=if let Some(work)=recipe{let fingerprint=recipe_fingerprint_sqlite(conn,kind,req,&info).await?;let engine=prepare_recipe(work,&info,fingerprint)?;if work.preview{crate::sql_history::query("ROLLBACK").execute(&mut *conn).await?;record.transaction("none");return Ok(record.result());}Some(engine)}else{None};
+
+    let sql=sqlite_generated_sql(kind,req);
     generated_validated(record,req,&sql); if record.entry.stopping(){return Err(stop_error());}
-    for(index,row)in req.rows.iter().enumerate(){if record.entry.stopping(){return Err(stop_error());}let mut query=crate::sql_history::query(&sql);for value in row{query=query.bind(value);}let began=Instant::now();let result=query.execute(&mut *conn).await.map(|r|r.rows_affected());generated_row(record,index as u64+1,&sql,&result,began.elapsed().as_millis() as u64);result?;}
+    let total=recipe.map_or(req.rows.len() as u64,|w|w.recipe.total);
+    for index in 0..total {
+        if record.entry.stopping(){return Err(stop_error());}
+        let generated;let row=if let Some(engine)=&engine{generated=engine.row(index)?;let mut p=record.progress.lock();p.scanned+=1;p.scan_complete=p.scanned==total;&generated}else{&req.rows[index as usize]};
+        sqlite_generated_bound_row(conn,record,&sql,row,index).await?;
+        if index%256==255{tokio::task::yield_now().await;}
+    }
     if record.entry.stopping(){return Err(stop_error());}let batch_rows=record.progress.lock().affected;let batch_elapsed=record.entry.status().deadline.elapsed_ms;record.log_detail("success","execute",Some(1),None,"参数绑定批量写入收到数据库回执（尚待整批提交）",Some(&sql),Some(batch_elapsed),Some(batch_rows),None);record.log("info","commit",None,None,"等待整批 COMMIT 回执",None);crate::sql_history::query("COMMIT").execute(&mut *conn).await.map_err(|e|AppError::coded("EXECUTION_EFFECTS_UNKNOWN",format!("COMMIT 回执失败；整批提交结果未知，禁止重放；原因：{e}")))?;record.transaction("committed");record.log("success","commit",None,None,"整批 COMMIT 已确认",None);Ok(record.result())
 }
-async fn generate_mysql(conn:&mut sqlx::MySqlConnection,kind:&DbKind,record:&BatchRecord,req:&GeneratedRowsRequest)->Result<MultiResult> {
+async fn generate_mysql(conn:&mut sqlx::MySqlConnection,kind:&DbKind,record:&BatchRecord,req:&GeneratedRowsRequest,recipe:Option<&RecipeWork>)->Result<MultiResult> {
     if record.entry.stopping(){return Err(stop_error());}
     // START TRANSACTION 不在 MySQL 预处理语句白名单内，服务端返回 1295；必须走文本协议。
     (&mut *conn).execute("START TRANSACTION").await?;record.transaction("active");
@@ -284,19 +307,35 @@ async fn generate_mysql(conn:&mut sqlx::MySqlConnection,kind:&DbKind,record:&Bat
     if crate::schema::mysql_get(&table,"TABLE_TYPE").as_deref()!=Some("BASE TABLE")||!crate::schema::mysql_get(&table,"ENGINE").is_some_and(|v|v.eq_ignore_ascii_case("InnoDB")){bail!("生成必须为真实 InnoDB 事务表");}
     let metadata=crate::sql_history::query("SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,COLUMN_KEY,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION").bind(&req.schema).bind(&req.table).fetch_all(&mut *conn).await?;
     let mut cols=vec![];for row in metadata{let get=|name|crate::schema::mysql_get(&row,name);let name=get("COLUMN_NAME").unwrap_or_default();let extra=get("EXTRA").unwrap_or_default();if data_generator::mysql_generated_column(&extra){if req.columns.contains(&name){bail!("生成字段不可写入");}continue;}cols.push(column(name,get("COLUMN_TYPE").unwrap_or_default(),get("IS_NULLABLE").as_deref()==Some("YES"),get("COLUMN_DEFAULT"),get("COLUMN_KEY").as_deref()==Some("PRI"),extra.to_ascii_lowercase().contains("auto_increment")));}
-    data_generator::validate_columns(req,&table_info(req,cols))?;let sql=data_generator::insert_sql(kind,req,&[]);generated_validated(record,req,&sql);if record.entry.stopping(){return Err(stop_error());}
-    for(index,row)in req.rows.iter().enumerate(){if record.entry.stopping(){return Err(stop_error());}let mut query=crate::sql_history::query(&sql);for value in row{query=query.bind(value);}let began=Instant::now();let result=query.execute(&mut *conn).await.map(|r|r.rows_affected());generated_row(record,index as u64+1,&sql,&result,began.elapsed().as_millis() as u64);result?;}
+    let info=table_info(req,cols);data_generator::validate_columns(req,&info)?;
+    let engine=if let Some(work)=recipe{let fingerprint=recipe_fingerprint_mysql(conn,kind,req,&info).await?;let engine=prepare_recipe(work,&info,fingerprint)?;if work.preview{crate::sql_history::query("ROLLBACK").execute(&mut *conn).await?;record.transaction("none");return Ok(record.result());}Some(engine)}else{None};
+    let sql=data_generator::insert_sql(kind,req,&[]);generated_validated(record,req,&sql);if record.entry.stopping(){return Err(stop_error());}
+    let total=recipe.map_or(req.rows.len() as u64,|w|w.recipe.total);
+    for index in 0..total {
+        if record.entry.stopping(){return Err(stop_error());}
+        let generated;let row=if let Some(engine)=&engine{generated=engine.row(index)?;let mut p=record.progress.lock();p.scanned+=1;p.scan_complete=p.scanned==total;&generated}else{&req.rows[index as usize]};
+        let mut query=crate::sql_history::query(&sql);for value in row{query=query.bind(value);}if record.entry.stopping(){return Err(stop_error());}record.progress.lock().sent+=1;let began=Instant::now();let result=query.execute(&mut *conn).await.map(|r|r.rows_affected());generated_row(record,index+1,&sql,&result,began.elapsed().as_millis() as u64);result?;
+        if index%256==255{tokio::task::yield_now().await;}
+    }
     if record.entry.stopping(){return Err(stop_error());}let batch_rows=record.progress.lock().affected;let batch_elapsed=record.entry.status().deadline.elapsed_ms;record.log_detail("success","execute",Some(1),None,"参数绑定批量写入收到数据库回执（尚待整批提交）",Some(&sql),Some(batch_elapsed),Some(batch_rows),None);record.log("info","commit",None,None,"等待整批 COMMIT 回执",None);crate::sql_history::query("COMMIT").execute(&mut *conn).await.map_err(|e|AppError::coded("EXECUTION_EFFECTS_UNKNOWN",format!("COMMIT 回执失败；提交结果未知，禁止重放；原因：{e}")))?;record.transaction("committed");Ok(record.result())
 }
-async fn generate_pg(conn:&mut sqlx::PgConnection,kind:&DbKind,record:&BatchRecord,req:&GeneratedRowsRequest)->Result<MultiResult> {
+async fn generate_pg(conn:&mut sqlx::PgConnection,kind:&DbKind,record:&BatchRecord,req:&GeneratedRowsRequest,recipe:Option<&RecipeWork>)->Result<MultiResult> {
     execution::prepare_pg_deadline(conn,&record.entry).await?;if record.entry.stopping(){return Err(stop_error());}
     crate::sql_history::query("BEGIN").execute(&mut *conn).await?;record.transaction("active");
     crate::sql_history::query(&format!("LOCK TABLE {} IN ROW EXCLUSIVE MODE",db::qualified(kind,&req.schema,&req.table))).execute(&mut *conn).await?;
-    let metadata=crate::sql_history::query("SELECT a.attname,tn.nspname AS type_schema,t.typname,a.attnotnull,a.attgenerated::text AS generated,a.attidentity::text AS identity,pg_get_expr(d.adbin,d.adrelid) AS default_value,EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=c.oid AND i.indisprimary AND a.attnum=ANY(i.indkey)) AS is_pk FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid JOIN pg_namespace tn ON tn.oid=t.typnamespace LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum").bind(&req.schema).bind(&req.table).fetch_all(&mut *conn).await?;
+    let metadata=crate::sql_history::query("SELECT a.attname,tn.nspname AS type_schema,t.typname,format_type(a.atttypid,a.atttypmod) AS value_type,a.attnotnull,a.attgenerated::text AS generated,a.attidentity::text AS identity,pg_get_expr(d.adbin,d.adrelid) AS default_value,EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=c.oid AND i.indisprimary AND a.attnum=ANY(i.indkey)) AS is_pk FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid JOIN pg_namespace tn ON tn.oid=t.typnamespace LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum").bind(&req.schema).bind(&req.table).fetch_all(&mut *conn).await?;
     if metadata.is_empty(){bail!("目标必须为真实表");}let mut cols=vec![];let mut types=HashMap::new();
-    for row in metadata{let name:String=row.try_get("attname")?;let generated:String=row.try_get("generated")?;let identity:String=row.try_get("identity")?;if (!generated.is_empty()||!identity.is_empty())&&req.columns.contains(&name){bail!("生成/标识字段不可写入");}if !generated.is_empty(){continue;}let ty:String=row.try_get("typname")?;let ns:String=row.try_get("type_schema")?;types.insert(name.clone(),format!("{}.{}",db::quote_ident(kind,&ns),db::quote_ident(kind,&ty)));let default:Option<String>=row.try_get("default_value")?;let auto=!identity.is_empty()||default.as_ref().is_some_and(|v|v.starts_with("nextval("));cols.push(column(name,ty,!row.try_get::<bool,_>("attnotnull")?,default,row.try_get("is_pk")?,auto));}
-    data_generator::validate_columns(req,&table_info(req,cols))?;let types:Vec<String>=req.columns.iter().map(|n|types.get(n).cloned().ok_or_else(||anyhow!("字段类型不存在"))).collect::<Result<_>>()?;let sql=data_generator::insert_sql(kind,req,&types);generated_validated(record,req,&sql);execution::prepare_pg_deadline(conn,&record.entry).await?;if record.entry.stopping(){return Err(stop_error());}
-    for(index,row)in req.rows.iter().enumerate(){if record.entry.stopping(){return Err(stop_error());}let mut query=crate::sql_history::query(&sql);for value in row{query=query.bind(value);}let began=Instant::now();let result=query.execute(&mut *conn).await.map(|r|r.rows_affected());generated_row(record,index as u64+1,&sql,&result,began.elapsed().as_millis() as u64);result?;}
+    for row in metadata{let name:String=row.try_get("attname")?;let generated:String=row.try_get("generated")?;let identity:String=row.try_get("identity")?;if (!generated.is_empty()||!identity.is_empty())&&req.columns.contains(&name){bail!("生成/标识字段不可写入");}if !generated.is_empty(){continue;}let ty:String=row.try_get("typname")?;let ns:String=row.try_get("type_schema")?;types.insert(name.clone(),format!("{}.{}",db::quote_ident(kind,&ns),db::quote_ident(kind,&ty)));let default:Option<String>=row.try_get("default_value")?;let auto=!identity.is_empty()||default.as_ref().is_some_and(|v|v.starts_with("nextval("));cols.push(column(name,row.try_get("value_type")?,!row.try_get::<bool,_>("attnotnull")?,default,row.try_get("is_pk")?,auto));}
+    let info=table_info(req,cols);data_generator::validate_columns(req,&info)?;
+    let engine=if let Some(work)=recipe{let fingerprint=recipe_fingerprint_pg(conn,kind,req,&info).await?;let engine=prepare_recipe(work,&info,fingerprint)?;if work.preview{crate::sql_history::query("ROLLBACK").execute(&mut *conn).await?;record.transaction("none");return Ok(record.result());}Some(engine)}else{None};
+    let types:Vec<String>=req.columns.iter().map(|n|types.get(n).cloned().ok_or_else(||anyhow!("字段类型不存在"))).collect::<Result<_>>()?;let sql=data_generator::insert_sql(kind,req,&types);generated_validated(record,req,&sql);execution::prepare_pg_deadline(conn,&record.entry).await?;if record.entry.stopping(){return Err(stop_error());}
+    let total=recipe.map_or(req.rows.len() as u64,|w|w.recipe.total);
+    for index in 0..total {
+        if record.entry.stopping(){return Err(stop_error());}
+        let generated;let row=if let Some(engine)=&engine{generated=engine.row(index)?;let mut p=record.progress.lock();p.scanned+=1;p.scan_complete=p.scanned==total;&generated}else{&req.rows[index as usize]};
+        let mut query=crate::sql_history::query(&sql);for value in row{query=query.bind(value);}if record.entry.stopping(){return Err(stop_error());}record.progress.lock().sent+=1;let began=Instant::now();let result=query.execute(&mut *conn).await.map(|r|r.rows_affected());generated_row(record,index+1,&sql,&result,began.elapsed().as_millis() as u64);result?;
+        if index%256==255{tokio::task::yield_now().await;}
+    }
     if record.entry.stopping(){return Err(stop_error());}let batch_rows=record.progress.lock().affected;let batch_elapsed=record.entry.status().deadline.elapsed_ms;record.log_detail("success","execute",Some(1),None,"参数绑定批量写入收到数据库回执（尚待整批提交）",Some(&sql),Some(batch_elapsed),Some(batch_rows),None);record.log("info","commit",None,None,"等待整批 COMMIT 回执",None);crate::sql_history::query("COMMIT").execute(&mut *conn).await.map_err(|e|AppError::coded("EXECUTION_EFFECTS_UNKNOWN",format!("COMMIT 回执失败；提交结果未知，禁止重放；原因：{e}")))?;record.transaction("committed");Ok(record.result())
 }
 macro_rules! generated_cleanup { ($name:ident,$conn:ty)=>{
@@ -304,9 +343,10 @@ macro_rules! generated_cleanup { ($name:ident,$conn:ty)=>{
         let tx=record.progress.lock().transaction.clone();
         if tx=="active" {
             if result.as_ref().err().and_then(|e|e.downcast_ref::<AppError>()).is_some_and(|e|e.code=="EXECUTION_EFFECTS_UNKNOWN"){record.transaction("unknown");return(result,false);}
-            record.log("info","rollback",None,None,"所有执行/取消控制已排空，等待整批 ROLLBACK 回执",None);
-            match crate::sql_history::query("ROLLBACK").execute(conn).await{Ok(_)=>{record.transaction("rolled_back");record.progress.lock().affected=0;confirmed=true;record.log("success","rollback",None,None,"整批 ROLLBACK 已确认；没有该批持久写入",None);},Err(e)=>{record.transaction("unknown");let original=result.as_ref().err().map(|error|format!("；原执行错误：{error:#}")).unwrap_or_default();return(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN",format!("ROLLBACK 回执失败；事务结果未知，禁止重放；原因：{e}{original}")).into()),false);}}
+            record.log("info","rollback",None,None,if record.progress.lock().committed_prefix.is_some(){"所有执行/取消控制已排空，等待当前段 ROLLBACK 回执；此前缀保留"}else{"所有执行/取消控制已排空，等待整批 ROLLBACK 回执"},None);
+            match crate::sql_history::query("ROLLBACK").execute(conn).await{Ok(_)=>{recipe_rollback_confirmed(record,"整批 ROLLBACK 已确认；没有该批持久写入");confirmed=true;},Err(e)=>{record.transaction("unknown");let original=result.as_ref().err().map(|error|format!("；原执行错误：{error:#}")).unwrap_or_default();return(Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN",format!("ROLLBACK 回执失败；事务结果未知，禁止重放；原因：{e}{original}")).into()),false);}}
         }else if tx=="none" {record.transaction("none");if record.entry.stopping(){confirmed=true;}}
+        else if tx=="committed"&&record.progress.lock().committed_prefix.is_some()&&record.entry.stopping()&&result.as_ref().err().and_then(|e|e.downcast_ref::<AppError>()).is_some_and(|e|e.code=="BATCH_STOPPED") {confirmed=true;}
         (result,confirmed)
     }
 }; }
@@ -318,7 +358,7 @@ async fn generated_cleanup_sqlite(conn:&mut sqlx::SqliteConnection,record:&Batch
         let autocommit={ let mut handle=match conn.lock_handle().await{Ok(h)=>h,Err(e)=>return(Err(e.into()),false)};
             // SAFETY: 固定存活 SQLite 物理连接，持有 SQLx worker handle 锁，只读取事务状态。
             unsafe{libsqlite3_sys::sqlite3_get_autocommit(handle.as_raw_handle().as_ptr())!=0} };
-        if autocommit {record.transaction("rolled_back");record.progress.lock().affected=0;record.log("success","rollback",None,None,"SQLite VM 已中断并自动回滚；固定句柄 autocommit 状态确认整批结束",None);return(pair.0,true);}
+        if autocommit {recipe_rollback_confirmed(record,"SQLite VM 已中断并自动回滚；固定句柄 autocommit 状态确认整批结束");return(pair.0,true);}
     }
     generated_cleanup_sqlite_generic(conn,record,pair).await
 }
@@ -360,6 +400,9 @@ macro_rules! file_worker {($name:ident,$conn:ty,$dialect:expr,$pg:expr)=>{
         drop(rx);if task.await.is_err(){return Err(AppError::coded("EXECUTION_EFFECTS_UNKNOWN","SQL 固定源扫描任务异常；资源清理无法证明，禁止重放").into());}result
     }
 }; }
+include!("generated_recipe_runtime.rs");
+include!("generated_recipe_segments.rs");
+
 #[cfg(test)]
 #[path="batch_execution_tests.rs"]
 mod tests;

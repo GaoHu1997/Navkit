@@ -8,7 +8,7 @@ const built = await build({ stdin: { contents: 'export { iconSvgByName, svg, ICO
 const icons = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'));
 const body = svg => svg.slice(svg.indexOf('>') + 1, svg.lastIndexOf('</svg>'));
 
-test('insert has its dedicated icon without changing either primary-key owner', () => {
+test('insert has its dedicated icon without changing the key icon', () => {
   assert.equal(body(icons.iconSvgByName('insert_field')), body(icons.svg(icons.ICON_INSERT_LEFT)));
   assert.equal(body(icons.iconSvgByName('dbn_edit')), body(icons.svg(icons.ICON_KEY_GOLD)));
   assert.notEqual(body(icons.iconSvgByName('insert_field')), body(icons.iconSvgByName('dbn_edit')));
@@ -31,9 +31,12 @@ function scan(node) {
 }
 scan(app);
 test('actual toolbar commands reference the dedicated field and transaction aliases', () => {
-  for (const [id, icon] of [['insert-field', 'insert_field'], ['primary-key', 'dbn_edit'], ['begin-transaction', 'dbn_applyupdates'], ['rollback-transaction', 'dbn_cancel']]) {
+  for (const [id, icon] of [['insert-field', 'insert_field'], ['begin-transaction', 'dbn_applyupdates'], ['rollback-transaction', 'dbn_cancel']]) {
     assert.ok(actions.some(action => action.id === id && action.icon === icon), id);
   }
+  // 主键操作并入索引页的 PRIMARY 行；工具栏不再有独立主键按钮，但字段页仍保留结构操作入口。
+  assert.equal(actions.some(action => action.id === 'primary-key'), false, 'primary-key must not stay a toolbar command');
+  assert.ok(actions.some(action => action.id === 'add-index' && action.icon), 'add-index');
 });
 
 const transferText = await readFile('src/dialogs/ImportExportDialog.ts', 'utf8');

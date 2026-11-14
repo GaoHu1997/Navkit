@@ -58,13 +58,17 @@ fn dependencies(ddl: &str, namespace: &str) -> Result<HashSet<(String, String)>>
     Ok(found)
 }
 
-async fn prepare(connection: &mut sqlx::MySqlConnection, kind: &DbKind, options: &ExportOptions, task: &TaskControl) -> Result<Option<String>> {
+async fn prepare(connection: &mut sqlx::MySqlConnection, kind: &DbKind, options: &ExportOptions, task: &TaskControl, shared: bool) -> Result<Option<String>> {
     let namespace = if options.schema.is_empty() { crate::sql_history::query_scalar::<_, Option<String>>("SELECT DATABASE()").fetch_one(&mut *connection).await?.ok_or_else(|| anyhow!("请选择导出数据库"))? } else { options.schema.clone() };
     let mut queue = VecDeque::from([(namespace.clone(), options.table.clone())]); let mut visited = HashSet::new(); let mut root_ddl = None;
     // 专用只读事务；完成后真实 ROLLBACK，失败则关闭连接，绝不把未排空事务回池。
+    if !shared {
     crate::sql_history::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").execute(&mut *connection).await?;
     // START TRANSACTION 不在 MySQL 预处理语句白名单内，服务端返回 1295；必须走文本协议（无参数 &str 即 COM_QUERY）。
-    (&mut *connection).execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY").await?;
+    // TiDB 不支持 `WITH CONSISTENT SNAPSHOT, READ ONLY` 的逗号并列写法（解析到逗号即 1064 语法错误）；
+    // 上一句已设 REPEATABLE READ，事务内一致性快照由 MVCC 保证，只读改用标准的 `START TRANSACTION READ ONLY`。
+    (&mut *connection).execute("START TRANSACTION READ ONLY").await?;
+    }
     while let Some((schema, name)) = queue.pop_front() {
         task.check()?;
         if !visited.insert((schema.clone(), name.clone())) { continue; }
@@ -106,8 +110,13 @@ async fn prepare(connection: &mut sqlx::MySqlConnection, kind: &DbKind, options:
 
 pub(super) async fn session(pool: &MySqlPool, kind: &DbKind, options: &ExportOptions, task: &TaskControl) -> Result<(PoolConnection<MySql>, Option<String>, bool)> {
     task.check()?; let mut connection = pool.acquire().await?;
-    match prepare(&mut connection, kind, options, task).await {
-        Ok(ddl) => Ok((connection, ddl, true)),
+    let prepared = async {
+        let shared = crate::transfer::transfer_backup_native::mysql_shared_reader(&mut connection,&options.schema,&options.table).await?;
+        let ddl = prepare(&mut connection, kind, options, task, shared).await?;
+        Ok::<_,anyhow::Error>((ddl,shared))
+    }.await;
+    match prepared {
+        Ok((ddl,shared)) => Ok((connection, ddl, !shared)),
         Err(error) => match connection.close().await {
             Ok(()) => Err(error),
             Err(close) => Err(error.context(format!("TRANSFER_EFFECTS_UNKNOWN: MySQL 导出会话关闭未确认，目标未发布：{close}"))),

@@ -58,6 +58,73 @@ fn pg_get(row: &PgRow, name: &str) -> Option<String> {
         .flatten()
 }
 
+/// 表设计器「选项」页的真实候选项：来自当前数据库的信息模式，前端不再凭空猜测可选项。
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct TableOptionChoices {
+    pub engines: Vec<String>,
+    pub charsets: Vec<String>,
+    pub collations: Vec<String>,
+    pub row_formats: Vec<String>,
+}
+
+/// 读取表选项候选；非 MySQL 协议返回空候选（前端保留当前值，只对支持的项展示）。
+pub async fn table_option_choices(db: &Db, kind: DbKind) -> Result<TableOptionChoices> {
+    if !kind.is_mysql_family() {
+        return Ok(TableOptionChoices::default());
+    }
+    let Db::Mysql(pool) = db else {
+        return Ok(TableOptionChoices::default());
+    };
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+        let mut out = TableOptionChoices {
+            row_formats: ["DEFAULT", "DYNAMIC", "COMPRESSED", "COMPACT", "REDUNDANT", "FIXED"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ..Default::default()
+        };
+        let rows = crate::sql_history::query(
+            "SELECT DISTINCT ENGINE AS name FROM information_schema.ENGINES ORDER BY ENGINE",
+        )
+        .fetch_all(pool)
+        .await?;
+        for row in &rows {
+            if let Some(name) = mysql_get(row, "name") {
+                if !name.is_empty() {
+                    out.engines.push(name);
+                }
+            }
+        }
+        let rows = crate::sql_history::query(
+            "SELECT CHARACTER_SET_NAME AS name FROM information_schema.CHARACTER_SETS ORDER BY CHARACTER_SET_NAME",
+        )
+        .fetch_all(pool)
+        .await?;
+        for row in &rows {
+            if let Some(name) = mysql_get(row, "name") {
+                if !name.is_empty() {
+                    out.charsets.push(name);
+                }
+            }
+        }
+        let rows = crate::sql_history::query(
+            "SELECT COLLATION_NAME AS name FROM information_schema.COLLATIONS ORDER BY COLLATION_NAME",
+        )
+        .fetch_all(pool)
+        .await?;
+        for row in &rows {
+            if let Some(name) = mysql_get(row, "name") {
+                if !name.is_empty() {
+                    out.collations.push(name);
+                }
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// 列出该连接可见的数据库 / 模式。
 pub async fn list_databases(db: &Db, kind: DbKind) -> Result<Vec<(String, String)>> {
     let __sql_history_context = crate::sql_history::db_context(db);
@@ -493,6 +560,15 @@ pub async fn table_schema(
     schema: &str,
     table: &str,
 ) -> Result<TableSchema> {
+    table_schema_impl(db, kind, schema, table, true).await
+}
+
+/// 分页及其筛选只需列和主键，不应为了目录顺便扫描整表统计行数。
+pub async fn table_schema_for_page(db: &Db, kind: DbKind, schema: &str, table: &str) -> Result<TableSchema> {
+    table_schema_impl(db, kind, schema, table, false).await
+}
+
+async fn table_schema_impl(db: &Db, kind: DbKind, schema: &str, table: &str, include_row_count: bool) -> Result<TableSchema> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
     if let Db::Http(h) = db {
@@ -502,10 +578,10 @@ pub async fn table_schema(
         return redis_table_schema(r, kind, schema, table).await;
     }
     if let Db::Mongo(m) = db {
-        return mongo_table_schema(m, kind, schema, table).await;
+        return mongo_table_schema(m, kind, schema, table, include_row_count).await;
     }
     if matches!(db, Db::ClickHouse(_) | Db::Odbc(_) | Db::Mssql(_)) {
-        return generic_table_schema(db, &kind, schema, table).await;
+        return generic_table_schema_impl(db, &kind, schema, table, include_row_count).await;
     }
     let mut columns = Vec::new();
     let mut indexes = Vec::new();
@@ -704,6 +780,8 @@ pub async fn table_schema(
     }).await
 }
 
+#[path="schema_page.rs"]
+mod pagination;
 #[path="table_workflows_filter.rs"]
 mod typed_table_filter;
 #[path="table_workflows_filter_comparisons.rs"]
@@ -762,14 +840,17 @@ pub async fn page_table(
         r.elapsed_ms = start.elapsed().as_millis() as u64;
         return Ok(r);
     }
-    let full = qualified(&kind, &req.schema, &req.table);
+    let full = if let Db::Sqlite(pool) = db {
+        pagination::sqlite_full(pool, &req.schema, &req.table).await?
+    } else {
+        qualified(&kind, &req.schema, &req.table)
+    };
     let where_sql = sensitive_table_filter::typed_clause(db, &kind, req).await?;
     let order_sql = order_clause(&kind, req);
-    let limit = req.limit.clamp(1, 100_000);
-    let offset = req.offset;
+    let rows_sql = pagination::rows_sql(&kind, req, &full, &where_sql, &order_sql);
 
     // 表元数据：列定义 + 主键（失败则退回按行推导）。
-    let meta = table_schema(db, kind.clone(), &req.schema, &req.table).await.ok();
+    let meta = table_schema_for_page(db, kind.clone(), &req.schema, &req.table).await.ok();
     let meta_cols: Vec<ResultColumn> = meta
         .as_ref()
         .map(|m| {
@@ -790,12 +871,11 @@ pub async fn page_table(
 
     let (rows, total, pks) = match db {
         Db::Sqlite(pool) => {
-            let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
-            let total: i64 = crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?;
-            let sql = format!(
-                "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
-                full, where_sql, order_sql, limit, offset
-            );
+            let total: Option<i64> = if req.include_total {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
+                Some(crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?)
+            } else { None };
+            let sql = &rows_sql;
             let fetched = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let out_rows = if let Some(first) = fetched.first() {
                 let n = first.columns().len();
@@ -822,15 +902,14 @@ pub async fn page_table(
                 anyhow::ensure!(ordered.iter().enumerate().all(|(index, part)| part.0 == index as i64 + 1), "STRUCTURE_METADATA_KEY_ORDER_UNPROVEN");
                 pks = ordered.into_iter().map(|part| part.1).collect();
             }
-            (out_rows, total as u64, pks)
+            (out_rows, total.map(|n| n.max(0) as u64), pks)
         }
         Db::Mysql(pool) => {
-            let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
-            let total: i64 = crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?;
-            let sql = format!(
-                "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
-                full, where_sql, order_sql, limit, offset
-            );
+            let total: Option<i64> = if req.include_total {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
+                Some(crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?)
+            } else { None };
+            let sql = &rows_sql;
             let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
             let out_rows = if let Some(first) = rows.first() {
                 let n = first.columns().len();
@@ -847,21 +926,24 @@ pub async fn page_table(
             } else {
                 meta_pks
             };
-            (out_rows, total as u64, pks)
+            (out_rows, total.map(|n| n.max(0) as u64), pks)
         }
         Db::Postgres(pool) => {
-            let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
-            let total: i64 = crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?;
-            let sql = format!(
-                "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
-                full, where_sql, order_sql, limit, offset
-            );
-            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
+            let total: Option<i64> = if req.include_total {
+                let count_sql = format!("SELECT COUNT(*) FROM {}{}", full, where_sql);
+                Some(crate::sql_history::query_scalar(&count_sql).fetch_one(pool).await?)
+            } else { None };
+            let sql = &rows_sql;
+            // MONEY 的二进制值没有区域小数位；在同一物理连接上取服务端数值文本。
+            let mut connection = pool.acquire().await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(&mut *connection).await?;
             let out_rows = if let Some(first) = rows.first() {
                 let n = first.columns().len();
                 let mut out = Vec::with_capacity(rows.len());
                 for r in &rows {
-                    out.push(crate::values::pg_row_values(r, n));
+                    let mut values = crate::values::pg_row_values(r, n);
+                    crate::values::pg_resolve_money_values(&mut connection, r, &mut values).await?;
+                    out.push(values);
                 }
                 out
             } else {
@@ -872,11 +954,13 @@ pub async fn page_table(
             } else {
                 meta_pks
             };
-            (out_rows, total as u64, pks)
+            (out_rows, total.map(|n| n.max(0) as u64), pks)
         }
-            _ => (Vec::new(), 0, Vec::new()),
+            _ => (Vec::new(), None, Vec::new()),
     };
 
+    let mut rows = rows;
+    let (total, total_exact, has_more) = pagination::finish(req, &mut rows, total);
     // 列结构：优先元数据；没有元数据时按行推导（兜底）。
     let columns = if !meta_cols.is_empty() {
         meta_cols
@@ -911,6 +995,8 @@ pub async fn page_table(
         columns,
         rows,
         total,
+        total_exact,
+        has_more,
         primary_keys: pks,
         elapsed_ms: start.elapsed().as_millis() as u64,
     })
@@ -1259,7 +1345,7 @@ pub async fn table_ddl(
         }
         _ => {
             // 其余类型由表结构生成 CREATE TABLE（PG / ClickHouse / ODBC / MSSQL）
-            let s = table_schema(db, kind.clone(), schema, table).await?;
+            let s = table_schema_for_page(db, kind.clone(), schema, table).await?;
             if s.columns.is_empty() {
                 return Err(anyhow::anyhow!("表不存在"));
             }
@@ -1386,14 +1472,17 @@ pub async fn fetch_all_rows(
             Ok((names, out))
         }
         Db::Postgres(pool) => {
-            let rows = crate::sql_history::query(&sql).fetch_all(pool).await?;
+            let mut connection = pool.acquire().await?;
+            let rows = crate::sql_history::query(&sql).fetch_all(&mut *connection).await?;
             let mut out = Vec::new();
             let names: Vec<String> = rows
                 .first()
                 .map(|first| first.columns().iter().map(|c| c.name().to_string()).collect())
                 .unwrap_or_default();
             for r in &rows {
-                out.push(crate::values::pg_row_values(r, names.len()));
+                let mut values = crate::values::pg_row_values(r, names.len());
+                crate::values::pg_resolve_money_values(&mut connection, r, &mut values).await?;
+                out.push(values);
             }
             Ok((names, out))
         }
@@ -1577,6 +1666,10 @@ async fn generic_table_schema(
     schema: &str,
     table: &str,
 ) -> Result<TableSchema> {
+    generic_table_schema_impl(db, kind, schema, table, true).await
+}
+
+async fn generic_table_schema_impl(db: &Db, kind: &DbKind, schema: &str, table: &str, include_row_count: bool) -> Result<TableSchema> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
     let mut out = TableSchema {
@@ -1635,10 +1728,10 @@ async fn generic_table_schema(
                     scale: None,
                 });
             }
-            let cnt = db
-                .generic_scalar(&format!("SELECT count() FROM {}", full))
-                .await?;
-            out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            if include_row_count {
+                let cnt = db.generic_scalar(&format!("SELECT count() FROM {}", full)).await?;
+                out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            }
         }
         "sqlserver" | "mssql" => {
             let identity = crate::object_identity::SqlServerObject::parse(schema, table)?;
@@ -1684,10 +1777,10 @@ async fn generic_table_schema(
                 }
             }
             let full = crate::db::qualified(&kind, schema, table);
-            let cnt = db
-                .generic_scalar(&format!("SELECT COUNT(*) FROM {}", full))
-                .await?;
-            out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            if include_row_count {
+                let cnt = db.generic_scalar(&format!("SELECT COUNT(*) FROM {}", full)).await?;
+                out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            }
         }
         "oracle" | "dameng" => {
             let upper = table.to_uppercase().replace('\'', "''");
@@ -1752,10 +1845,10 @@ async fn generic_table_schema(
                 }
             }
             let full = crate::db::qualified(&kind, schema, table);
-            let cnt = db
-                .generic_scalar(&format!("SELECT COUNT(*) FROM {}", full))
-                .await?;
-            out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            if include_row_count {
+                let cnt = db.generic_scalar(&format!("SELECT COUNT(*) FROM {}", full)).await?;
+                out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            }
         }
         "hive" | "inceptor" | "argodb" | "spark" | "impala" | "kyuubi" => {
             let full = crate::db::qualified(&kind, schema, table);
@@ -1778,10 +1871,10 @@ async fn generic_table_schema(
                     scale: None,
                 });
             }
-            let cnt = db
-                .generic_scalar(&format!("SELECT COUNT(*) FROM {}", full))
-                .await?;
-            out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            if include_row_count {
+                let cnt = db.generic_scalar(&format!("SELECT COUNT(*) FROM {}", full)).await?;
+                out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            }
         }
         _ => {
             // 通用兜底：SELECT * WHERE 1=0 只取列名（几乎所有 SQL 数据源都支持）
@@ -1789,22 +1882,10 @@ async fn generic_table_schema(
             if let Db::Odbc(odbc) = db {
                 // 从已动态验证的 SQLDescribeCol 类型码取结构；主键未知仍保持未知。
                 // 否则源 BLOB 虽已正确读成 HEX，反向同步仍会错误创建 TEXT。
-                let result = match odbc.query_rows(&format!("SELECT * FROM {} WHERE 1 = 0", full)).await {
-                    Ok(result) => result,
-                    Err(_) => odbc.query_rows(&format!("SELECT * FROM {}", full)).await?,
-                };
+                let result = odbc.query_rows(&format!("SELECT * FROM {} WHERE 1 = 0", full)).await?;
                 out.columns = result.column_info;
             } else {
-                let (cols, _rows) = match db
-                    .generic_rows(&format!("SELECT * FROM {} WHERE 1 = 0", full))
-                    .await
-                {
-                    Ok(x) => x,
-                    Err(_) => match db.generic_rows(&format!("SELECT * FROM {}", full)).await {
-                        Ok((c, _)) => (c, Vec::new()),
-                        Err(e) => return Err(e),
-                    },
-                };
+                let (cols, _rows) = db.generic_rows(&format!("SELECT * FROM {} WHERE 1 = 0", full)).await?;
                 for name in cols {
                     out.columns.push(ColumnInfo {
                         name,
@@ -1820,10 +1901,10 @@ async fn generic_table_schema(
                     });
                 }
             }
-            let cnt = db
-                .generic_scalar(&format!("SELECT COUNT(*) FROM {}", full))
-                .await?;
-            out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            if include_row_count {
+                let cnt = db.generic_scalar(&format!("SELECT COUNT(*) FROM {}", full)).await?;
+                out.row_count = cnt.and_then(|s| s.trim().parse().ok());
+            }
         }
     }
     Ok(out)
@@ -1841,12 +1922,10 @@ async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result
     let full = crate::db::qualified(&kind, &req.schema, &req.table);
     let where_sql = sensitive_table_filter::typed_clause(db, kind, req).await?;
     let order_sql = order_clause(kind, req);
-    let total: u64 = db
-        .generic_scalar(&format!("SELECT COUNT(*) FROM {}{}", full, where_sql))
-        .await?
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
-    let limit = req.limit.clamp(1, 100_000);
+    let total: Option<u64> = if req.include_total {
+        Some(db.generic_scalar(&format!("SELECT COUNT(*) FROM {}{}", full, where_sql))
+            .await?.and_then(|s| s.trim().parse().ok()).unwrap_or(0))
+    } else { None };
     let hive_family = matches!(
         kind.id(),
         "hive" | "inceptor" | "argodb" | "spark" | "impala" | "kyuubi"
@@ -1854,39 +1933,10 @@ async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result
     // Access and InterSystems TOP has no OFFSET; fetch through offset + limit and
     // skip only after the database has applied the requested filters and ordering.
     let top_family = matches!(kind.id(), "access" | "iris" | "cache");
-    let rows_sql = if req.limit == 0 {
-        // Keep actual column metadata while returning no records, including dialects
-        // where FETCH NEXT 0 / FIRST 0 is invalid. Do not silently turn zero into one.
-        let empty_where = if where_sql.is_empty() { " WHERE 1=0".to_string() } else { format!("{} AND 1=0", where_sql) };
-        format!("SELECT * FROM {}{}", full, empty_where)
-    } else if matches!(kind.id(), "sqlserver" | "mssql" | "oracle" | "dameng" | "db2") {
-        let order = if order_sql.is_empty() && matches!(kind.id(), "sqlserver" | "mssql") {
-            " ORDER BY (SELECT NULL)"
-        } else {
-            &order_sql
-        };
-        format!(
-            "SELECT * FROM {}{}{} OFFSET {} ROWS FETCH NEXT {} ROWS ONLY",
-            full, where_sql, order, req.offset, limit
-        )
-    } else if kind.id() == "firebird" {
-        format!("SELECT FIRST {} SKIP {} * FROM {}{}{}", limit, req.offset, full, where_sql, order_sql)
-    } else if kind.id() == "informix" {
-        format!("SELECT SKIP {} FIRST {} * FROM {}{}{}", req.offset, limit, full, where_sql, order_sql)
-    } else if top_family {
-        format!("SELECT TOP {} * FROM {}{}{}", req.offset.saturating_add(limit), full, where_sql, order_sql)
-    } else if hive_family {
-        // HiveQL 无 OFFSET：排序/筛选在取行之前执行，再跳过 offset 行。
-        format!("SELECT * FROM {}{}{} LIMIT {}", full, where_sql, order_sql, req.offset.saturating_add(limit))
-    } else {
-        format!(
-            "SELECT * FROM {}{}{} LIMIT {} OFFSET {}",
-            full, where_sql, order_sql, limit, req.offset
-        )
-    };
+    let rows_sql = pagination::rows_sql(kind, req, &full, &where_sql, &order_sql);
     let (cols, mut rows) = db.generic_rows(&rows_sql).await?;
     if (hive_family || top_family) && req.offset > 0 {
-        rows = rows.into_iter().skip(req.offset as usize).collect();
+        rows = rows.into_iter().skip(usize::try_from(req.offset).unwrap_or(usize::MAX)).collect();
     }
     let mssql_columns = if kind.protocol() == crate::models::Protocol::Mssql {
         let identity = crate::object_identity::SqlServerObject::parse(&req.schema, &req.table)?;
@@ -1907,10 +1957,13 @@ async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result
             Ok(ResultColumn { name: c, data_type: String::new(), nullable: true, primary_key: false, auto_increment: false })
         })
         .collect::<Result<Vec<_>>>()?;
+    let (total, total_exact, has_more) = pagination::finish(req, &mut rows, total);
     Ok(PageResult {
         columns,
         rows,
         total,
+        total_exact,
+        has_more,
         primary_keys: Vec::new(),
         elapsed_ms: 0,
     })
@@ -2048,7 +2101,17 @@ async fn http_table_schema(
 
 /// HTTP 类数据源：分页浏览。
 async fn http_page_table(h: &crate::http_db::HttpDb, req: &PageRequest) -> Result<PageResult> {
-    let r = h.rows(&req.schema, &req.table, req.offset, req.limit).await?;
+    // HTTP adapters do not expose exact counts. Probe one extra row even for legacy
+    // callers rather than representing the old offset + n + 1 heuristic as exact.
+    let mut probe_req = req.clone();
+    probe_req.include_total = false;
+    let mut r = h.rows(&req.schema, &req.table, req.offset, pagination::fetch_limit(&probe_req)).await?;
+    if req.limit == 0 {
+        if let Some(metadata) = h.table_columns(&req.schema, &req.table).await? {
+            r.columns = metadata.into_iter().map(|column| column.name).collect();
+        }
+    }
+    let (total, total_exact, has_more) = pagination::finish(&probe_req, &mut r.rows, None);
     let columns: Vec<ResultColumn> = r
         .columns
         .into_iter()
@@ -2060,13 +2123,12 @@ async fn http_page_table(h: &crate::http_db::HttpDb, req: &PageRequest) -> Resul
             auto_increment: false,
         })
         .collect();
-    // 总数未知：整页填满时多给 1 条额度以启用「下一页」
-    let n = r.rows.len() as u64;
-    let more = if n >= req.limit { 1 } else { 0 };
     Ok(PageResult {
         columns,
         rows: r.rows,
-        total: req.offset + n + more,
+        total,
+        total_exact,
+        has_more,
         primary_keys: Vec::new(),
         elapsed_ms: 0,
     })
@@ -2153,13 +2215,15 @@ async fn redis_key_page(r: &crate::redis_db::RedisDb, req: &PageRequest) -> Resu
                 auto_increment: false,
             },
         ],
-        rows: vec![vec![
+        rows: if req.limit == 0 || req.offset > 0 { Vec::new() } else { vec![vec![
             Some(req.table.clone()),
             Some(ty),
             Some(ttl.to_string()),
             Some(value),
-        ]],
+        ]] },
         total: 1,
+        total_exact: true,
+        has_more: if req.limit == 0 { None } else { Some(false) },
         primary_keys: vec!["key".into()],
         elapsed_ms: 0,
     })
@@ -2171,6 +2235,7 @@ async fn mongo_table_schema(
     kind: DbKind,
     schema: &str,
     table: &str,
+    include_row_count: bool,
 ) -> Result<TableSchema> {
     let (cols, _) = m.find_docs(schema, table, "", 0, 20).await?;
     let mut out = TableSchema {
@@ -2199,8 +2264,10 @@ async fn mongo_table_schema(
             scale: None,
         });
     }
-    let cnt = m.count(schema, table, "").await?;
-    out.row_count = Some(cnt as i64);
+    if include_row_count {
+        let cnt = m.count(schema, table, "").await?;
+        out.row_count = Some(cnt as i64);
+    }
     let _ = kind;
     Ok(out)
 }
@@ -2209,12 +2276,15 @@ async fn mongo_table_schema(
 async fn mongo_doc_page(m: &crate::mongo_db::MongoDb, req: &PageRequest) -> Result<PageResult> {
     // MongoDB interprets a wire limit of zero as unlimited. Sample at most one document
     // for inferred columns on an empty UI page, then discard that bounded sample.
-    let query_limit = if req.limit == 0 { 1 } else { req.limit };
+    let query_limit = if req.limit == 0 { 1 } else { pagination::fetch_limit(req) };
     let (cols, mut rows) = m
         .find_docs(&req.schema, &req.table, "", req.offset, query_limit)
         .await?;
     if req.limit == 0 { rows.clear(); }
-    let total = m.count(&req.schema, &req.table, "").await?;
+    let counted = if req.include_total {
+        Some(m.count(&req.schema, &req.table, "").await?)
+    } else { None };
+    let (total, total_exact, has_more) = pagination::finish(req, &mut rows, counted);
     let columns: Vec<ResultColumn> = cols
         .into_iter()
         .map(|c| ResultColumn {
@@ -2229,6 +2299,8 @@ async fn mongo_doc_page(m: &crate::mongo_db::MongoDb, req: &PageRequest) -> Resu
         columns,
         rows,
         total,
+        total_exact,
+        has_more,
         primary_keys: vec!["_id".into()],
         elapsed_ms: 0,
     })

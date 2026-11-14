@@ -246,12 +246,12 @@ async fn execute_with_state(state:&AppState,access:SchedulerStateAccess,template
                 let cfg=commands::saved_config(&state,&o.connection_id)?;let db=commands::scoped_db(&state,&o.connection_id,&o.schema).await?;
                 commands::protect_export_path(&state,&destination.to_string_lossy(),db.as_ref()).await?;
                 let output=StagedOutput::new(&destination)?;o.file=output.file_name()?;
-                let rows=crate::transfer::run_export_task(db.as_ref(),&cfg.kind,&crate::transfer::ExportTaskOptions {options:o,task_id:task_id.clone()}).await?;
+                let rows=crate::transfer::run_export_task(db.as_ref(),&cfg.kind,&crate::transfer::ExportTaskOptions {sql_batch_rows:0,sql_batch_bytes:0,options:o,task_id:task_id.clone()}).await?;
                 ensure!(context.stop_reason().is_none(),"SCHEDULE_CANCELLED_BEFORE_PUBLICATION");
                 output.publish()?;Ok(rows)
             }
             ToolDefinition::Import(mut o)=>{o.file=input.as_ref().ok_or_else(||anyhow!("SCHEDULE_INPUT_UNAVAILABLE"))?.0.to_string_lossy().into_owned();let cfg=commands::saved_config(&state,&o.connection_id)?;ensure!(!cfg.read_only,"READ_ONLY_VIOLATION");let db=commands::scoped_db(&state,&o.connection_id,&o.schema).await?;
-                commands::validate_table_target(db.as_ref(),&cfg.kind,&o.schema,&o.table,false).await?;crate::transfer::run_import_task(db.as_ref(),&cfg.kind,&crate::transfer::ImportTaskOptions {options:o,task_id:task_id.clone(),column_mapping:vec![]}).await}
+                commands::validate_table_target(db.as_ref(),&cfg.kind,&o.schema,&o.table,false).await?;crate::transfer::run_import_task(db.as_ref(),&cfg.kind,&crate::transfer::ImportTaskOptions {options:o,task_id:task_id.clone(),column_mapping:vec![],write_strategy:Default::default()}).await}
             ToolDefinition::Backup(o)=>{let cfg=commands::saved_config(&state,&o.connection_id)?;let db=commands::scoped_db(&state,&o.connection_id,&o.schema).await?;let dir=crate::storage::backup_dir(&o.connection_id,&o.schema);
                 let file=dir.join(format!("scheduled-{}.sql",context.run_id));
                 commands::protect_export_path(&state,&file.to_string_lossy(),db.as_ref()).await?;

@@ -84,8 +84,6 @@ export interface InfoPanelState {
   refs?: { icon: string; text: string }[];
   /** 字段行。 */
   fields: InfoField[];
-  /** 可点击的对象列表（查询页右侧的表清单）。 */
-  list?: { icon: string; text: string; onClick?: () => void }[];
 }
 
 /* ---------------------------------------------------------------- 分组 */
@@ -116,9 +114,8 @@ function groupOf(label: string): string {
     return "概要";
   }
   if (
-    label.endsWith("（配置）") ||
     [
-      "连接", "连接类型", "用户名", "默认数据库", "数据库文件", "只读连接",
+      "连接", "连接类型", "主机", "端口", "用户名", "默认数据库", "数据库文件", "只读连接",
       "所属连接", "所属数据库/模式", "数据库/模式名称", "模式名称", "对象类型",
     ].includes(label)
   ) {
@@ -190,6 +187,9 @@ function groupFields(fields: InfoField[]): [string, InfoField[]][] {
     buckets.get(g)!.push(f);
   }
   const out: [string, InfoField[]][] = [];
+  // 说明 / 状态 / 读取失败等备注行没有分组标题，放在最前面整行降级显示（错误与统计口径不能被藏起来）。
+  const notes = buckets.get("");
+  if (notes?.length) out.push(["", notes]);
   for (const g of GROUP_ORDER) {
     const items = buckets.get(g);
     if (items?.length) out.push([g, items]);
@@ -375,7 +375,8 @@ export class InfoPanel {
     bodyEl.className = "info-groups";
     let lastGroup: string | null = null;
     for (const [group, items] of groupFields(fields)) {
-      if (group !== lastGroup) {
+      // 备注行（空分组）没有标题，整行降级显示。
+      if (group && group !== lastGroup) {
         const gt = document.createElement("div");
         gt.className = "info-group-title";
         gt.textContent = group;
@@ -475,7 +476,7 @@ export class InfoPanel {
     // 重建会打断阅读位置并造成可见闪动。
     const key = state === null
       ? "null"
-      : JSON.stringify([state.icon, state.title, state.subtitle ?? "", state.refs ?? [], state.fields, (state.list ?? []).map(item => item.text)]);
+      : JSON.stringify([state.icon, state.title, state.subtitle ?? "", state.refs ?? [], state.fields]);
     if (key === this.lastStateKey) return;
     this.lastStateKey = key;
     const scrollTop = this.body.scrollTop;
@@ -491,22 +492,6 @@ export class InfoPanel {
     this.appendIdentity(state.icon, state.title, state.subtitle);
     this.appendGroups(state.fields);
 
-    // 对象列表（查询页：当前库的表清单）
-    for (const item of state.list ?? []) {
-      const row = document.createElement("div");
-      row.className = "info-list-row";
-      const ic = document.createElement("span");
-      ic.innerHTML = iconSvgByName(item.icon);
-      row.appendChild(ic);
-      const t = document.createElement("span");
-      t.textContent = item.text;
-      row.appendChild(t);
-      if (item.onClick) {
-        row.addEventListener("dblclick", () => item.onClick!());
-        row.title = `${item.text}（双击打开）`;
-      }
-      this.body.appendChild(row);
-    }
     // 重建后保持原阅读位置，避免内容相同的刷新把视图弹回顶部。
     this.body.scrollTop = scrollTop;
   }

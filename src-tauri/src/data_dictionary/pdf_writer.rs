@@ -157,7 +157,9 @@ fn subset_font(bytes: &[u8], chars: &std::collections::BTreeSet<char>) -> anyhow
     let mut map: std::collections::HashMap<char, u16> = Default::default();
     match format {
         4 => {
-            let seg_count = read_u16(bytes, sub_off + 6)? as usize;
+            // 偏移 6 处是 segCountX2（段数 × 2），必须除以 2 才是真实段数；
+            // 否则整张段表按双倍长度解析，char→glyph 映射全部错位，导出中文即乱码。
+            let seg_count = read_u16(bytes, sub_off + 6)? as usize / 2;
             let end_base = sub_off + 14;
             let start_base = end_base + (seg_count * 2) + 2;
             let delta_base = start_base + (seg_count * 2);
@@ -532,6 +534,9 @@ impl Doc {
 
     /// 章节标题。
     fn heading(&mut self, y: &mut f64, text: &str) {
+        // 每个章节另起一页，并把纵向游标重置到页顶；否则沿用上一页残留的 y，
+        // 会让标题和表格被挤到页面下半部、上半页整片空白。
+        *y = MARGIN;
         let Self { pages, font } = self;
         pages.push(Page::new());
         let page = pages.last_mut().unwrap();

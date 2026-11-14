@@ -57,7 +57,7 @@ export function button(label, opts = {}) {
 
 /* -------------------------------------------------------------- 应用框架 */
 
-const MENU_ITEMS = ["文件", "编辑", "查看", "收藏夹", "工具", "窗口", "帮助"];
+const MENU_ITEMS = ["文件", "编辑", "查看", "工具", "设置"];
 
 export function titlebar(opts = {}) {
   const menu = (opts.menu ?? MENU_ITEMS)
@@ -109,7 +109,7 @@ export function cmdBtn(label, ico, opts = {}) {
     : "";
   const glyph = opts.solo
     ? icon(ico, { size: 16 })
-    : pictIcon(label, 24);
+    : pictIcon(opts.iconKey || label, 24);
   return `<button class="${cls}">${glyph}<span class="cmd-label">${esc(label)}</span>${caret}</button>`;
 }
 
@@ -117,7 +117,7 @@ export function cmdSep() {
   return '<div class="cmd-sep"></div>';
 }
 
-/** 主命令条（替代原 Ribbon：同密度、统一图标族、46px 高） */
+/** 主命令条（12 个入口，与 src/ui/pict.ts 一致：44px 高、统一双色扁平图标族） */
 export function commandbar(opts = {}) {
   const active = opts.active || "";
   return `<div class="commandbar">
@@ -130,11 +130,11 @@ export function commandbar(opts = {}) {
     ${cmdBtn("用户", "user", { active: active === "用户" })}
     ${cmdBtn("其它", "more", { dropdown: true })}
     ${cmdSep()}
-    ${cmdBtn("查询", "code", { active: active === "查询工具栏" })}
+    ${cmdBtn("查询", "code", { iconKey: "查询工具", active: active === "查询工具栏" })}
     ${cmdBtn("备份", "backup", { active: active === "备份" })}
-    ${cmdBtn("自动运行", "schedule", { active: active === "自动运行" })}
-    ${cmdBtn("模型", "model", { active: active === "模型" })}
+    ${cmdBtn("自动任务", "schedule", { iconKey: "自动运行", active: active === "自动任务" })}
     ${cmdBtn("图表", "chart", { active: active === "图表" })}
+    ${cmdBtn("关系图", "model", { iconKey: "模型", active: active === "关系图" })}
     <div class="ptoolbar-spacer"></div>
     ${opts.right ? opts.right : ""}
   </div>`;

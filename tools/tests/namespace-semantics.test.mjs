@@ -108,7 +108,7 @@ test('真实详情与加载态区分命名空间和物理默认库，SQLServer�
     const cfg = connection(kind), details = await loadObjectDetails(cfg, 'public', '', type, {}, api);
     assert.equal(details.subtitle, title); assert.equal(objectDetailsLoading(cfg, 'public', '', type).subtitle, title);
     assert(details.fields.some(field => field.label === `${title}名称` && field.value === 'public'));
-    assert(details.fields.some(field => field.label === '默认数据库（配置）' && field.value === 'physical_database'));
+    assert(details.fields.some(field => field.label === '默认数据库' && field.value === 'physical_database'));
     assert(!details.fields.some(field => field.label.includes('数据库/模式')));
   }
 });

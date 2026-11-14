@@ -4,9 +4,9 @@ use crate::execution::{Binding, Registry};
 use crate::execution_contracts::ExecutionState;
 use std::path::PathBuf;
 
-struct Fixture { root:PathBuf, pool:sqlx::SqlitePool, db:Arc<Db> }
+pub(super) struct Fixture { root:PathBuf, pub(super) pool:sqlx::SqlitePool, pub(super) db:Arc<Db> }
 impl Fixture {
-    async fn new()->Self {
+    pub(super) async fn new()->Self {
         Self::with_connections(2).await
     }
     async fn with_connections(max_connections:u32)->Self {
@@ -24,8 +24,8 @@ impl Fixture {
         let path=self.root.join(name);std::fs::write(&path,sql).unwrap();
         Payload::File{source:SourceFile::open(path.to_str().unwrap()).unwrap(),encoding:"utf-8".into(),stop_on_error:false}
     }
-    async fn count(&self,table:&str)->i64 { sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&self.pool).await.unwrap() }
-    async fn cleanup(self) {
+    pub(super) async fn count(&self,table:&str)->i64 { sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&self.pool).await.unwrap() }
+    pub(super) async fn cleanup(self) {
         let Self { root, pool, db } = self;
         drop(db);
         // 先收回全部物理会话并等待 SQLite worker 关闭回执；不把池计数归零
@@ -48,18 +48,18 @@ impl Fixture {
         }
     }
 }
-fn record(payload:&Payload,timeout_ms:u64)->Arc<BatchRecord> {
+pub(super) fn record(payload:&Payload,timeout_ms:u64)->Arc<BatchRecord> {
     let registry=Registry::default();
     let binding=Binding{principal:"batch-test".into(),owner:uuid::Uuid::new_v4().to_string(),connection:"isolated".into(),namespace:"main".into(),fingerprint:"independent-temporary-native-sqlite".into()};
-    let task=match payload{Payload::Generated(rows)=>BatchTask::GeneratedRows{request:rows.clone()},Payload::File{source,encoding,stop_on_error}=>BatchTask::SqlFile{path:source.identity().canonical_path.clone(),encoding:encoding.clone(),stop_on_error:*stop_on_error}};
+    let task=match payload{Payload::Generated(rows)=>BatchTask::GeneratedRows{request:rows.clone()},Payload::Recipe(work)=>BatchTask::GeneratedRecipe{recipe:work.recipe.clone()},Payload::File{source,encoding,stop_on_error}=>BatchTask::SqlFile{path:source.identity().canonical_path.clone(),encoding:encoding.clone(),stop_on_error:*stop_on_error}};
     let request=BatchExecutionRequest{connection_id:binding.connection.clone(),namespace:binding.namespace.clone(),owner_id:binding.owner.clone(),timeout_ms:Some(timeout_ms),task};
     let scope=scope(&request,payload).unwrap();
     let grant=registry.grant_typed_scope(binding.clone(),&scope).unwrap();
     let entry=registry.register_typed_scope(&grant.execution_id,&grant.token,binding.clone(),&scope,Some(timeout_ms),30).unwrap();
-    let (kind,total_rows,source_bytes)=match payload{Payload::Generated(rows)=>(BatchTaskKind::GeneratedRows,Some(rows.rows.len() as u64),None),Payload::File{source,..}=>(BatchTaskKind::SqlFile,None,Some(source.identity().bytes))};
-    Arc::new(BatchRecord{ticket:BatchExecutionTicket{context:BatchContext{execution_id:entry.id.clone(),connection_id:binding.connection,namespace:binding.namespace,owner_id:binding.owner},task_kind:kind,execution_grant:grant.token,expires_in_ms:grant.expires_in_ms,summary:"独立临时测试".into(),total_rows,source_bytes},entry,payload:Mutex::new(None),ordinary:Mutex::new(None),started:AtomicBool::new(true),wake:tokio::sync::Notify::new(),registered:Instant::now(),progress:Mutex::new(Progress{scanned:0,executed:0,errors:0,scan_complete:false,parse_error:None,affected:0,transaction:"none".into(),logs:VecDeque::new(),bytes:0,next:0,dropped:0,outcome:None})})
+    let (kind,total_rows,source_bytes)=match payload{Payload::Generated(rows)=>(BatchTaskKind::GeneratedRows,Some(rows.rows.len() as u64),None),Payload::Recipe(work)=>(BatchTaskKind::GeneratedRecipe,Some(work.recipe.total),None),Payload::File{source,..}=>(BatchTaskKind::SqlFile,None,Some(source.identity().bytes))};
+    Arc::new(BatchRecord{ticket:BatchExecutionTicket{context:BatchContext{execution_id:entry.id.clone(),connection_id:binding.connection,namespace:binding.namespace,owner_id:binding.owner},task_kind:kind,execution_grant:grant.token,expires_in_ms:grant.expires_in_ms,summary:"独立临时测试".into(),total_rows,source_bytes},entry,payload:Mutex::new(None),ordinary:Mutex::new(None),started:AtomicBool::new(true),wake:tokio::sync::Notify::new(),registered:Instant::now(),progress:Mutex::new(Progress{scanned:0,sent:0,executed:0,errors:0,scan_complete:false,parse_error:None,affected:0,committed_prefix:None,transaction:"none".into(),logs:VecDeque::new(),bytes:0,next:0,dropped:0,outcome:None})})
 }
-async fn run(f:&Fixture,payload:Payload,record:&Arc<BatchRecord>)->BatchExecutionSnapshot {
+pub(super) async fn run(f:&Fixture,payload:Payload,record:&Arc<BatchRecord>)->BatchExecutionSnapshot {
     record.entry.start();
     let(result,confirmed)=run_pinned(f.db.clone(),DbKind::of("sqlite"),record.clone(),payload).await;
     record.publish(result.map_err(|e|safe_error(&e)),confirmed);record.snapshot(0)

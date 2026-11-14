@@ -1,0 +1,56 @@
+/* 备份执行页：保留汇总表单，仅在原状态区域展示成功结果。 */
+.backup-dialog .backup-execution {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.backup-dialog .backup-status {
+  flex: 1;
+  min-height: 18px;
+  margin-top: var(--sp-2);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.backup-dialog .backup-status.is-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 220px;
+  padding: var(--sp-5) var(--sp-4);
+  border: 1px solid var(--ok-100);
+  border-radius: var(--r-3);
+  background: var(--ok-50);
+  text-align: center;
+  color: var(--text);
+}
+
+.backup-dialog .backup-success-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--sp-1);
+  border-radius: 50%;
+  background: var(--ok-500);
+  color: #fff;
+}
+.backup-dialog .backup-success-icon svg { width: 32px; height: 32px; }
+.backup-dialog .backup-success-title { font-size: 20px; font-weight: 600; line-height: 1.4; }
+.backup-dialog .backup-success-result { font-size: var(--fs-13); font-variant-numeric: tabular-nums; }
+.backup-dialog .backup-success-location {
+  max-width: 100%;
+  margin-top: var(--sp-2);
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.backup-dialog .backup-success-hint { font-size: var(--fs-12); color: var(--text-secondary); line-height: 1.6; }

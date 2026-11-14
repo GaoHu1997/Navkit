@@ -10,10 +10,10 @@ async fn rows(db: &Db, table: &str) -> Vec<(i64, Option<String>, Vec<u8>)> {
     if let Db::Sqlite(p) = db { return sqlx::query(&format!("SELECT id,name,payload FROM \"{}\" ORDER BY id",table)).fetch_all(p).await.unwrap().iter().map(|r| (r.get(0),r.get(1),r.get(2))).collect(); } unreachable!()
 }
 fn import(file: &Path, table: &str, format: &str) -> ImportTaskOptions {
-    ImportTaskOptions { task_id: uuid::Uuid::new_v4().to_string(), column_mapping: vec![], options: ImportOptions { connection_id: "target".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), create_table: false, truncate: false, sheet: None, on_conflict: "error".into(), conflict_columns: Vec::new() } }
+    ImportTaskOptions { write_strategy: Default::default(), task_id: uuid::Uuid::new_v4().to_string(), column_mapping: vec![], options: ImportOptions { connection_id: "target".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), create_table: false, truncate: false, sheet: None, on_conflict: "error".into(), conflict_columns: Vec::new() } }
 }
 fn export(file: &Path, table: &str, format: &str) -> ExportTaskOptions {
-    ExportTaskOptions { task_id: uuid::Uuid::new_v4().to_string(), options: ExportOptions { connection_id: "source".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), where_clause: None, limit: None } }
+    ExportTaskOptions { sql_batch_rows: 0, sql_batch_bytes: 0, task_id: uuid::Uuid::new_v4().to_string(), options: ExportOptions { connection_id: "source".into(), schema: "main".into(), table: table.into(), file: file.to_string_lossy().into(), format: format.into(), has_header: true, delimiter: ",".into(), encoding: "utf-8".into(), where_clause: None, limit: None } }
 }
 fn sync_opts(table: &str, mode: &str) -> SyncOptions {
     SyncOptions { task_id: Some(uuid::Uuid::new_v4().to_string()), source_connection:"source".into(), source_schema:"main".into(), source_table:"items".into(), target_connection:"target".into(), target_schema:"main".into(), target_table:table.into(), mode:mode.into(), write_mode:"append".into(), sync_mode:"full".into(), incremental_update:false, create_target:true, columns:vec![], key_columns: Vec::new(), delete_missing: false, where_clause:None }

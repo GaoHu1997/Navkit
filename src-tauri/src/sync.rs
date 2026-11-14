@@ -1,6 +1,13 @@
 //! Deliberately focused heterogeneous table synchronization (no scheduling/ETL features).
 #[path = "sync_stream.rs"]
 mod sync_stream;
+#[path = "sync_diff.rs"]
+mod sync_diff;
+#[path = "sync_diff_compat.rs"]
+mod sync_diff_compat;
+#[path = "diff_memory_budget.rs"]
+mod diff_memory_budget;
+pub use diff_memory_budget::{DiffMemoryOptions, DiffMemoryStats, DiffMemoryPreview, preview_diff_memory};
 #[cfg(test)] #[path = "sync_full_performance_tests.rs"] mod full_performance_tests;
 #[cfg(test)] #[path = "sync_performance_tests.rs"] mod performance_tests;
 use anyhow::{anyhow, bail, Result};
@@ -146,21 +153,134 @@ pub async fn type_mapping(source: &Db, source_kind: &DbKind, schema: &str, table
     }).await
 }
 fn binary(ty: &str) -> bool { let t = ty.to_ascii_uppercase(); t.contains("BLOB") || t.contains("BINARY") || t == "BYTEA" }
-pub fn value_sql(value: Option<&str>, target: &DbKind, target_type: &str, source_type: &str) -> Result<String> {
+fn clickhouse_value_sql(value: Option<&str>, target_type: &str) -> Result<String> {
+    let base = clickhouse_base_type(target_type);
+    let root = base.split('(').next().unwrap_or("").trim().to_ascii_uppercase();
+    if clickhouse_complex_root(&root) {
+        bail!("ClickHouse 复杂类型 {target_type} 不支持生成同步 INSERT 值");
+    }
     let Some(value) = value else { return Ok("NULL".into()); };
+    if matches!(root.as_str(), "BOOL" | "BOOLEAN") {
+        return match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "t" => Ok("TRUE".into()),
+            "0" | "false" | "f" => Ok("FALSE".into()),
+            _ => bail!("无法将 {value} 转换为 ClickHouse Bool"),
+        };
+    }
+    if clickhouse_numeric_root(&root) {
+        let lower = value.to_ascii_lowercase();
+        if matches!(lower.as_str(), "true" | "t") { return Ok("1".into()); }
+        if matches!(lower.as_str(), "false" | "f") { return Ok("0".into()); }
+        if is_clickhouse_numeric_literal(value) { return Ok(value.to_owned()); }
+    }
+    Ok(clickhouse_string_literal(value))
+}
+/// 递归剥离 ClickHouse 的 Nullable(..) / LowCardinality(..) 包装，返回基类型切片。
+fn clickhouse_base_type(ty: &str) -> &str {
+    let mut current = ty.trim();
+    loop {
+        if let Some(inner) = strip_clickhouse_wrapper(current, "Nullable") { current = inner; continue; }
+        if let Some(inner) = strip_clickhouse_wrapper(current, "LowCardinality") { current = inner; continue; }
+        return current;
+    }
+}
+fn strip_clickhouse_wrapper<'a>(ty: &'a str, name: &str) -> Option<&'a str> {
+    let trimmed = ty.trim();
+    let head = trimmed.get(..name.len())?;
+    if !head.eq_ignore_ascii_case(name) { return None; }
+    let rest = trimmed[name.len()..].trim();
+    if rest.len() >= 2 && rest.starts_with('(') && rest.ends_with(')') {
+        Some(rest[1..rest.len() - 1].trim())
+    } else {
+        None
+    }
+}
+/// ClickHouse 需要显式拒绝的复杂/容器类型（无法安全拼成单值字面量）。
+fn clickhouse_complex_root(root: &str) -> bool {
+    matches!(root,
+        "ARRAY" | "TUPLE" | "MAP" | "NESTED" | "AGGREGATEFUNCTION" | "SIMPLEAGGREGATEFUNCTION"
+        | "VARIANT" | "OBJECT" | "JSON" | "INTERVAL" | "RING" | "POLYGON" | "MULTIPOLYGON"
+        | "POINT" | "LINESTRING" | "MULTILINESTRING")
+}
+/// ClickHouse 标量数值类型（基类型，已去掉参数后缀）。
+fn clickhouse_numeric_root(root: &str) -> bool {
+    matches!(root,
+        "INT8" | "INT16" | "INT32" | "INT64" | "INT128" | "INT256"
+        | "UINT8" | "UINT16" | "UINT32" | "UINT64" | "UINT128" | "UINT256"
+        | "FLOAT" | "FLOAT32" | "FLOAT64"
+        | "DECIMAL" | "DECIMAL32" | "DECIMAL64" | "DECIMAL128" | "DECIMAL256")
+}
+/// 严格数值语法：可选符号 + (整数[.小数]|.小数) + 可选指数。字符集合放行（如 1-2/1e）会生成坏 SQL。
+fn is_clickhouse_numeric_literal(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() { return false; }
+    let mut i = 0;
+    if matches!(bytes[0], b'+' | b'-') { i += 1; }
+    let int_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+    let int_digits = i - int_start;
+    let mut frac_digits = 0;
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        let frac_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+        frac_digits = i - frac_start;
+    }
+    if int_digits == 0 && frac_digits == 0 { return false; }
+    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        i += 1;
+        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') { i += 1; }
+        let exp_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+        if i - exp_start == 0 { return false; }
+    }
+    i == bytes.len()
+}
+/// ClickHouse 字符串字面量专用转义：反斜杠、单引号、换行、CR、TAB、NUL 都转义以保值。
+fn clickhouse_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
+}
+pub fn value_sql(value: Option<&str>, target: &DbKind, target_type: &str, source_type: &str) -> Result<String> {
+    if target.protocol() == Protocol::Clickhouse {
+        return clickhouse_value_sql(value, target_type);
+    }
+    let Some(value) = value else { return Ok("NULL".into()); };
+    // MySQL 空间值：我们保留 SRID + 原始 WKB；只有同协议目标能重建，
+    // 其他目标不能把 opaque 几何文本当普通文本写入。
+    let spatial = |ty: &str| ty.to_ascii_uppercase().split('(').next().is_some_and(|base| matches!(base.trim(), "GEOMETRY" | "POINT" | "LINESTRING" | "POLYGON" | "MULTIPOINT" | "MULTILINESTRING" | "MULTIPOLYGON" | "GEOMETRYCOLLECTION"));
+    if spatial(source_type) {
+        if target.protocol() != Protocol::Mysql || !spatial(target_type) {
+            bail!("空间类型只能同步到 MySQL 空间列，不能作为普通文本写入");
+        }
+        return crate::values::mysql_geometry_sql(value);
+    }
     if binary(target_type) && binary(source_type) {
-        let hex = value.strip_prefix("0x").ok_or_else(|| anyhow!("二进制源值缺少十六进制标记"))?;
+        let hex = value.strip_prefix("0x").ok_or_else(|| anyhow!("二进制来源值缺少十六进制标记"))?;
         if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) { bail!("二进制值格式无效"); }
         return Ok(match target.protocol() {
             Protocol::Postgres => format!("decode('{}','hex')", hex),
             Protocol::Mssql => format!("0x{}", hex),
+            Protocol::Odbc if target.id() == "oracle" => format!("HEXTORAW('{}')", hex),
             _ => format!("X'{}'", hex),
         });
     }
     if target_type.to_ascii_uppercase().contains("BOOL") {
-        return Ok(match value.to_ascii_lowercase().as_str() { "1" | "true" | "t" => "TRUE", "0" | "false" | "f" => "FALSE", _ => bail!("无法把 {} 转换为 BOOLEAN", value) }.into());
+        return Ok(match value.to_ascii_lowercase().as_str() { "1" | "true" | "t" => "TRUE", "0" | "false" | "f" => "FALSE", _ => bail!("无法将 {} 转换为 BOOLEAN", value) }.into());
     }
-    // 源是布尔而目标不是布尔类型（Oracle NUMBER(1)、ClickHouse UInt8 等）：转 1/0。
     let source_upper = source_type.to_ascii_uppercase();
     if source_upper.contains("BOOL") || source_upper == "BIT" {
         if let Some(bit) = match value.to_ascii_lowercase().as_str() { "1" | "true" | "t" => Some("1"), "0" | "false" | "f" => Some("0"), _ => None } {
@@ -171,7 +291,6 @@ pub fn value_sql(value: Option<&str>, target: &DbKind, target_type: &str, source
     if target.is_sqlite() && value.contains('\0') {
         return Ok(format!("CAST(X'{}' AS TEXT)", value.as_bytes().iter().map(|b| format!("{:02X}", b)).collect::<String>()));
     }
-    // SQL Server 的 Unicode 文本类型用 N'' 前缀字面量。
     if target.protocol() == Protocol::Mssql && target_type.to_ascii_uppercase().starts_with('N') {
         return Ok(format!("N{}", quote_literal(value)));
     }
@@ -629,9 +748,58 @@ pub struct SyncDiffReport {
     /// 目标表多出的列（不在源映射中）。
     pub target_extra_columns: Vec<String>,
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<DiffMemoryStats>,
 }
 /// 比较源表与目标表的差异：行数、结构、按主键的缺失/多出/内容差异。只读。
 pub async fn diff(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &DbKind, req: &SyncDiffRequest) -> Result<SyncDiffReport> {
+    diff_with_policy(source,source_kind,target,target_kind,req,false).await
+}
+/// Explicit low-memory strategy. Not the default: local latency A/B found disk work slower.
+pub async fn diff_bounded(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &DbKind, req: &SyncDiffRequest) -> Result<SyncDiffReport> {
+    diff_with_policy(source,source_kind,target,target_kind,req,true).await
+}
+/// Validate borrowed request shape before making any owned-task/mapping copies.
+/// IPC decoding itself is outside this accounted comparison-buffer contract.
+fn validate_diff_memory_shape(req: &SyncDiffRequest) -> Result<()> {
+    transfer::validate_where(req.where_clause.as_deref())?;
+    let mut bytes = req.where_clause.as_ref().map_or(0, String::len);
+    for identifier in [&req.source_connection, &req.source_schema, &req.source_table,
+        &req.target_connection, &req.target_schema, &req.target_table] {
+        if identifier.len() > 1024 || identifier.contains('\0') { bail!("MEMORY_BUDGET_METADATA_TOO_LARGE: 比较身份字段超过支持边界"); }
+        bytes = bytes.checked_add(identifier.len()).ok_or_else(||anyhow!("比较请求容量溢出"))?;
+    }
+    if req.columns.len() > 1024 { bail!("MEMORY_BUDGET_METADATA_TOO_LARGE: 比较映射超过1024列；复制前拒绝"); }
+    for mapping in &req.columns {
+        for text in [Some(&mapping.source), Some(&mapping.target), mapping.target_type.as_ref()].into_iter().flatten() {
+            bytes = bytes.checked_add(text.len()).ok_or_else(||anyhow!("比较映射容量溢出"))?;
+            if bytes > 1024 * 1024 { bail!("MEMORY_BUDGET_METADATA_TOO_LARGE: 比较请求/映射超过1MiB；复制前拒绝"); }
+        }
+        bytes = bytes.checked_add(96).ok_or_else(||anyhow!("比较映射容量溢出"))?;
+        if bytes > 1024 * 1024 { bail!("MEMORY_BUDGET_METADATA_TOO_LARGE: 比较请求/映射超过1MiB；复制前拒绝"); }
+    }
+    Ok(())
+}
+
+/// Accounted-memory fast comparison, certified only for native file SQLite.
+/// Dropping the caller detaches the owned operation rather than releasing its lease
+/// while SQLx native workers still own buffers. No immediate-cancel claim is made.
+pub async fn diff_with_memory(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &DbKind, req: &SyncDiffRequest, memory: &DiffMemoryOptions) -> Result<SyncDiffReport> {
+    validate_diff_memory_shape(req)?;
+    if !["speed","auto","manual"].contains(&memory.mode.as_str()) { bail!("MEMORY_BUDGET_INVALID: mode必须为speed/auto/manual；复制前拒绝"); }
+    sync_diff::validate_memory_database(source,source_kind).await?;
+    sync_diff::validate_memory_database(target,target_kind).await?;
+    let (Db::Sqlite(source),Db::Sqlite(target)) = (source,target) else { bail!("MEMORY_BUDGET_UNSUPPORTED: 仅原生文件SQLite"); };
+    let source=source.clone(); let target=target.clone();
+    let source_kind=source_kind.clone(); let target_kind=target_kind.clone(); let req=req.clone(); let memory=memory.clone();
+    crate::sql_history::spawn(async move {
+        let source_db=Db::Sqlite(source.clone()); let target_db=Db::Sqlite(target.clone());
+        validate_sqlite_namespace(&source_db,&req.source_schema,&req.source_table).await?;
+        validate_sqlite_namespace(&target_db,&req.target_schema,&req.target_table).await?;
+        sync_diff::compare_with_memory(&source,&source_kind,&target,&target_kind,&req,&memory,diff_memory_budget::controller()).await
+    }).await.map_err(|error|anyhow!("预算比较owned任务中断，未返回不完整报告: {error}"))?
+}
+async fn diff_with_policy(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &DbKind, req: &SyncDiffRequest,bounded:bool) -> Result<SyncDiffReport> {
     if !supported(source_kind) || !supported(target_kind) { bail!("差异比较仅支持 SQLite、MySQL/MariaDB 与 PostgreSQL 协议数据库"); }
     validate_sqlite_namespace(source, &req.source_schema, &req.source_table).await?;
     validate_sqlite_namespace(target, &req.target_schema, &req.target_table).await?;
@@ -650,56 +818,30 @@ pub async fn diff(source: &Db, source_kind: &DbKind, target: &Db, target_kind: &
     let report = SyncDiffReport {
         source_rows: 0, target_rows: 0, keyed: false, missing_in_target: 0, extra_in_target: 0,
         changed: 0, changed_samples: Vec::new(),
-        target_missing_columns: Vec::new(), target_extra_columns: Vec::new(), message: None,
+        target_missing_columns: Vec::new(), target_extra_columns: Vec::new(), message: None, memory: None,
     };
     let target_exists = crate::schema::list_tables(target, target_kind.clone(), &req.target_schema).await?
         .iter().any(|(n, _)| n == &req.target_table);
-    let (snames, srows) = transfer::fetch_transfer_rows(source, source_kind, &req.source_schema, &req.source_table, req.where_clause.as_deref(), None).await?;
-    let mut report = SyncDiffReport { source_rows: srows.len() as u64, ..report };
-    if !target_exists {
-        report.missing_in_target = report.source_rows;
-        report.keyed = cols.iter().any(|(_, c)| c.primary_key);
-        report.target_missing_columns = cols.iter().map(|(m, _)| m.target.clone()).collect();
-        report.message = Some("目标表不存在：全部源行都将作为缺失行写入（结构模式或启用建表时自动创建）。".into());
-        return Ok(report);
-    }
-    let target_meta = crate::schema::table_schema(target, target_kind.clone(), &req.target_schema, &req.target_table).await?;
-    for (m, _) in &cols {
-        if !target_meta.columns.iter().any(|tc| tc.name == m.target) { report.target_missing_columns.push(m.target.clone()); }
-    }
-    for tc in &target_meta.columns {
-        if !cols.iter().any(|(m, _)| m.target == tc.name) { report.target_extra_columns.push(tc.name.clone()); }
-    }
-    let (tnames, trows) = transfer::fetch_transfer_rows(target, target_kind, &req.target_schema, &req.target_table, None, None).await?;
-    report.target_rows = trows.len() as u64;
-    let pk_source: Vec<String> = cols.iter().filter(|(_, c)| c.primary_key).map(|(m, _)| m.source.clone()).collect();
-    let pk_target: Vec<String> = cols.iter().filter(|(_, c)| c.primary_key).map(|(m, _)| m.target.clone()).collect();
-    if pk_source.is_empty() {
-        report.message = Some("源表没有主键：仅统计行数与结构差异；缺失/多出/内容差异需要主键才能比较。".into());
-        return Ok(report);
-    }
-    report.keyed = true;
-    let source_keys=keyed_rows(&snames,&srows,&pk_source,"源表")?;
-    let target_keys=keyed_rows(&tnames,&trows,&pk_target,"目标表")?;
-    report.missing_in_target = source_keys.keys().filter(|k| !target_keys.contains_key(*k)).count() as u64;
-    report.extra_in_target = target_keys.keys().filter(|k| !source_keys.contains_key(*k)).count() as u64;
-    let mapped: Vec<(&SyncColumnMapping, &ColumnInfo)> = cols.iter().map(|(m, c)| (*m, *c)).collect();
-    for (key, srow) in &source_keys {
-        let Some(trow) = target_keys.get(key) else { continue };
-        if row_differs(&snames, srow, &tnames, trow, &mapped, Some(&target_meta))? {
-            report.changed += 1;
-            if report.changed_samples.len() < 5 {
-                let sample = pk_source.iter().zip(pk_target.iter())
-                    .map(|(s, _)| {
-                        let i = snames.iter().position(|n| n == s);
-                        i.and_then(|i| srow.get(i)).and_then(Option::as_deref).unwrap_or("NULL").to_string()
-                    })
-                    .collect::<Vec<_>>().join(", ");
-                report.changed_samples.push(sample);
-            }
+    let mut report = report;
+    let target_meta = if target_exists {
+        Some(crate::schema::table_schema(target, target_kind.clone(), &req.target_schema, &req.target_table).await?)
+    } else { None };
+    if let Some(target_meta) = &target_meta {
+        for (m, _) in &cols {
+            if !target_meta.columns.iter().any(|tc| tc.name == m.target) { report.target_missing_columns.push(m.target.clone()); }
+        }
+        for tc in &target_meta.columns {
+            if !cols.iter().any(|(m, _)| m.target == tc.name) { report.target_extra_columns.push(tc.name.clone()); }
         }
     }
-    Ok(report)
+    let count_only_sqlite = matches!(source, Db::Sqlite(_))
+        && (target_meta.is_none() || matches!(target, Db::Sqlite(_)))
+        && (target_meta.is_none() || !cols.iter().any(|(_,column)|column.primary_key));
+    if bounded || count_only_sqlite {
+        sync_diff::compare(source, source_kind, target, target_kind, req, &source_meta, target_meta.as_ref(), &cols, report).await
+    } else {
+        sync_diff_compat::compare(source, source_kind, target, target_kind, req, &source_meta, target_meta.as_ref(), &cols, report).await
+    }
 }
 
 /// 全量同步的 INSERT 语句生成器（按页构造，避免持有全部行）。
@@ -1125,6 +1267,9 @@ mod heterogeneous_tests {
         // PG：decode(hex)
         let pg_value = value_sql(Some("0xDEADBEEF"), &pg, "BYTEA", "BLOB").unwrap();
         assert!(pg_value.starts_with("decode('") && pg_value.ends_with("','hex')"), "{pg_value}");
+        // Oracle：RAW 需 HEXTORAW，不能沿用 MySQL 的 X'..' 字面量
+        let oracle = DbKind::of("oracle");
+        assert_eq!(value_sql(Some("0xDEADBEEF"), &oracle, "VARBINARY", "BLOB").unwrap(), "HEXTORAW('DEADBEEF')");
         // 非法输入一律拒绝
         assert!(value_sql(Some("DEADBEEF"), &mysql, "LONGBLOB", "BLOB").is_err(), "缺少 0x 标记");
         assert!(value_sql(Some("0xXYZ"), &mysql, "LONGBLOB", "BLOB").is_err(), "非十六进制");
@@ -1218,6 +1363,69 @@ mod extended_dialect_tests {
         assert_eq!(value_sql(Some("abc"), &mssql, "VARCHAR(10)", "TEXT").unwrap(), "'abc'");
         assert_eq!(value_sql(Some("0x00FF1080"), &mssql, "VARBINARY(MAX)", "BLOB").unwrap(), "0x00FF1080");
         assert_eq!(value_sql(Some("0x"), &mssql, "VARBINARY(MAX)", "BLOB").unwrap(), "0x");
+    }
+
+    #[test]
+    fn value_sql_clickhouse_numeric_literals_unquoted() {
+        let ch = DbKind::of("clickhouse");
+        // 数值类型不加引号，字符串类型仍加引号
+        assert_eq!(value_sql(Some("42"), &ch, "UInt64", "BIGINT").unwrap(), "42");
+        assert_eq!(value_sql(Some("-3.5"), &ch, "Float64", "DOUBLE").unwrap(), "-3.5");
+        assert_eq!(value_sql(Some("1.5e3"), &ch, "Decimal(10,2)", "DECIMAL(10,2)").unwrap(), "1.5e3");
+        assert_eq!(value_sql(Some("hello"), &ch, "String", "TEXT").unwrap(), "'hello'");
+        // 非数字文本即使落在数值列也必须保持引号（由 ClickHouse 报错而非被静默拼接）
+        assert_eq!(value_sql(Some("1; DROP"), &ch, "Int32", "INT").unwrap(), "'1; DROP'");
+    }
+
+    #[test]
+    fn value_sql_clickhouse_wrapper_unwrap_and_complex_reject() {
+        let ch = DbKind::of("clickhouse");
+        // Nullable / LowCardinality 递归剥离后按基类型处理
+        assert_eq!(value_sql(Some("42"), &ch, "Nullable(UInt64)", "BIGINT").unwrap(), "42");
+        assert_eq!(value_sql(Some("7"), &ch, "LowCardinality(Nullable(Int32))", "INT").unwrap(), "7");
+        assert_eq!(value_sql(Some("hi"), &ch, "LowCardinality(String)", "TEXT").unwrap(), "'hi'");
+        assert_eq!(value_sql(Some("true"), &ch, "Nullable(Bool)", "BOOLEAN").unwrap(), "TRUE");
+        // 复杂类型必须拒绝，且不得生成坏 INSERT
+        for ty in ["Array(UInt8)", "Tuple(a Int32)", "Map(String,String)", "Nested(a UInt8)", "AggregateFunction(sum, UInt64)"] {
+            assert!(value_sql(Some("[1,2]"), &ch, ty, "TEXT").is_err(), "{ty} 应被拒绝");
+        }
+        // NULL 也要先类型校验：复杂类型的 NULL 同样拒绝
+        assert!(value_sql(None, &ch, "Array(UInt8)", "TEXT").is_err());
+        assert_eq!(value_sql(None, &ch, "Nullable(String)", "TEXT").unwrap(), "NULL");
+    }
+
+    #[test]
+    fn value_sql_clickhouse_strict_numeric_grammar() {
+        let ch = DbKind::of("clickhouse");
+        assert_eq!(value_sql(Some("42"), &ch, "Int32", "INT").unwrap(), "42");
+        assert_eq!(value_sql(Some("-3.5"), &ch, "Float64", "DOUBLE").unwrap(), "-3.5");
+        assert_eq!(value_sql(Some("+1.5e-3"), &ch, "Float64", "DOUBLE").unwrap(), "+1.5e-3");
+        assert_eq!(value_sql(Some("1.5e3"), &ch, "Decimal(10,2)", "DECIMAL(10,2)").unwrap(), "1.5e3");
+        // 非严格数值语法一律不 raw，改为转义字符串
+        for bad in ["1-2", "1e", "1e+", "1; DROP TABLE x", "12 34", "0x10"] {
+            let out = value_sql(Some(bad), &ch, "Int32", "INT").unwrap();
+            assert!(out.starts_with('\'') && out.ends_with('\''), "{bad} 不应 raw：{out}");
+        }
+    }
+
+    #[test]
+    fn value_sql_clickhouse_string_escaping_preserves_value() {
+        let ch = DbKind::of("clickhouse");
+        assert_eq!(value_sql(Some("O'Brien"), &ch, "String", "TEXT").unwrap(), "'O\\'Brien'");
+        assert_eq!(value_sql(Some("a\\b"), &ch, "String", "TEXT").unwrap(), "'a\\\\b'");
+        assert_eq!(value_sql(Some("line1\nline2"), &ch, "String", "TEXT").unwrap(), "'line1\\nline2'");
+        assert_eq!(value_sql(Some("a\tb"), &ch, "String", "TEXT").unwrap(), "'a\\tb'");
+        assert_eq!(value_sql(Some("a\rb"), &ch, "String", "TEXT").unwrap(), "'a\\rb'");
+        assert_eq!(value_sql(Some("a\0b"), &ch, "String", "TEXT").unwrap(), "'a\\0b'");
+    }
+
+    #[test]
+    fn value_sql_clickhouse_bool_exact_not_contains() {
+        let ch = DbKind::of("clickhouse");
+        assert_eq!(value_sql(Some("true"), &ch, "Bool", "BOOLEAN").unwrap(), "TRUE");
+        assert_eq!(value_sql(Some("0"), &ch, "Bool", "BOOLEAN").unwrap(), "FALSE");
+        // Array(Bool) 不是 Bool，应作为复杂类型拒绝而不是被 contains("BOOL") 误判为布尔
+        assert!(value_sql(Some("true"), &ch, "Array(Bool)", "TEXT").is_err());
     }
 
     #[test]

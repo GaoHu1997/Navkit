@@ -20,14 +20,18 @@
 .table-designer .designer-grid input:not([type=checkbox]) { width: 100%; min-width: 64px; }
 .table-designer .designer-grid td:nth-child(1) { min-width: 140px; }
 .table-designer .designer-grid.wide td:nth-child(2) { min-width: 180px; }
-.table-designer .designer-grid.wide td:nth-child(7) { min-width: 150px; }
-.table-designer .designer-grid.wide td:nth-child(11) { min-width: 170px; }
-/* 类型 / 默认值单元格：单行内联；选择框与（自定义 / 表达式）输入并排，不再上下堆叠 */
-.table-designer .designer-type, .table-designer .designer-default { display: flex; gap: 4px; align-items: center; }
+/* 字段页：列多，用固定布局 + colgroup 列宽，输入框与默认值单元格才有稳定宽度 */
+.table-designer .designer-grid.designer-fields { table-layout: fixed; width: 100%; min-width: 1270px; }
+.table-designer .designer-grid.designer-fields :is(td, th) { overflow: hidden; }
+.table-designer .designer-body { overflow: auto; }
+/* 类型单元格：下拉与（自定义 / 表达式）输入并排 */
+.table-designer .designer-type { display: flex; gap: 4px; align-items: center; }
 .table-designer .designer-type select { flex: 1 1 110px; min-width: 0; width: auto; }
 .table-designer .designer-type input { flex: 1 1 100px; min-width: 0; }
-.table-designer .designer-default select { flex: 0 0 110px; min-width: 0; width: auto; }
-.table-designer .designer-default input { flex: 1 1 auto; min-width: 0; }
+/* 默认值单元格：左侧候选下拉（NULL / 0 / 1 / CURRENT_* 等，随字段类型变化），右侧可手输任意表达式 */
+.table-designer .designer-default-cell { display: flex; gap: 4px; align-items: center; width: 100%; min-width: 0; }
+.table-designer .designer-default-cell .designer-default-pick { flex: 0 0 88px; min-width: 0; width: 88px; color: var(--text-secondary); }
+.table-designer .designer-default-cell .designer-default-input { flex: 1 1 auto; min-width: 0; }
 /* 列表页操作列：只放一个删除按钮，窄列 */
 .table-designer .designer-grid .designer-op { white-space: nowrap; width: 1%; }
 .table-designer .designer-grid .designer-op .btn { min-width: 0; padding: 0 10px; }
@@ -44,19 +48,17 @@
 .table-designer .designer-key:hover { background: var(--bg-hover); opacity: .85; }
 .table-designer .designer-key.active { filter: none; opacity: 1; background: color-mix(in srgb, var(--accent-500) 14%, transparent); border-color: var(--accent-500); }
 .table-designer .designer-key:disabled { opacity: .35; cursor: not-allowed; }
-/* 字段页底部：当前字段属性面板（默认值 / 自增 / 无符号 / 填充零） */
-.table-designer .designer-field-props { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 22px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
-.table-designer .designer-field-props:empty { display: none; }
-.table-designer .designer-field-props .designer-props-title { flex: 0 0 100%; font-weight: 600; }
-.table-designer .designer-field-props .designer-control { margin-bottom: 0; }
-.table-designer .designer-field-props .designer-default { display: flex; gap: 4px; align-items: center; min-width: 360px; }
-.table-designer .designer-field-props .designer-props-flags { display: flex; gap: 16px; align-items: center; }
-/* 索引字段顺序编辑器：字段 / 排序 / 上移 / 删除 + 添加字段 */
-.table-designer .designer-index-cols { display: flex; flex-direction: column; gap: 4px; min-width: 260px; }
-.table-designer .designer-index-col-row { display: flex; gap: 4px; align-items: center; }
-.table-designer .designer-index-col-row select { flex: 0 1 auto; min-width: 0; }
-.table-designer .designer-index-col-row .designer-mini { flex: 0 0 auto; padding: 0 6px; min-width: 0; }
-.table-designer .designer-add-col { align-self: flex-start; padding: 0 8px; }
+/* 字段页：字段属性已并入表格列（默认值 / 自增 / 无符号 / 填充零），不再有底部属性面板 */
+/* 索引字段顺序编辑器：字段 / 排序 / 上移 / 删除 + 添加字段（浮层内固定列宽，行数变化不改变弹窗尺寸） */
+.table-designer .designer-index-cols { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
+.table-designer .designer-index-col-row { display: flex; gap: 8px; align-items: center; }
+.table-designer .designer-index-col-row select { flex: 0 1 auto; min-width: 0; height: 28px; }
+.table-designer .designer-index-col-row .designer-index-field { flex: 1 1 auto; min-width: 0; }
+.table-designer .designer-index-col-row .designer-index-order { flex: 0 0 96px; width: 96px; }
+.table-designer .designer-index-col-row .designer-mini { flex: 0 0 auto; padding: 0 8px; min-width: 28px; height: 28px; }
+.table-designer .designer-add-col { align-self: flex-start; margin: 8px 0 0; padding: 0 10px; }
+/* 浮层滚动区固定高度：字段增减只滚动内容，不改变弹窗大小 */
+.table-designer .designer-index-dialog-cols { max-height: 200px; min-height: 200px; overflow: auto; padding: 2px; }
 .table-designer .designer-control, .table-plan-dialog .designer-control { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin-bottom: 10px; max-width: 720px; }
 .table-designer .designer-options .designer-control { flex-direction: row; align-items: center; gaps: 0; }
 .table-designer .designer-options .designer-control > span { flex: 0 0 140px; color: var(--text-secondary); }
@@ -98,3 +100,19 @@
   margin-bottom: 0;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
+
+/* 字段/索引等表格：单元格即编辑框——去掉内嵌输入框的独立描边，让单元格本身成为编辑区域（参考 Navicat） */
+.table-designer .designer-grid td { padding: 0; }
+.table-designer .designer-grid th { padding: 4px 8px; }
+.table-designer .designer-grid td > :is(input:not([type=checkbox]), select) {
+  width: 100%; min-width: 0; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 8px; box-shadow: none;
+}
+.table-designer .designer-grid td > :is(input:not([type=checkbox]), select):hover { background: var(--bg-hover); }
+.table-designer .designer-grid td > :is(input:not([type=checkbox]), select):focus { border-color: var(--accent-500); background: var(--bg-surface); outline: none; }
+.table-designer .designer-grid td .designer-check { justify-content: center; padding: 0 4px; }
+.table-designer .designer-grid td .designer-key { margin: 0 auto; display: block; }
+/* 索引/主键字段：单元格内是一个摘要按钮，点开浮层选择字段与排序 */
+.table-designer .designer-grid .designer-picker { width: 100%; display: flex; align-items: center; justify-content: flex-start; text-align: left; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 8px; color: var(--text-primary); overflow: hidden; }
+.table-designer .designer-grid .designer-picker:hover { background: var(--bg-hover); }
+.table-designer .designer-grid .designer-picker .designer-picker-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-designer .designer-pk-clear { margin-left: 8px; }

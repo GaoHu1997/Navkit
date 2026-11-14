@@ -22,14 +22,18 @@ export interface ErForeignKey {
   name: string;
   columns: string[];
   ref_table: string;
+  ref_schema?: string | null;
   ref_columns: string[];
 }
 
 export interface ErTable {
   name: string;
+  schema?: string;
   comment: string;
   columns: ErColumn[];
   foreignKeys: ErForeignKey[];
+  /** Only fully represented, unfiltered unique keys may prove a 1:1 FK. */
+  indexes?: { columns: string[]; unique: boolean; primary?: boolean }[];
 }
 
 export type Cardinality = "1" | "N";
@@ -64,30 +68,36 @@ export const CARD_HEADER_H = 34;
 export const CARD_ROW_H = 22;
 export const CARD_GAP_X = 120;
 export const CARD_GAP_Y = 60;
-export const CARD_PAD_BOTTOM = 8;
+export const CARD_BODY_MAX_H = 240;
+// Existing .er-card has a 1px border on both sides, not an 8px bottom pad.
+export const CARD_PAD_BOTTOM = 2;
 
-/** 卡片高度：表头 + 列行（含注释行可省略）+ 底部留白。 */
+/** Use the existing CSS card geometry, including its clipped column body. */
 export function cardHeight(table: ErTable): number {
-  return CARD_HEADER_H + table.columns.length * CARD_ROW_H + CARD_PAD_BOTTOM;
+  return CARD_HEADER_H + Math.min(table.columns.length * CARD_ROW_H, CARD_BODY_MAX_H) + CARD_PAD_BOTTOM;
 }
 
 // ---------------------------------------------------------------- 关系构建
 
 /** 从表外键构建关系（目标端恒为 1；源端为 PK/唯一列时判 1，否则 N）。 */
 export function buildRelationships(tables: ErTable[]): ErRelationship[] {
-  const byName = new Map(tables.map((t) => [t.name, t]));
+  // JSON tuples preserve dotted identifiers and exact namespace identity.
+  const identity = (schema: string, name: string): string => JSON.stringify([schema, name]);
+  const byIdentity = new Map(tables.map((t) => [identity(t.schema ?? "", t.name), t]));
   const out: ErRelationship[] = [];
   for (const table of tables) {
+    const pkColumns = table.columns.filter((c) => c.primary_key).map((c) => c.name);
+    const uniqueKeys = [pkColumns, ...(table.indexes ?? []).filter((i) => i.unique || i.primary).map((i) => i.columns)];
     for (const fk of table.foreignKeys) {
-      const target = byName.get(fk.ref_table);
+      const target = byIdentity.get(identity(fk.ref_schema || table.schema || "", fk.ref_table));
       if (!target) continue;
-      // 源端基数：FK 列同时是本表主键 → 1:1；否则 N
-      const pkColumns = new Set(table.columns.filter((c) => c.primary_key).map((c) => c.name));
-      const uniqueSource = fk.columns.length > 0 && fk.columns.every((c) => pkColumns.has(c));
+      // DBX: unique key ⊆ FK; a subset of a composite PK is not itself unique.
+      const sourceColumns = new Set(fk.columns);
+      const uniqueSource = uniqueKeys.some((key) => key.length > 0 && key.every((c) => sourceColumns.has(c)));
       const sourceColumn = fk.columns[0] ?? "";
       const targetColumn = fk.ref_columns[0] ?? target.columns.find((c) => c.primary_key)?.name ?? "id";
       out.push({
-        id: `${table.name}:${fk.name || "foreign_key"}:${sourceColumn}->${fk.ref_table}:${targetColumn}`,
+        id: JSON.stringify([table.schema ?? "", table.name, fk.name || "foreign_key", fk.columns, target.schema ?? "", target.name, fk.ref_columns]),
         sourceTable: table.name,
         sourceColumn,
         targetTable: fk.ref_table,
@@ -173,7 +183,8 @@ export function computeLayout(tables: ErTable[], relationships: ErRelationship[]
   }
   // 有环残留：排到已有最大层之后
   if (remaining.size) {
-    const maxLayer = Math.max(0, ...[...layerOf.values()]);
+    let maxLayer = 0;
+    for (const layer of layerOf.values()) maxLayer = Math.max(maxLayer, layer);
     for (const n of remaining) layerOf.set(n, maxLayer + 1);
   }
 
@@ -184,7 +195,8 @@ export function computeLayout(tables: ErTable[], relationships: ErRelationship[]
     degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
     degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
   }
-  const maxLayer = Math.max(0, ...[...layerOf.values()]);
+  let maxLayer = 0;
+  for (const layer of layerOf.values()) maxLayer = Math.max(maxLayer, layer);
   const layers: string[][] = Array.from({ length: maxLayer + 1 }, () => []);
   const isolated: string[] = [];
   for (const name of names) {
@@ -374,6 +386,8 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
   const links: EngineeringLink[] = [];
   const diamonds: EngineeringDiagram["diamonds"] = [];
   const attrCenter = new Map<string, { x: number; y: number }>();
+  const entityCenter = new Map<string, { x: number; y: number }>();
+  const attributeKey = (table: string, column: string): string => JSON.stringify([table, column]);
 
   const baseX = 80;
   let cursorY = 80;
@@ -390,6 +404,7 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
     };
     entities.push(entity);
     const center = { x: ex + ENG_ENTITY_W / 2, y: cursorY + ENG_ENTITY_H / 2 };
+    entityCenter.set(table.name, center);
 
     // 列分四侧：上 / 右 / 下 / 左
     const sides: { top: ErColumn[]; right: ErColumn[]; bottom: ErColumn[]; left: ErColumn[] } = {
@@ -416,7 +431,7 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
         height: ENG_ATTR_H,
       };
       attributes.push(attr);
-      attrCenter.set(`${table.name}.${col.name}`, { x: x + w / 2, y: y + ENG_ATTR_H / 2 });
+      attrCenter.set(attributeKey(table.name, col.name), { x: x + w / 2, y: y + ENG_ATTR_H / 2 });
       links.push({ x1: center.x, y1: center.y, x2: x + w / 2, y2: y + ENG_ATTR_H / 2, kind: "attribute" });
     };
 
@@ -458,8 +473,9 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
 
   // 关系：源属性中心 → 菱形 → 目标属性中心
   for (const rel of relationships) {
-    const s = attrCenter.get(`${rel.sourceTable}.${rel.sourceColumn}`);
-    const t = attrCenter.get(`${rel.targetTable}.${rel.targetColumn}`);
+    // DBX fallback: clipped attributes must not silently delete real FK links.
+    const s = attrCenter.get(attributeKey(rel.sourceTable, rel.sourceColumn)) ?? entityCenter.get(rel.sourceTable);
+    const t = attrCenter.get(attributeKey(rel.targetTable, rel.targetColumn)) ?? entityCenter.get(rel.targetTable);
     if (!s || !t) continue;
     const mx = (s.x + t.x) / 2;
     const my = (s.y + t.y) / 2;
@@ -469,8 +485,12 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
   }
 
   // 整体归一化
-  const minX = Math.min(80, ...attributes.map((a) => a.x), ...entities.map((e) => e.x));
-  const minY = Math.min(80, ...attributes.map((a) => a.y), ...entities.map((e) => e.y));
+  let minX = 80;
+  let minY = 80;
+  for (const item of [...entities, ...attributes]) {
+    minX = Math.min(minX, item.x);
+    minY = Math.min(minY, item.y);
+  }
   const shiftX = 80 - minX;
   const shiftY = 80 - minY;
   for (const e of entities) {
@@ -491,14 +511,12 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
     d.x += shiftX;
     d.y += shiftY;
   }
-  const width = Math.max(
-    ...entities.map((e) => e.x + e.width),
-    ...attributes.map((a) => a.x + a.width),
-  ) + 80;
-  const height = Math.max(
-    ...entities.map((e) => e.y + e.height),
-    ...attributes.map((a) => a.y + a.height),
-  ) + 80;
+  let width = 400;
+  let height = 300;
+  for (const item of [...entities, ...attributes]) {
+    width = Math.max(width, item.x + item.width + 80);
+    height = Math.max(height, item.y + item.height + 80);
+  }
   return { entities, attributes, links, diamonds, width, height };
 }
 

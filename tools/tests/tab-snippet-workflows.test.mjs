@@ -40,20 +40,38 @@ function fixture() {
   const run = text => vm.runInContext(ts.transpile(text, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), env);
   run(read('src/core/snippets.ts').replace(/^export /gm, ''));
   run(read('src/ui/TabStrip.ts').replace(/^import .*;$/gm, '').replace(/^export /gm, '') + '\nglobalThis.TabStrip = TabStrip;');
-  run('globalThis.App = class { ' + members(['makeTab', 'openObjectsTab', 'openSpecialTab', 'cmdCodeSnippet']) + ' };');
+  run('globalThis.App = class { ' + members(['makeTab', 'openObjectsTab', 'openSpecialTab', 'openEmptyListTab', 'cmdCodeSnippet']) + ' };');
   const app = new env.App();
   Object.assign(app, { connections: [{ id: 'a', name: '连接A' }, { id: 'b', name: '连接B' }], tabs: [], views: new Map(), openDbs: new Set(), openConnections: new Set(), settings: { rows_per_page: 100 }, syncConnIcons() {}, renderTabs() {}, toast() {} });
   return { app, env, document, dialogs, QueryTabView, setStorageError: value => { storageError = value; } };
 }
-test('备份与表/视图复用每连接对象页，跨库切换销毁旧类型视图且保留查询草稿', () => {
+test('备份与表/视图复用同一个全局对象页，跨连接/库切换只就地改内容且保留查询草稿', () => {
   const h = fixture(), { app } = h;
   app.openObjectsTab('a', 'one', 'table'); const tab = app.tabs[0], id = tab.id; let disposed = 0;
   app.views.set(id, { destroy() { disposed++; } });
   const query = { id: 'query', kind: 'query', dirty: true, sql: 'SELECT draft' }; app.tabs.push(query);
-  app.openSpecialTab('backup', 'a', 'one'); assert.equal(app.tabs.length, 2); assert.equal(tab.id, id); assert.equal(tab.kind, 'backup'); assert.equal(disposed, 1);
+  app.openSpecialTab('backup', 'a', 'one'); assert.equal(app.tabs.length, 2); assert.equal(app.tabs[0], tab); assert.equal(tab.id, id); assert.equal(tab.kind, 'backup'); assert.equal(disposed, 1);
   app.views.set(id, { destroy() { disposed++; } }); app.openSpecialTab('backup', 'a', 'two'); assert.equal(disposed, 1); assert.equal(tab.schema, 'two');
   app.openObjectsTab('a', 'two', 'view'); assert.equal(disposed, 2); assert.equal(tab.kind, 'objects'); assert.equal(tab.objectType, 'view');
-  app.openSpecialTab('backup', 'b', 'other'); assert.equal(app.tabs[1].connectionId, 'b'); assert.equal(app.tabs.at(-1), query); assert.equal(query.sql, 'SELECT draft');
+  app.openSpecialTab('backup', 'b', 'other'); assert.equal(app.tabs.length, 2); assert.equal(app.tabs[0], tab); assert.equal(tab.connectionId, 'b'); assert.equal(tab.schema, 'other'); assert.equal(tab.kind, 'backup'); assert.equal(app.tabs.at(-1), query); assert.equal(query.sql, 'SELECT draft');
+  app.openObjectsTab('b', 'other', 'function'); assert.equal(app.tabs.length, 2); assert.equal(app.tabs[0], tab); assert.equal(tab.connectionId, 'b'); assert.equal(tab.objectType, 'function');
+  app.openObjectsTab('a', 'one', 'folder'); assert.equal(app.tabs.length, 2); assert.equal(app.tabs[0], tab); assert.equal(tab.connectionId, 'a'); assert.equal(tab.schema, 'one');
+});
+test('未选库时打开备份空列表也复用唯一对象页，不新开第二个对象页', () => {
+  const h = fixture(), { app } = h;
+  app.openObjectsTab('a', 'one', 'table'); const tab = app.tabs[0];
+  const query = { id: 'q', kind: 'query', sql: 'SELECT 1' }; app.tabs.push(query);
+  app.openEmptyListTab('backup');
+  assert.equal(app.tabs.length, 2); assert.equal(app.tabs[0], tab); assert.equal(tab.kind, 'backup'); assert.equal(tab.connectionId, ''); assert.equal(tab.schema, '');
+  app.openObjectsTab('a', 'one', 'table');
+  assert.equal(app.tabs.length, 2); assert.equal(app.tabs[0], tab); assert.equal(tab.kind, 'objects'); assert.equal(tab.connectionId, 'a'); assert.equal(tab.schema, 'one');
+});
+test('复用的对象页切换连接会清除数据源失效态并重建视图', () => {
+  const h = fixture(), { app } = h;
+  app.openObjectsTab('a', 'one', 'table'); const tab = app.tabs[0]; let disposed = 0;
+  tab.datasourceStale = '连接已断开，旧页暂停'; app.views.set(tab.id, { destroy() { disposed++; } });
+  app.openObjectsTab('b', 'two', 'view');
+  assert.equal(tab.datasourceStale, undefined); assert.equal(disposed, 1); assert.equal(tab.connectionId, 'b'); assert.equal(tab.objectType, 'view'); assert.equal(app.tabs.length, 1); assert.equal(app.tabs[0], tab);
 });
 test('对象/表/查询/设计 Tab 显示@数据库，不改写业务名称，连接级工具不加虚假库名', () => {
   const h = fixture(), strip = new h.env.TabStrip();

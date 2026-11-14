@@ -341,6 +341,12 @@ try {
               ["trustproduct", "database"],
             ];
           },
+          table_option_choices: () => ({
+            engines: ["InnoDB", "MyISAM", "MEMORY"],
+            charsets: ["utf8mb4", "utf8", "latin1"],
+            collations: ["utf8mb4_bin", "utf8mb4_general_ci", "latin1_swedish_ci"],
+            row_formats: ["DEFAULT", "DYNAMIC", "COMPRESSED", "COMPACT", "REDUNDANT", "FIXED"],
+          }),
           list_tables: (args) => {
             const id = args && args.id;
             const schema = (args && args.schemaName) || "";
@@ -398,6 +404,16 @@ try {
             return [];
           },
           get_table_schema: (args) => tableSchemaFixture(args && args.schemaName, args && args.table),
+          // Browser-only metadata fixture; the desktop uses real database catalogs.
+          get_diagram_metadata: (args) => {
+            const schema = (args && args.schemaName) || "";
+            const catalog = schema === "dbswitch" ? DBSWITCH_TABLES : schema === "password_manager" ? PM_TABLES : [];
+            return {
+              tables: catalog.map(([name]) => ({ ...tableSchemaFixture(schema, name), row_count: null })),
+              failures: [],
+              limitations: [],
+            };
+          },
           // 表数据分页（预览 mock）：在固定行集上真实执行筛选与排序，
           // 请求结构与后端一致（filters 分组 OR、组间按 filter_logic 连接；order_rules 依次优先）。
           page_table: (args) => {
@@ -564,14 +580,15 @@ try {
             const p = (n) => String(n).padStart(2, "0");
             const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
             const size = 18000 + backupSeq * 5237;
+            const name = opts.file_name ? `${String(opts.file_name).replace(/\.sql$/i, "")}.sql` : `${opts.schema}_${stamp}.sql`;
             (backups[key] ??= []).push({
-              name: `${opts.schema}_${stamp}.sql`,
+              name,
               modified: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`,
               size,
               comment: opts.comment || "",
             });
             backupSeq += 1;
-            return [opts.include_data ? 137 : 0, size];
+            return { rows: opts.include_data ? 137 : 0, bytes: size, path: `C:\\NavKit\\data\\backups\\${opts.connection_id}\\${opts.schema}\\${name}`, warnings: [] };
           },
           restore_backup: (args) => {
             const key = `${(args && args.connectionId) || ""}/${(args && args.schemaName) || ""}`;
@@ -1002,6 +1019,13 @@ try {
           }),
 
           // ---- 受控批任务（数据生成 / SQL 文件）----
+          // The generic preview has no native schema/session authority. Do not
+          // fabricate a signed recipe sample or a successful database write.
+          preview_generated_recipe: () => {
+            const error = new Error("RECIPE_PREVIEW_NATIVE_REQUIRED: 配方样本需要真实原生连接；通用预览不伪造结构指纹或授权");
+            error.code = "RECIPE_PREVIEW_NATIVE_REQUIRED";
+            throw error;
+          },
           register_batch_execution: (args) => {
             const request = (args && args.request) || {};
             const task = request.task || {};
@@ -1240,7 +1264,12 @@ try {
             call: { sets: [], outputs: [], warnings: [] },
           }),
 
-          // ---- 结构同步 ----
+          // ---- 数据比较 / 结构同步 ----
+          preview_diff_memory: () => {
+            const error = new Error("DIFF_MEMORY_PREVIEW_NATIVE_REQUIRED：可用内存预算预估需要原生 OS 采样；浏览器预览不提供模拟硬件额度。正常兼容比较仍可使用。");
+            error.code = "DIFF_MEMORY_PREVIEW_NATIVE_REQUIRED";
+            throw error;
+          },
           sync_diff: () => ({
             source_rows: 15, target_rows: 15, keyed: true,
             missing_in_target: 0, extra_in_target: 0, changed: 0, changed_samples: [],

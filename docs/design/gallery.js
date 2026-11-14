@@ -40,7 +40,7 @@ const GROUPS = [
   {
     id: "core",
     title: "02 · 主框架与核心页",
-    desc: "从六条横栏压缩为四条；彩色 Ribbon 换成统一线性图标族；网格重做行高与状态分层。",
+    desc: "从旧版多栏压缩为四条：标题栏（含菜单）/ 命令条 44px / 标签条 32px / 页工具栏 32px；图标统一为双色扁平族。",
     screens: [
       { id: "objects", label: "对象页", html: objectsScreen() },
       { id: "table", label: "表数据页", html: tableScreen() },
@@ -74,7 +74,7 @@ const GROUPS = [
   {
     id: "dialogs",
     title: "05 · 对话框",
-    desc: "全部 21 个对话框统一标题 40px / 页脚 52px / 标签列 112px；向导统一步骤条；空值与错误提示统一组件。",
+    desc: "对话框骨架：标题 36px / 页脚 48px / 标签列 112px；向导统一步骤条；空值与错误提示统一组件。",
     screens: [
       { id: "picker", label: "新建连接（类型选择）", html: connectionPickerScreen() },
       { id: "conn", label: "连接属性", html: connectionDialogScreen() },
@@ -118,7 +118,7 @@ function render() {
   ).join("");
 
   document.getElementById("app").innerHTML = `<header class="gallery-top">
-    <div class="gallery-brand"><span style="display:grid;place-items:center">${navkitLogo(22)}</span>NavKit 设计图 <small>v2 · 精致桌面版</small></div>
+    <div class="gallery-brand"><span style="display:grid;place-items:center">${navkitLogo(22)}</span>NavKit 设计图 <small>v3 · 与实现同步</small></div>
     <nav class="gallery-nav">${nav}</nav>
     <div class="gallery-tools"><span>${GROUPS.reduce((n, g) => n + g.screens.length, 0)} 张设计图</span></div>
   </header>

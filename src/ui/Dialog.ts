@@ -39,6 +39,10 @@ export class Dialog {
   /** 当前错误提示浮层及其自动消失计时器。 */
   private errorBox: HTMLElement | null = null;
   private errorTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 默认（primary）按钮，供键盘回车提交使用。 */
+  private primaryButton: HTMLButtonElement | null = null;
+  /** 上一次回车提交时间，用于抑制长按连发导致的重复提交。 */
+  private lastEnterAt = 0;
 
   constructor(opts: DialogOptions) {
     this.backdrop = document.createElement("div");
@@ -122,11 +126,13 @@ export class Dialog {
 
     opts.render(this.body, this);
     this.buildButtons(opts.buttons ?? []);
+    this.el.addEventListener("keydown", (e) => this.handleKeydown(e));
     this.focusFirst();
   }
 
   private buildButtons(buttons: DialogButton[]): void {
     this.footer.innerHTML = "";
+    this.primaryButton = null;
     let leftGroup: HTMLElement | null = null;
     for (const b of buttons) {
       if (b.alignLeft && !leftGroup) {
@@ -139,6 +145,7 @@ export class Dialog {
       btn.className = b.primary ? "btn primary" : "btn";
       btn.textContent = b.label;
       if (b.hidden) btn.hidden = true;
+      if (b.primary && !b.hidden && !this.primaryButton) this.primaryButton = btn;
       btn.addEventListener("click", async () => {
         if (!b.onClick) {
           this.close();
@@ -165,6 +172,29 @@ export class Dialog {
       "input:not([type=hidden]), select, textarea",
     );
     input?.focus();
+  }
+
+  /**
+   * 通用键盘行为：在单行文本/数字/密码/下拉控件里按回车，等同点击默认按钮，
+   * 让所有弹窗都能“输入后确认”。多行文本、按钮、复选/单选框保留原生行为，
+   * 避免在删除/写库等危险确认里误触发提交。
+   */
+  private handleKeydown(e: KeyboardEvent): void {
+    if (e.defaultPrevented || e.key !== "Enter" || e.repeat) return;
+    if (e.isComposing || (e as KeyboardEvent & { keyCode?: number }).keyCode === 229) return;
+    const target = e.target as HTMLElement | null;
+    const editable = target?.closest?.(
+      'input[type="text"], input[type="password"], input[type="number"], input[type="search"], ' +
+        'input[type="email"], input[type="url"], input[type="tel"], input:not([type]), select',
+    );
+    if (!editable) return;
+    const btn = this.primaryButton;
+    if (!btn || btn.hidden || btn.disabled || !btn.isConnected) return;
+    const now = Date.now();
+    if (now - this.lastEnterAt < 250) return;
+    this.lastEnterAt = now;
+    e.preventDefault();
+    btn.click();
   }
 
   /** 设置标题。 */

@@ -1,16 +1,16 @@
 /** 表对表与整库（库到库）同步向导：映射、建表与进度反馈。 */
-import { api, syncApi, transferTasks, type DbSyncOptions, type StructureDiffReport, type SyncOptions, type SyncReport, type TaskProgress } from "../core/api";
+import { api, syncApi, transferTasks, type DbSyncOptions, type DiffMemoryOptions, type DiffMemoryStats, type StructureDiffReport, type SyncOptions, type SyncReport, type TaskProgress } from "../core/api";
 import { namespaceName } from "../core/namespace-label";
 import { StructureSyncSession } from "../core/structure-sync";
 import { structureSyncConnectionError, syncConnectionError, syncDiffConnectionError } from "../core/toolCapabilities";
 import type { ConnectionConfig } from "../core/types";
-import { Dialog, field, select, textInput } from "../ui/Dialog";
+import { Dialog, field, numberInput, select, textInput } from "../ui/Dialog";
 import { Wizard } from "../ui/Wizard";
 import { taskCenter } from "../core/backgroundTasks";
 import { ObjectTree } from "../ui/ObjectTree";
 
 /** Task feedback reused by the import/export wizard（onProgress 供后台任务中心联动）。 */
-export function taskFeedback(dlg: Dialog, status: HTMLElement, host?: HTMLElement, onProgress?: (p: TaskProgress) => void) {
+export function taskFeedback(dlg: Dialog, status: HTMLElement, host?: HTMLElement, onProgress?: (p: TaskProgress) => void, options: { cancelOnClose?: boolean; unit?: string; cancelLabel?: string } = {}) {
   let taskId: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let polling = false;
@@ -18,7 +18,8 @@ export function taskFeedback(dlg: Dialog, status: HTMLElement, host?: HTMLElemen
   let startedAt = Date.now();
   const cancel = document.createElement("button");
   cancel.className = "btn";
-  cancel.textContent = "取消任务";
+  cancel.type = "button";
+  cancel.textContent = options.cancelLabel ?? "取消任务";
   cancel.disabled = true;
   // 仅在任务运行中出现：平时隐藏，避免占位把「上一步」挤到右侧
   cancel.hidden = true;
@@ -45,7 +46,7 @@ export function taskFeedback(dlg: Dialog, status: HTMLElement, host?: HTMLElemen
     status.textContent = "正在取消，等待当前数据库操作完成…";
     try { await transferTasks.cancel(taskId); } catch (e) { status.textContent = String(e); cancel.disabled = false; }
   });
-  dlg.onClose(() => { generation++; stop(); if (taskId) void transferTasks.cancel(taskId).catch(() => undefined); });
+  dlg.onClose(() => { generation++; stop(); if (taskId && options.cancelOnClose !== false) void transferTasks.cancel(taskId).catch(() => undefined); });
   return {
     begin() {
       generation++;
@@ -76,7 +77,7 @@ export function taskFeedback(dlg: Dialog, status: HTMLElement, host?: HTMLElemen
             const seconds = (Date.now() - startedAt) / 1000;
             const remain = p.processed > 0 && seconds > 0.4
               ? Math.max(0, Math.round((p.total - p.processed) / (p.processed / seconds))) : null;
-            detail = `\n${p.processed} / ${p.total} 行 · ${percent}%${remain !== null ? ` · 预计剩余 ${remain} 秒` : ""}`;
+            detail = `\n${p.processed} / ${p.total} ${options.unit ?? "行"} · ${percent}%${remain !== null ? ` · 预计剩余 ${remain} 秒` : ""}`;
           } else if (p.processed > 0) {
             detail = `\n已处理 ${p.processed}`;
           }
@@ -89,6 +90,13 @@ export function taskFeedback(dlg: Dialog, status: HTMLElement, host?: HTMLElemen
       return taskId;
     },
     finish() { generation++; stop(); taskId = null; cancel.hidden = true; cancel.disabled = true; disabledControls.forEach(c => c.disabled = false); disabledControls = []; dlg.body.removeAttribute("aria-busy"); progress.hidden = true; },
+    /** 关闭窗口转后台：停止轮询与进度刷新，但保留后端任务，不触发 onClose 里的取消。 */
+    detach() {
+      generation++; stop(); taskId = null;
+      cancel.hidden = true; cancel.disabled = true; progress.hidden = true;
+      disabledControls.forEach(c => c.disabled = false); disabledControls = [];
+      dlg.body.removeAttribute("aria-busy");
+    },
   };
 }
 
@@ -142,6 +150,8 @@ export function openSyncDialog(
   const initialSource = source && supported.some(c => c.id === source.id) ? source : undefined;
   const sourceHint = source && !initialSource ? syncConnectionError(source) : null;
   const status = document.createElement("div");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
   status.style.marginTop = "10px"; status.style.minHeight = "36px"; status.style.whiteSpace = "pre-line";
   if (sourceHint) status.textContent = `${sourceHint}。请直接在下方选择受支持的数据源。`;
   // 执行日志：逐表结果（成功 / 跳过 / 失败、行数与错误）独占向导最后一页，不再挤在映射页里。
@@ -216,6 +226,10 @@ export function openSyncDialog(
   let tableSelection: { source: string; kind: "table" | "view"; target: HTMLInputElement; checked?: HTMLInputElement }[] = [];
   let tablesLoading = false;
   let tablesVersion = 0;
+  let tableSelectionSource = "";
+  let tableSelectionError = "";
+  /** 整库表清单的本地搜索关键字；步骤重进/清单重载时保留。 */
+  let tableFilter = "";
   const error = (e: unknown) => {
     if (structureClosed) return;
     const message = e instanceof Error ? e.message : String(e);
@@ -385,14 +399,42 @@ export function openSyncDialog(
       mappings = [];
       const head = document.createElement("tr"); for (const title of ["源列 / 类型", "目标列", "目标建表类型"]) { const th = document.createElement("th"); th.textContent = title; head.append(th); }
       const tbody = document.createElement("tbody"); mapping.replaceChildren(head, tbody);
+      const sourceColumns = document.createElement("datalist");
+      sourceColumns.id = `sync-source-cols-${crypto.randomUUID()}`;
+      sourceColumns.append(...types.map(t => new Option(t.source, t.source)));
+      mapping.append(sourceColumns);
+      bizKey.setAttribute("list", sourceColumns.id);
+      bizKey.setAttribute("data-search-token", ",");
       for (const t of types) {
         const row = document.createElement("tr"); const label = document.createElement("td"); label.textContent = `${t.source} · ${t.source_type}`;
         const target = textInput(t.source, 160); target.setAttribute("aria-label", `${t.source} 对应目标列（留空跳过）`);
         const type = textInput(t.target_type, 160); type.setAttribute("aria-label", `${t.source} 目标建表类型`); type.disabled = mode.value === "data";
         const a = document.createElement("td"); a.append(target); const b = document.createElement("td"); b.append(type); row.append(label, a, b); tbody.append(row); mappings.push({ source: t.source, target, type });
       }
+      // 目标表已存在时提供其列名候选；新建表 / 元数据不可读时静默保持自由输入。
+      void attachTargetColumnList(mappings.map(m => m.target), v);
     } catch (e) { if (v === mapVersion) { mapping.replaceChildren(); mappings = []; error(e); } }
     finally { if (v === mapVersion) mapLoading = false; }
+  }
+  /** 只读读取目标表现有列名并附加到映射的目标列输入；失败不提示、不阻断、不触发任何写入。 */
+  async function attachTargetColumnList(inputs: HTMLInputElement[], version: number): Promise<void> {
+    const connectionId = dst.conn.value;
+    const schemaName = dst.schema.value;
+    const tableName = (dst.table as HTMLInputElement).value.trim();
+    if (!connectionId || !schemaName || !tableName || !inputs.length) return;
+    try {
+      const schema = await api.getTableSchema(connectionId, schemaName, tableName);
+      if (version !== mapVersion || structureClosed || isDbMode() ||
+        connectionId !== dst.conn.value || schemaName !== dst.schema.value ||
+        tableName !== (dst.table as HTMLInputElement).value.trim()) return;
+      const names = [...new Set(schema.columns.map(c => c.name).filter(name => name.trim()))];
+      if (!names.length) return;
+      const list = document.createElement("datalist");
+      list.id = `sync-target-cols-${crypto.randomUUID()}`;
+      list.append(...names.map(name => new Option(name, name)));
+      mapping.append(list);
+      for (const input of inputs) input.setAttribute("list", list.id);
+    } catch { /* 目标表不存在或元数据不可读：保留手填目标列即可。 */ }
   }
   const connectionById = (id: string) => connections.find((c) => c.id === id);
   /** 受控结构同步当前只认证 SQLite→SQLite：其他方言由后端拒绝，前端据此置灰按钮。 */
@@ -420,26 +462,151 @@ export function openSyncDialog(
     const structReason = isDbMode() ? null : structureLanguageReason();
     const buttons = [...(dlg?.body.querySelectorAll<HTMLButtonElement>("button") ?? [])];
     const diffBtnEl = buttons.find((b) => b.dataset.diff === "true");
-    if (diffBtnEl) { diffBtnEl.disabled = !!diffReason; diffBtnEl.title = diffReason ?? "比较源表与目标表的差异（只读）"; }
+    const budgetReason = diffMemoryReason();
+    const invalid = !budgetReason && memoryControl.checked && memoryMode.value === "manual" ? manualMemoryError() : null;
+    if (diffBtnEl) { diffBtnEl.disabled = diffRunning || !!diffReason || !!invalid; diffBtnEl.title = diffReason ?? invalid ?? "比较源表与目标表的差异（只读）"; }
+    memoryControl.disabled = diffRunning || !!diffReason || !!budgetReason;
+    memoryControl.title = diffReason ?? budgetReason ?? "仅用于比较差异，不改变同步执行策略";
+    memoryMode.disabled = memoryControl.disabled || !memoryControl.checked;
+    memoryLimit.disabled = memoryMode.disabled || memoryMode.value !== "manual";
+    memoryLimit.hidden = memoryLimitLabel.hidden = memoryMode.value !== "manual";
+    memoryLimit.setAttribute("aria-invalid", String(!!invalid));
+    memoryNote.textContent = budgetReason ?? "比较缓冲预算，不是整个程序RSS硬上限。后台认定真实文件库并在每次比较前重新采样；关闭仍有保底预算，不是无限内存。";
+    if (invalid) memoryInfo.textContent = invalid;
+    if (!diffRunning) scheduleMemoryPreview();
+    if (diffRunning && diffBtnEl) diffBtnEl.setAttribute("aria-busy", "true");
+    else diffBtnEl?.removeAttribute("aria-busy");
     const previewBtnEl = buttons.find((b) => b.dataset.structurePreview === "true");
-    if (previewBtnEl) { previewBtnEl.disabled = !!structReason; previewBtnEl.title = structReason ?? "只读预览目标表相对源表的结构差异"; }
+    if (previewBtnEl) { previewBtnEl.disabled = diffRunning || !!structReason; previewBtnEl.title = structReason ?? "只读预览目标表相对源表的结构差异"; }
     const applyBtnEl = buttons.find((b) => b.dataset.structureApply === "true");
-    if (applyBtnEl && structReason) { applyBtnEl.disabled = true; applyBtnEl.title = structReason; }
+    if (applyBtnEl && (structReason || diffRunning)) { applyBtnEl.disabled = true; applyBtnEl.title = structReason ?? "数据差异正在比较，请等待完成。"; }
   }
-  /** 表对表：比较源表与目标表的差异（只读），结果写入状态区。 */
+  const memoryControl = document.createElement("input");
+  memoryControl.type = "checkbox";
+  memoryControl.checked = false;
+  memoryControl.setAttribute("aria-label", "内存预算控制");
+  const memoryMode = select([{ value: "auto", label: "自动预算" }, { value: "manual", label: "手动预算" }], "auto");
+  memoryMode.setAttribute("aria-label", "比较内存预算模式");
+  const memoryLimit = numberInput(0, 112);
+  memoryLimit.value = "";
+  memoryLimit.min = "1";
+  memoryLimit.step = "1";
+  memoryLimit.max = String(Math.floor(Number.MAX_SAFE_INTEGER / 1048576));
+  memoryLimit.placeholder = "MiB";
+  memoryLimit.setAttribute("aria-label", "手动比较缓冲预算（MiB）");
+  const memoryLimitLabel = document.createElement("label");
+  memoryLimitLabel.className = "sync-diff-memory-option";
+  memoryLimitLabel.append(memoryLimit, document.createTextNode("MiB"));
+  const memoryNote = document.createElement("div");
+  memoryNote.className = "wizard-panel-note";
+  const memoryInfo = document.createElement("div");
+  memoryInfo.className = "wizard-panel-note";
+  memoryInfo.id = `sync-diff-memory-${crypto.randomUUID()}`;
+  memoryNote.id = `${memoryInfo.id}-note`;
+  memoryInfo.setAttribute("role", "status");
+  memoryInfo.setAttribute("aria-live", "polite");
+  for (const control of [memoryControl, memoryMode, memoryLimit]) control.setAttribute("aria-describedby", `${memoryNote.id} ${memoryInfo.id}`);
+  let diffRunning = false;
+  let diffGeneration = 0;
+  let memoryPreviewGeneration = 0;
+  let memoryPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  let memoryPreviewKey = "";
+  let reportMemoryShown = false;
+  /** kind 仅决定显示候选控件；真实原生 SQLite 文件身份必须由后台判定。 */
+  function diffMemoryReason(): string | null {
+    if (isDbMode()) return "预算控制仅用于表对表数据差异比较。";
+    const source = connectionById(src.conn.value);
+    const target = connectionById(dst.conn.value);
+    if (source?.kind !== "sqlite" || target?.kind !== "sqlite") return "预算控制暂未认证，使用兼容比较。第一期仅原生 SQLite 文件库，由后台认定真实文件身份。";
+    return null;
+  }
+  function manualMemoryError(): string | null {
+    const value = memoryLimit.value.trim();
+    const mib = Number(value);
+    return /^\d+$/.test(value) && Number.isSafeInteger(mib) && mib > 0 && Number.isSafeInteger(mib * 1048576)
+      ? null : "手动预算须为正整数 MiB，换算字节不得超过安全整数范围；实际工作区最小值与授权上限由后台校验。";
+  }
+  function diffMemoryOptions(): DiffMemoryOptions {
+    return !memoryControl.checked ? { mode: "speed" } : memoryMode.value === "manual"
+      ? { mode: "manual", limit_bytes: Number(memoryLimit.value) * 1048576 } : { mode: "auto" };
+  }
+  function memoryBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes < 0) return "未知";
+    if (bytes < 1048576) return `${Math.round(bytes)} B`;
+    return `${(bytes / 1048576).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} MiB`;
+  }
+  function renderMemoryReport(memory: DiffMemoryStats, requested?: DiffMemoryOptions) {
+    reportMemoryShown = true;
+    const backend = memory.backend === "memory" ? "内存（memory）" : memory.backend === "disk" ? "磁盘（disk）" : "仅行数（count_only）";
+    memoryInfo.textContent = `实际比较：${requested?.mode === "manual" ? `请求上限 ${memoryBytes(requested.limit_bytes ?? 0)} · ` : ""}有效可用 ${memoryBytes(memory.available_bytes)} · 实际额度上限 ${memoryBytes(memory.limit_bytes)} · 结束核算占用 ${memoryBytes(memory.used_bytes)} · 核算峰值（含暂存预留）${memoryBytes(memory.peak_bytes)} · 路径 ${backend} · 溢写数据量 ${memoryBytes(memory.spilled_bytes)} · 压力事件 ${memory.pressure_events} · 模式 ${memory.mode}\n范围：${memory.scope}。核算峰值不是进程RSS，额度上限不是预分配。`;
+  }
+  function scheduleMemoryPreview() {
+    const invalid = memoryControl.checked && memoryMode.value === "manual" && manualMemoryError();
+    const options = diffMemoryOptions();
+    const key = JSON.stringify([src.conn.value, dst.conn.value, diffMemoryReason(), invalid || options]);
+    if (key === memoryPreviewKey) return;
+    memoryPreviewKey = key;
+    const generation = ++memoryPreviewGeneration;
+    if (memoryPreviewTimer) clearTimeout(memoryPreviewTimer);
+    memoryPreviewTimer = null;
+    reportMemoryShown = false;
+    if (diffMemoryReason()) { memoryInfo.textContent = ""; return; }
+    if (invalid) { memoryInfo.textContent = invalid; return; }
+    memoryInfo.textContent = "正在读取原生预算预估…预估额度，不代表已分配。";
+    memoryPreviewTimer = setTimeout(async () => {
+      memoryPreviewTimer = null;
+      try {
+        const preview = await syncApi.previewMemory(options);
+        if (structureClosed || generation !== memoryPreviewGeneration || diffRunning || reportMemoryShown) return;
+        memoryInfo.textContent = `预估：有效可用 ${memoryBytes(preview.available_bytes)} · 建议额度上限 ${memoryBytes(preview.suggested_limit_bytes)} · 比较池上限 ${memoryBytes(preview.global_limit_bytes)}\n预估额度，不代表已分配；比较时后台重新采样校验。范围：${preview.scope}${preview.limitations.length ? `；${preview.limitations.join("；")}` : ""}`;
+      } catch (e) {
+        if (structureClosed || generation !== memoryPreviewGeneration || diffRunning || reportMemoryShown) return;
+        memoryInfo.textContent = `预算预估不可用：${e instanceof Error ? e.message : String(e)}。不以此阻断正常比较，实际额度由后台校验。`;
+      }
+    }, 250);
+  }
+  for (const control of [memoryControl, memoryMode, memoryLimit]) {
+    for (const event of ["input", "change"]) control.addEventListener(event, e => {
+      // 比较预算不是同步/结构配置：不触发全局 edited 失效已确认的结构预览。
+      e.stopPropagation();
+      if (!diffRunning) updateActionAvailability();
+    });
+    // 预算输入回车不能误触发同步写入；只比较仍由显式按钮发起。
+    control.addEventListener("keydown", e => { if ((e as KeyboardEvent).key === "Enter") e.preventDefault(); });
+  }
+  /** 表对表：冻结只读比较请求及预算；独立于同步 busy，不产生写任务关闭确认。 */
   async function runDiff() {
-    const targetTable = (dst.table as HTMLInputElement).value.trim();
-    if (!src.conn.value || !src.table.value || !dst.conn.value || !dst.schema.value || !targetTable) {
+    if (diffRunning || busy || structureClosed || structureSession.busy || isDbMode() || diffLanguageReason()) return;
+    const req = {
+      source_connection: src.conn.value, source_schema: src.schema.value, source_table: src.table.value,
+      target_connection: dst.conn.value, target_schema: dst.schema.value, target_table: (dst.table as HTMLInputElement).value.trim(),
+      where_clause: where.value.trim() || null,
+    };
+    if (!req.source_connection || !req.source_table || !req.target_connection || !req.target_schema || !req.target_table) {
       status.textContent = "请先在第一步选择源表并填写目标表名，再比较差异。";
       return;
     }
+    const memory = diffMemoryReason() ? undefined : diffMemoryOptions();
+    if (memory?.mode === "manual" && manualMemoryError()) { updateActionAvailability(); return; }
+    diffRunning = true;
+    reportMemoryShown = false;
+    const generation = ++diffGeneration;
+    ++memoryPreviewGeneration;
+    if (memoryPreviewTimer) clearTimeout(memoryPreviewTimer);
+    memoryPreviewTimer = null;
+    const locked = [src.conn, src.schema, src.table, dst.conn, dst.schema, dst.table, where, memoryControl, memoryMode, memoryLimit]
+      .filter(control => !control.disabled);
+    locked.forEach(control => control.disabled = true);
+    wizard.setBusy(true);
+    updateActionAvailability();
+    status.style.maxHeight = "120px"; status.style.overflowY = "auto"; status.style.overflowWrap = "anywhere"; status.style.flexShrink = "0";
+    // 结果区必须为不可收缩的状态行留空间；其余内容交给现有向导滚动，不能盖住预算控件。
+    if (status.parentElement?.classList.contains("sync-map")) status.parentElement.style.minHeight = "136px";
+    status.setAttribute("role", "status");
     status.textContent = "正在比较源表与目标表差异…";
     try {
-      const report = await syncApi.diff({
-        source_connection: src.conn.value, source_schema: src.schema.value, source_table: src.table.value,
-        target_connection: dst.conn.value, target_schema: dst.schema.value, target_table: targetTable,
-        where_clause: where.value.trim() || null,
-      });
+      const report = memory ? await syncApi.diff(req, false, memory) : await syncApi.diff(req);
+      if (structureClosed || generation !== diffGeneration) return;
       const parts = [`源 ${report.source_rows} 行 / 目标 ${report.target_rows} 行`];
       if (report.keyed) {
         parts.push(`目标缺失 ${report.missing_in_target} 行`, `目标多出 ${report.extra_in_target} 行`, `内容差异 ${report.changed} 行（归一化近似）`);
@@ -448,7 +615,19 @@ export function openSyncDialog(
       if (report.target_extra_columns.length) parts.push(`目标多列：${report.target_extra_columns.join("、")}`);
       if (report.changed_samples.length) parts.push(`差异示例主键：${report.changed_samples.join("；")}`);
       status.textContent = `差异比较完成：${parts.join("；")}${report.message ? `\n${report.message}` : ""}`;
-    } catch (e) { error(e); }
+      if (report.memory) renderMemoryReport(report.memory, memory);
+    } catch (e) { if (!structureClosed && generation === diffGeneration) error(e); }
+    finally {
+      diffRunning = false;
+      if (!structureClosed && generation === diffGeneration) {
+        locked.forEach(control => control.disabled = false);
+        wizard.setBusy(busy || structureSession.busy || structureSession.effectsUnknown);
+        const apply = dlg.body.querySelector<HTMLButtonElement>("[data-structure-apply]");
+        if (apply) apply.disabled = !structureSession.canApply;
+        if (!reportMemoryShown) memoryPreviewKey = "";
+        updateActionAvailability();
+      }
+    }
   }
 
   /** 表对表：只读预览目标表相对源表的结构差异。 */
@@ -543,21 +722,36 @@ export function openSyncDialog(
     finally { busy = false; controls.forEach(control => control.disabled = false); dlg.body.removeAttribute("aria-busy"); syncStructureUi(); }
   }
   async function loadTableSelection() {
-    if (!isDbMode()) return;
+    if (structureClosed || !isDbMode()) return;
+    const sourceKey = JSON.stringify([src.conn.value, src.schema.value]);
+    if (sourceKey !== tableSelectionSource) { tableSelection = []; tableSelectionSource = ""; renderTableSelection(); }
+    tableSelectionError = "";
+    const previous = sourceKey === tableSelectionSource
+      ? new Map(tableSelection.map(item => [`${item.kind}:${item.source}`, item]))
+      : new Map<string, typeof tableSelection[number]>();
     const v = ++tablesVersion; tablesLoading = true;
     try {
       const rows = await api.listTables(src.conn.value, src.schema.value);
-      if (v !== tablesVersion) return;
-      // 树形选择的数据：表默认勾选，视图默认不勾（勾选后才同步）。
+      if (structureClosed || v !== tablesVersion || !isDbMode() || sourceKey !== JSON.stringify([src.conn.value, src.schema.value])) return;
+      // 同一源库重载保留勾选与目标表名，源库切换或新增对象使用默认状态。
       tableSelection = rows.map(([name, ty]) => {
         const kind: "table" | "view" = ty === "view" ? "view" : "table";
+        const saved = previous.get(`${kind}:${name}`);
+        if (saved) return saved;
         const target = textInput(name, 200); target.setAttribute("aria-label", `${name} 的目标表名（默认同名，视图物化为普通表）`);
         return { source: name, kind, target };
       });
+      tableSelectionSource = sourceKey;
       renderTableSelection();
-    } catch (e) { if (v === tablesVersion) error(e); }
+    } catch (e) { if (!structureClosed && v === tablesVersion) { tableSelectionError = String(e); error(e); } }
     finally { if (v === tablesVersion) tablesLoading = false; }
   }
+  const invalidateTableSelection = () => {
+    ++tablesVersion; tablesLoading = false; tableSelectionSource = ""; tableSelectionError = ""; tableSelection = [];
+    if (!structureClosed) renderTableSelection();
+  };
+  src.conn.addEventListener("change", invalidateTableSelection);
+  src.schema.addEventListener("change", invalidateTableSelection);
   function renderTableSelection() {
     const host = dlg.body.querySelector<HTMLElement>("#sync-db-tables");
     if (!host) return;
@@ -578,7 +772,7 @@ export function openSyncDialog(
       const handle = tree.addItem(groups[item.kind], {
         name: item.source,
         icon: item.kind === "view" ? "info_pane_view" : "info_pane_table",
-        checked: item.kind === "table",
+        checked: item.checked?.checked ?? item.kind === "table",
         ariaLabel: `同步${item.kind === "view" ? "视图" : "表"} ${item.source}`,
         extra: item.target,
       });
@@ -586,13 +780,21 @@ export function openSyncDialog(
     }
     const wrap = document.createElement("div");
     wrap.style.cssText = "display:flex;flex-direction:column;min-height:0;height:100%;";
-    wrap.append(tree.el);
+    const search = textInput(tableFilter);
+    search.type = "search";
+    search.placeholder = "搜索表 / 视图";
+    search.setAttribute("aria-label", "搜索要同步的表与视图");
+    search.addEventListener("input", () => { tableFilter = search.value; tree.filter(tableFilter); });
+    wrap.append(field("搜索:", search), tree.el);
     host.replaceChildren(wrap);
+    tree.filter(tableFilter);
   }
   /** 第 3 步（映射确认）的前置校验：进入执行日志页与「重新执行」共用。 */
   function validateMapping(): string | null {
     if (isDbMode()) {
       if (tablesLoading) return "表清单仍在加载，请稍候。";
+      if (tableSelectionError) return `源库表清单加载失败，不能同步：${tableSelectionError}`;
+      if (tableSelectionSource !== JSON.stringify([src.conn.value, src.schema.value])) return "源库已变化，请重新加载并核对当前源库的表清单。";
       if (!tableSelection.some(t => t.checked?.checked)) return "请至少勾选一个要同步的表或视图。";
       const names = new Set<string>();
       for (const item of tableSelection.filter(t => t.checked?.checked)) {
@@ -660,6 +862,7 @@ export function openSyncDialog(
           label: "映射确认与执行",
           hint: "表对表：逐列核对源字段与目标字段的对应关系；目标列留空表示该列不写入。整库：树形勾选要同步的表与视图及目标表名；视图按当前查询结果物化为普通表。",
           render: (host) => {
+            host.classList.add("sync-map-panel");
             const mapWrap = document.createElement("div");
             mapWrap.className = "sync-map";
             // 映射表自身滚动（flex:1 + min-height:0），工具条不再叠在溢出的表格行上
@@ -690,10 +893,7 @@ export function openSyncDialog(
               void runDiff();
             });
             const structureOnly = document.createElement("span");
-            structureOnly.className = "sync-table-only";
-            structureOnly.style.display = "inline-flex";
-            structureOnly.style.alignItems = "center";
-            structureOnly.style.gap = "8px";
+            structureOnly.className = "sync-table-only sync-structure-controls";
             const structPreviewBtn = document.createElement("button");
             structPreviewBtn.type = "button"; structPreviewBtn.className = "btn";
             structPreviewBtn.textContent = "预览结构差异";
@@ -704,9 +904,23 @@ export function openSyncDialog(
             structApplyBtn.textContent = "应用结构差异"; structApplyBtn.dataset.structureApply = "true"; structApplyBtn.disabled = !structureSession.canApply;
             structApplyBtn.title = "请先按当前目标与映射预览结构差异";
             structApplyBtn.addEventListener("click", () => { void applyStructure(); });
-            structureOnly.append(structPreviewBtn, structApplyBtn, structureStop, allowDropLabel);
-            tools.append(refresh, diffBtn, structureOnly);
+            structureOnly.append(structPreviewBtn, structApplyBtn, structureStop);
+            const diffControls = document.createElement("div");
+            diffControls.className = "sync-diff-controls sync-table-only";
+            diffControls.setAttribute("role", "group");
+            diffControls.setAttribute("aria-label", "数据差异比较");
+            const memoryLabel = document.createElement("label");
+            memoryLabel.className = "sync-diff-memory-option";
+            memoryLabel.title = "仅影响“比较差异”，不改变同步写入；预算足够时优先内存快路径，必要时才溢写。默认关闭仍使用保底预算，不是无限内存。";
+            memoryLabel.append(memoryControl, document.createTextNode("内存预算控制"));
+            diffControls.append(diffBtn, memoryLabel, memoryMode, memoryLimitLabel, memoryNote, memoryInfo);
+            tools.append(refresh, diffControls, structureOnly);
             host.appendChild(tools);
+            // 破坏性选项独占一行，不与结构操作按钮挤在同一条工具行里（误点风险）
+            const structOptions = document.createElement("div");
+            structOptions.className = "sync-table-only sync-map-option-row";
+            structOptions.append(allowDropLabel);
+            host.appendChild(structOptions);
             const bizRow = document.createElement("div");
             bizRow.className = "sync-table-only";
             bizRow.style.cssText = "display:flex;align-items:center;gap:16px;margin-top:8px;flex-wrap:wrap";
@@ -766,6 +980,8 @@ export function openSyncDialog(
         if (busy) return;
         // 最后一页是执行日志：刚进入时按当前配置执行；已执行过则「完成」只关闭窗口。
         if (!pendingRun) { dlg.close(); return; }
+        const mappingProblem = validateMapping();
+        if (mappingProblem) { wizard.showError(mappingProblem); return; }
         pendingRun = false;
         if (isDbMode()) {
           const tables = tableSelection.filter(t => t.checked?.checked).map(t => ({ source: t.source, target: t.target.value.trim(), view: t.kind === "view" }));
@@ -910,10 +1126,21 @@ export function openSyncDialog(
   })());
   const closeDialog = dlg.close.bind(dlg);
   dlg.close = () => {
-    if (busy || structureSession.busy || structureSession.effectsUnknown) { wizard.showError("结构或数据任务尚未核对完成。请先停止任务；结构回执未知时请明确重新预览真实双端，保留当前证据。"); return; }
+    // 结构执行与「写入回执未知」必须留在窗口里核对证据，不能转后台。
+    if (structureSession.busy || structureSession.effectsUnknown) { wizard.showError("结构任务尚未核对完成。请先停止任务；结构回执未知时请明确重新预览真实双端，保留当前证据。"); return; }
+    // 数据同步进行中关闭窗口＝转后台：任务在任务中心继续，不取消、不丢失结果。
+    if (busy) {
+      if (!window.confirm("同步任务仍在执行。关闭窗口不会中断任务，它会转入后台继续，可在顶部任务中心查看进度与结果。确定关闭？")) return;
+      feedback.detach();
+    }
     closeDialog();
   };
-  dlg.onClose(() => { structureClosed = true; structureSession.dispose(); });
+  dlg.onClose(() => {
+    structureClosed = true; ++tablesVersion; structureSession.dispose();
+    ++diffGeneration; ++memoryPreviewGeneration;
+    if (memoryPreviewTimer) clearTimeout(memoryPreviewTimer);
+    memoryPreviewTimer = null;
+  });
   const edited = () => { pendingRun = true; if (!structureSession.busy && !structureSession.effectsUnknown) { structurePreview = null; structureSession.invalidate(); } };
   dlg.body.addEventListener("input", edited); dlg.body.addEventListener("change", edited);
   accessibleDialog(dlg, "数据库同步", previousFocus);

@@ -221,10 +221,22 @@ export class ErTableEditor {
     const pkRow = elem("div", "er-te-pkrow");
     pkRow.append(elem("span", "er-te-pklabel", "PRIMARY（主键）"), elem("span", "er-te-pkcols", draft.primary_key.join(", ") || "—"));
     body.appendChild(pkRow);
+    // 索引字段候选：当前未删除的字段名；datalist 只提供建议，逗号分隔的自由输入保持不变。
+    const columnNames = [...new Set(draft.columns.filter(c => !c.deleted && c.name.trim()).map(c => c.name.trim()))];
+    const columnList = elem("datalist");
+    if (columnNames.length) {
+      columnList.id = `er-te-idx-cols-${crypto.randomUUID()}`;
+      columnList.append(...columnNames.map(name => new Option(name, name)));
+      body.appendChild(columnList);
+    }
     draft.indexes.forEach((idx, i) => {
       const row = elem("div", "er-te-idxrow");
       const nameI = this.fieldInput(idx.name, "索引名称", v => { idx.name = v; });
       const colI = this.fieldInput(idx.columns.join(", "), "索引字段（逗号分隔）", v => { idx.columns = v.split(",").map(s => s.trim()).filter(Boolean); });
+      if (columnNames.length) {
+        colI.setAttribute("list", columnList.id);
+        colI.setAttribute("data-search-token", ",");
+      }
       const uniq = this.fieldSelect(idx.unique ? "UNIQUE" : "NORMAL", ["NORMAL", "UNIQUE"], "索引类型", v => { idx.unique = v === "UNIQUE"; });
       const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.disabled = !!this.editReason();
       del.addEventListener("click", () => { draft.indexes!.splice(i, 1); this.render(); this.changed(); });

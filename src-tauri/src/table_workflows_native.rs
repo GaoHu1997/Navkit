@@ -20,7 +20,7 @@ impl Session {
 }
     async fn setup(&mut self)->Result<()>{if let Self::Mysql(c,mode)=self{let old:String=crate::sql_history::query_scalar("SELECT @@session.sql_mode").fetch_one(&mut **c).await?;*mode=Some(old.clone());if !old.split(',').any(|v|v=="NO_BACKSLASH_ESCAPES"){let wanted=if old.is_empty(){"NO_BACKSLASH_ESCAPES".into()}else{format!("{old},NO_BACKSLASH_ESCAPES")};crate::sql_history::query("SET SESSION sql_mode=?").bind(wanted).execute(&mut **c).await?;}}Ok(())}
     pub(crate) async fn rows(&mut self,sql:&str)->Result<Vec<Record>>{
-        macro_rules! read {($conn:expr,$extra:ty)=>{{let rows=crate::sql_history::query(sql).fetch_all(&mut **$conn).await?;let mut out=Vec::new();for row in rows{let mut r=Record::new();for (i,c) in row.columns().iter().enumerate(){let v=if row.try_get_raw(i)?.is_null(){None}else if let Ok(s)=row.try_get::<String,_>(i){Some(s)}else if let Ok(bytes)=row.try_get::<Vec<u8>,_>(i){Some(String::from_utf8(bytes).map_err(|_|anyhow!("TABLE_METADATA_UTF8_INVALID: {}",c.name()))?)}else if let Ok(n)=row.try_get::<i64,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<i32,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<$extra,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<bool,_>(i){Some(if n{"1"}else{"0"}.into())}else{return Err(anyhow!("TABLE_METADATA_DECODE_FAILED: {}",c.name()));};ensure!(r.insert(c.name().to_string(),v).is_none(),"TABLE_METADATA_DUPLICATE_FIELD");}out.push(r);}Ok(out)}};}
+        macro_rules! read {($conn:expr,$extra:ty)=>{{let rows=crate::sql_history::query(sql).fetch_all(&mut **$conn).await?;let mut out=Vec::new();for row in rows{let mut r=Record::new();for (i,c) in row.columns().iter().enumerate(){let v=if row.try_get_raw(i)?.is_null(){None}else if let Ok(s)=row.try_get::<String,_>(i){Some(s)}else if let Ok(bytes)=row.try_get::<Vec<u8>,_>(i){Some(String::from_utf8(bytes).map_err(|_|anyhow!("TABLE_METADATA_UTF8_INVALID: {}",c.name()))?)}else if let Ok(n)=row.try_get::<i64,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<i32,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<$extra,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<bool,_>(i){Some(if n{"1"}else{"0"}.into())}else if let Ok(n)=row.try_get::<chrono::NaiveDateTime,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<chrono::DateTime<chrono::Utc>,_>(i){Some(n.naive_utc().to_string())}else{return Err(anyhow!("TABLE_METADATA_DECODE_FAILED: {}",c.name()));};ensure!(r.insert(c.name().to_string(),v).is_none(),"TABLE_METADATA_DUPLICATE_FIELD");}out.push(r);}Ok(out)}};}
         match self{Self::Mysql(c,_)=>read!(c,u64),Self::Pg(c)=>read!(c,i16)}
     }
     /// MySQL 侧走文本协议：START TRANSACTION / LOCK TABLES / UNLOCK TABLES 不在服务端预处理白名单内（1295）。
@@ -59,6 +59,18 @@ fn unknown(m:impl Into<String>)->AppError{AppError::coded("EXECUTION_EFFECTS_UNK
 fn mysql_remote_state(verified:bool,applied:bool,uncertain:bool,stopped:bool)->&'static str{if uncertain||stopped&&applied{"unknown"}else if verified{"committed"}else if applied{"unknown"}else{"none"}}
 fn is_unknown(e:&anyhow::Error)->bool{e.downcast_ref::<AppError>().is_some_and(|e|e.code=="EXECUTION_EFFECTS_UNKNOWN")||e.downcast_ref::<sqlx::Error>().is_some_and(|e|!matches!(e,sqlx::Error::Database(_)))}
 
+// 仅新建复制目标及触发器 DDL 需要退出 LOCK TABLES；列名、字符串中的 TRIGGER 不算 DDL 头部。
+fn mysql_step_requires_unlock(copy:bool,position:usize,sql:&str)->Result<bool>{
+    let tokens=crate::table_objects::tokens(sql)?;
+    let create=tokens.first().is_some_and(|t|t.word("CREATE"));
+    let drop=tokens.first().is_some_and(|t|t.word("DROP"));
+    let creates_target=copy&&position==0&&create&&tokens.get(1).is_some_and(|t|t.word("TABLE"));
+    let header=tokens.iter().skip(1).take_while(|t|!t.word("ON")&&!t.symbol("("));
+    let trigger_ddl=(create||drop)&&header.clone().any(|t|t.word("TRIGGER"))
+        &&!header.into_iter().any(|t|t.word("TABLE")||t.word("INDEX")||t.word("VIEW"));
+    Ok(creates_target||trigger_ddl)
+}
+
 // 清理在 drive 返回后执行，避免迟到的定向取消击中 COMMIT/ROLLBACK 或归还后的连接。
 async fn apply(s:&mut Session,b:&Binding,entry:&Arc<Entry>,work:&TableWork,steps_out:&mut Vec<DesignStepResult>)->Result<(Stored,u64,u64)>{
     let table=match work{TableWork::Design(d)=>&d.table,TableWork::Operation(o)=>&o.table};let kind=s.kind();let full=db::qualified(&kind,&b.namespace,table);
@@ -72,13 +84,20 @@ async fn apply(s:&mut Session,b:&Binding,entry:&Arc<Entry>,work:&TableWork,steps
     let steps=match work{TableWork::Design(d)=>{workflow::require_baseline(&before,d.base_revision.as_deref(),d.source_fingerprint.as_deref(),b)?;design_steps(&before,d)?.0},TableWork::Operation(o)=>{workflow::require_baseline(&before,Some(&o.base_revision),Some(&o.source_fingerprint),b)?;if o.kind!="clear"{let target=o.target_table.as_deref().ok_or_else(||anyhow!("TABLE_COPY_TARGET_REQUIRED"))?;let exists=if kind.is_pg_family(){format!("SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname={} AND c.relname={}",db::quote_literal(&b.namespace),db::quote_literal(target))}else{format!("SELECT CAST(count(*) AS CHAR) FROM information_schema.TABLES WHERE TABLE_SCHEMA={} AND TABLE_NAME={}",db::quote_literal(&b.namespace),db::quote_literal(target))};ensure!(s.scalar(&exists).await?=="0","TABLE_COPY_TARGET_EXISTS");}operation_steps(&before,o)?}};
     let source_digest=if matches!(work,TableWork::Operation(o) if o.kind=="copy_data"){Some(s.digest(&before,table).await?)}else{None};let mut affected=0;
     let mut expected=before.public.revision.clone();
-    for step in &steps{ensure!(!entry.stopping(),"TABLE_STOPPED_DURING_DDL");
+    let copy=matches!(work,TableWork::Operation(o) if o.kind!="clear");
+    for (position,step) in steps.iter().enumerate(){ensure!(!entry.stopping(),"TABLE_STOPPED_DURING_DDL");
         if kind.is_mysql_family(){ensure!(snapshot(s,b,table,false).await?.public.revision==expected,"TABLE_CONCURRENT_DDL_DETECTED");}
+        // LOCK TABLES 只放行已加锁对象：新建复制目标表、以及对触发器做 CREATE/DROP，都会命中 1100（Table ... was not locked with LOCK TABLES）。
+        // 只在这两处边界释放物理表锁；GET_LOCK 仍由本会话持有，执行后立刻重新加锁并复验源定义，外部并发改写会在提交前被拒绝。
+        let released=kind.is_mysql_family()&&mysql_step_requires_unlock(copy,position,&step.sql)?;
+        if released{s.execute("UNLOCK TABLES").await?;ensure!(!entry.stopping(),"TABLE_STOPPED_DURING_DDL");}
         match s.execute(&step.sql).await{Ok(n)=>{if step.sql.starts_with("DELETE "){affected=n;}steps_out.push(DesignStepResult{label:step.label.clone(),sql:step.sql.clone(),status:"applied".into(),error:None});},Err(e)=>{steps_out.push(DesignStepResult{label:step.label.clone(),sql:step.sql.clone(),status:"failed".into(),error:Some(e.to_string())});return Err(e);}}
         if kind.is_mysql_family(){
-            // 新建目标后把源/目标一起固定，LOCK TABLES 只在同一 owned 会话更新。
-            if let TableWork::Operation(o)=work{if o.kind!="clear"{let target=o.target_table.as_deref().unwrap();let dest=db::qualified(&kind,&b.namespace,target);s.execute(&format!("LOCK TABLES {full} WRITE, {dest} WRITE")).await?;}}
-            expected=snapshot(s,b,table,false).await?.public.revision;
+            // 新建目标后把源/目标一起固定；触发器 DDL 后把源表重新固定。LOCK TABLES 只在同一 owned 会话更新。
+            if copy{let target=match work{TableWork::Operation(o)=>o.target_table.as_deref().ok_or_else(||anyhow!("TABLE_COPY_TARGET_REQUIRED"))?,_=>return Err(anyhow!("TABLE_OPERATION_UNSUPPORTED"))};let dest=db::qualified(&kind,&b.namespace,target);s.execute(&format!("LOCK TABLES {full} WRITE, {dest} WRITE")).await?;}else if released{s.execute(&format!("LOCK TABLES {full} WRITE")).await?;}
+            let source_after=snapshot(s,b,table,false).await?;
+            if copy{ensure!(source_after.base==before.base&&source_after.native.as_ref().map(|m|&m.identity)==before.native.as_ref().map(|m|&m.identity),"TABLE_COPY_SOURCE_CHANGED");if released{if let Some(digest)=&source_digest{ensure!(s.digest(&before,table).await?==*digest,"TABLE_COPY_SOURCE_DATA_CHANGED");}}}
+            expected=source_after.public.revision;
         }
     }
     let target=match work{TableWork::Operation(o)=>o.target_table.as_deref().unwrap_or(table),_=>table};

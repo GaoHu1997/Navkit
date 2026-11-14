@@ -42,6 +42,7 @@ fn page_req(schema: &str, table: &str) -> PageRequest {
         table: table.into(),
         offset: 0,
         limit: 50,
+        include_total: true,
         order_by: None,
         ascending: true,
         filters: Vec::new(),

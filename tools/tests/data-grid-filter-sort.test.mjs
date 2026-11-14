@@ -61,7 +61,10 @@ function harness() {
   window.getSelection = () => null;
   const api = { pageTable: async () => ({ columns: [], rows: [], total: 0, primary_keys: [], elapsed_ms: 0 }) };
   document.querySelector = selector => document.body.querySelector(selector);
-  const context = vm.createContext({ exports: {}, document, window, api, setTimeout, queueMicrotask, requestAnimationFrame: fn => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout, crypto: globalThis.crypto, console, iconSvgByName: name => `<svg aria-hidden="true" data-icon="${name}"></svg>`, svg: () => '', renderCellPreview() {}, GRID_CONTEXT_MENU: [],
+  let frameId = 0;
+  const frames = new Map();
+  const flushFrame = () => { const batch = [...frames]; frames.clear(); for (const [, callback] of batch) callback(); };
+  const context = vm.createContext({ exports: {}, document, window, api, performance, setInterval, clearInterval, setTimeout, queueMicrotask, requestAnimationFrame: fn => { const id = ++frameId; frames.set(id, fn); return id; }, cancelAnimationFrame: id => frames.delete(id), crypto: globalThis.crypto, console, iconSvgByName: name => `<svg aria-hidden="true" data-icon="${name}"></svg>`, svg: () => '', renderCellPreview() {}, GRID_CONTEXT_MENU: [],
     ICON_PLUS_LINE: {}, ICON_MINUS_LINE: {}, ICON_CHECK: {}, ICON_CROSS: {}, ICON_PAGE_FIRST: {}, ICON_PAGE_PREV: {}, ICON_PAGE_NEXT: {}, ICON_PAGE_LAST: {}, ICON_MORE_DOTS: {}, ICON_GRID_VIEW: {}, ICON_FORM_VIEW: {},
     TabView: class { constructor(app, tab) { this.app = app; this.tab = tab; this.el = document.createElement('div'); } },
   });
@@ -77,9 +80,9 @@ function harness() {
   const columns = ['id', 'team', 'name'].map(name => ({ name, type: 'text', nullable: true, primary_key: false, auto_increment: false }));
   const tab = { filters: [], orderBy: null, ascending: true, pageOffset: 4, pageLimit: 20, connectionId: 'test', schema: '', object: 'items', selectedRows: new Set(), page: { columns, rows: [], total: 0, primary_keys: [] } };
   const notices = [];
-  const app = { toast: (...args) => notices.push(args), renderStatus() {}, notifyToolbar() {}, handleColumnSelected() {}, showGridLinesState: () => false, skipNullState: () => false, textPreviewActive: () => false, renderPreviewPanel: () => {} };
+  const app = { toast: (...args) => notices.push(args), renderStatus() {}, updateTableQueryElapsed() {}, updateInfoPanelPublic() {}, notifyToolbar() {}, handleColumnSelected() {}, showGridLinesState: () => false, skipNullState: () => false, textPreviewActive: () => false, renderPreviewPanel: () => {} };
   const view = new context.DataTabView(app, tab);
-  return { context, document, window, api, tab, view, notices, columns, makeView: () => new context.DataTabView(app, tab) };
+  return { context, document, window, api, tab, view, notices, columns, frames, flushFrame, makeView: () => new context.DataTabView(app, tab) };
 }
 test('grid absolute row numbers include page offset while data indices remain local', () => {
   const { context, columns } = harness();
@@ -689,4 +692,341 @@ for (const action of ['sort', 'pagination']) test(`busy editor: delayed ${action
   assert.equal(requests.length, 1); assert.deepEqual(plain([...view.pendingUpdates.get(0)]), [['team', '新页草稿']]);
   assert.equal(view.grid.rows[0][1], '新页草稿'); assert.deepEqual(plain(oldPage.rows), [['1', 'red', 'Alice']]);
   view.grid.dispose();
+});
+
+function queryTimingFixture(t) {
+  const h = harness();
+  let now = 0, nextId = 0;
+  const timers = new Map(), updates = [];
+  h.context.performance = { now: () => now };
+  h.context.setInterval = (fn, ms) => { assert.equal(ms, 100); timers.set(++nextId, fn); return nextId; };
+  h.context.clearInterval = id => timers.delete(id);
+  h.tab.id = 'timed-table';
+  h.view.app.updateTableQueryElapsed = (id, text) => updates.push({ id, text });
+  h.view.applyData = () => {};
+  t.after(() => h.view.destroy());
+  return { ...h, timers, updates, advance(ms) { now += ms; [...timers.values()].forEach(fn => fn()); } };
+}
+
+test('query timer appears before results, ticks, freezes on success and resets for a new query', async t => {
+  const h = queryTimingFixture(t), pending = [];
+  h.api.pageTable = () => new Promise(resolve => pending.push(resolve));
+  const first = h.view.reload();
+  assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.000s（查询中）');
+  assert.equal(h.timers.size, 1);
+  h.advance(350);
+  assert.deepEqual(h.updates.at(-1), { id: 'timed-table', text: '查询耗时: 0.350s（查询中）' });
+  pending[0]({ columns: h.columns, rows: [], total: 0, primary_keys: [], elapsed_ms: 1 });
+  await first;
+  assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.350s');
+  assert.equal(h.timers.size, 0, 'backend elapsed_ms must not replace the visible elapsed time');
+  h.advance(5000); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.350s');
+  const second = h.view.reload(); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.000s（查询中）');
+  h.advance(120); pending[1]({ columns: h.columns, rows: [], total: 0, primary_keys: [] }); await second;
+  assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.120s');
+});
+
+test('query failure stops timing and pending-edit rejection does not start or reset it', async t => {
+  const h = queryTimingFixture(t); let reject;
+  h.api.pageTable = () => new Promise((_, fail) => { reject = fail; });
+  const query = h.view.reload(); h.advance(700); reject(new Error('query failed')); await query;
+  assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.700s'); assert.equal(h.timers.size, 0);
+  h.advance(1000); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.700s');
+  h.view.pendingUpdates.set(0, new Map([['name', 'draft']])); await h.view.reload();
+  assert.equal(h.timers.size, 0); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.700s');
+});
+
+test('stale responses cannot stop a newer query timer; destroy cancels ticks and late results', async t => {
+  const h = queryTimingFixture(t), pending = [];
+  h.api.pageTable = () => new Promise(resolve => pending.push(resolve));
+  const older = h.view.reload(); h.advance(200); const newer = h.view.reload();
+  assert.equal(h.timers.size, 1); h.advance(100);
+  pending[0]({ columns: h.columns, rows: [], total: 0, primary_keys: [] }); await older;
+  assert.equal(h.timers.size, 1); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.100s（查询中）');
+  h.advance(400); pending[1]({ columns: h.columns, rows: [], total: 0, primary_keys: [] }); await newer;
+  assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.500s');
+  const last = h.view.reload(); h.advance(100); const updatesBeforeClose = h.updates.length;
+  h.view.destroy(); assert.equal(h.timers.size, 0);
+  pending[2]({ columns: h.columns, rows: [], total: 0, primary_keys: [] }); await last;
+  h.advance(1000); assert.equal(h.updates.length, updatesBeforeClose);
+});
+
+test('filter summary is a borderless 640px native button with its full grouped expression as hover text', () => {
+  const { view, tab } = harness(), commands = [];
+  view.app.runCommand = command => commands.push(command);
+  tab.filters = [{ conds: [{ column: 'id', operator: '=', value: '129' }, { column: 'id', operator: '=', value: '130', logic: 'OR' }] },
+    { conds: [{ column: 'name', operator: 'like', value: 'long condition '.repeat(60) }] }];
+  view.renderFooter(tab.page);
+  const summary = view.footer.querySelector('.grid-filter-summary');
+  assert.equal(summary.tagName, 'button'); assert.equal(summary.type, 'button');
+  assert.match(summary.textContent, /\(id=129 OR id=130\) AND name~/);
+  assert.equal(summary.title, summary.textContent); assert.ok(summary.title.length > 640);
+  assert.ok(summary.attributes['aria-label'].includes(summary.title));
+  summary.fire('click'); assert.deepEqual(commands, ['filter']);
+  const css = fs.readFileSync(path.join(root, 'src/ui/data-grid-controls.css'), 'utf8');
+  assert.match(css, /\.grid-filter-summary\s*\{[^}]*max-width: 640px/);
+  assert.match(css, /\.grid-filter-summary\s*\{[^}]*border: 0/);
+  assert.match(css, /\.grid-filter-summary\s*\{[^}]*background: transparent/);
+  assert.match(css, /\.grid-filter-summary\s*\{[^}]*text-overflow: ellipsis/);
+});
+
+
+// 大表首屏契约：无COUNT、可见状态、未知总数分页、统计与网格草稿隔离。
+test('first page paints before automatic metadata-only total count and repeated activation does not duplicate it', async () => {
+  const { view, tab, api, columns, flushFrame, frames } = harness();
+  tab.page = null; tab.pageOffset = 0;
+  const pending = []; api.pageTable = req => new Promise(resolve => pending.push({ req, resolve }));
+  const loading = view.reload();
+  assert.equal(pending.length, 1); assert.equal(pending[0].req.include_total, false);
+  assert.equal(view.loadStatus.hidden, false); assert.match(view.loadStatus.textContent, /正在加载/);
+  assert.equal(view.loadStatus.attributes.role, 'status'); assert.equal(view.el.attributes['aria-busy'], 'true');
+  view.activate(); view.activate(); assert.equal(pending.length, 1);
+  pending[0].resolve({ columns, rows: Array.from({ length: 20 }, () => ['1', 'red', 'Alice']), total: 21, total_exact: false, has_more: true, primary_keys: [] });
+  await loading;
+  assert.equal(view.loadStatus.hidden, true); assert.equal(view.loading, false);
+  assert.match(view.statusInfo().pageText, /总数统计中/); assert.doesNotMatch(view.statusInfo().pageText, /共 21 条/);
+  assert.equal(view.footer.querySelectorAll('button').find(b => b.title === '下一页').disabled, false);
+  assert.equal(view.footer.querySelectorAll('button').find(b => b.title.startsWith('最后一页')).disabled, true);
+  assert.equal(view.grid.rows.length, 20); assert.equal(pending.length, 1);
+  view.activate(); view.activate(); assert.equal(frames.size, 1);
+  flushFrame(); assert.equal(pending.length, 1); // 第一帧先绘制，不执行 COUNT。
+  flushFrame(); assert.equal(pending.length, 2);
+  assert.equal(pending[1].req.include_total, true); assert.equal(pending[1].req.limit, 0); assert.equal(pending[1].req.offset, 0);
+  view.activate(); view.activate(); assert.equal(pending.length, 2);
+  pending[1].resolve({ columns: [], rows: [], primary_keys: [], total: 1000000, total_exact: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(view.statusInfo().pageText, /共 1000000 条/);
+  assert.match(view.footer.querySelector('.grid-total-count').textContent, /共 1000000 条/);
+  assert.match(view.footer.querySelector('.grid-pager').children.find(n => n.tagName === 'form').children[1].textContent, /50000 页/);
+  assert.equal(view.grid.rows.length, 20); assert.equal(frames.size, 0);
+  view.destroy();
+});
+
+test('unknown totals use has_more rather than inferred page count and recover from an empty deep page', () => {
+  const { view, tab, button, pager } = paginationFixture();
+  Object.assign(tab.page, { rows: Array.from({ length: 20 }, () => ['1']), total: 21, total_exact: false, has_more: true });
+  view.reload = async () => {};
+  view.renderFooter(tab.page); button('下一页').fire('click'); assert.equal(tab.pageOffset, 20);
+  tab.page.total = 0; tab.page.rows = []; tab.page.has_more = false; tab.pageOffset = 10000;
+  view.renderFooter(tab.page);
+  assert.equal(button('下一页').disabled, true); assert.equal(button('上一页').disabled, false);
+  assert.match(pager().children.find(n => n.tagName === 'form').children[1].textContent, /总数未统计/);
+  button('第一页').fire('click'); assert.equal(tab.pageOffset, 0);
+  Object.assign(tab.page, { total: 40, total_exact: true, has_more: false }); tab.pageOffset = 20;
+  view.renderFooter(tab.page); assert.equal(button('下一页').disabled, true);
+});
+
+test('unknown total page input does not clamp to the observed lower bound', () => {
+  const { view, tab, pager } = paginationFixture();
+  Object.assign(tab.page, { total: 21, total_exact: false, has_more: true });
+  let requests = 0; view.reload = async () => { requests++; };
+  view.renderFooter(tab.page);
+  const input = pager().children.find(n => n.tagName === 'form').children[0];
+  input.value = '50'; input.fire('change'); assert.equal(tab.pageOffset, 980); assert.equal(requests, 1);
+  input.value = String(Number.MAX_SAFE_INTEGER); input.fire('change'); assert.equal(requests, 1);
+});
+
+test('explicit total count sends metadata-only count and never reapplies the grid or discards drafts', async () => {
+  const { view, tab, api } = harness();
+  Object.assign(tab.page, { total: 21, total_exact: false, has_more: true, rows: [['1', 'red', 'Alice']] });
+  view.applyData = () => assert.fail('count must not rerender grid');
+  let resolveCount; const requests = [];
+  api.pageTable = req => { requests.push(req); return new Promise(resolve => { resolveCount = resolve; }); };
+  const original = tab.page;
+  const counting = view.countTotal();
+  assert.equal(requests[0].include_total, true); assert.equal(requests[0].limit, 0); assert.equal(requests[0].offset, 0);
+  assert.equal(view.loading, false); assert.equal(view.countingTotal, true);
+  view.pendingUpdates.set(0, new Map([['name', 'draft']]));
+  resolveCount({ total: 1000000, total_exact: true, columns: [], rows: [], primary_keys: [] }); await counting;
+  assert.equal(tab.page, original); assert.equal(tab.page.total, 1000000); assert.equal(view.pendingUpdates.get(0).get('name'), 'draft');
+  assert.equal(view.countingTotal, false); assert.match(view.statusInfo().pageText, /共 1000000 条/);
+  view.grid.dispose();
+});
+
+test('late count cannot overwrite a newly filtered page', async () => {
+  const { view, tab, api, columns } = harness();
+  Object.assign(tab.page, { total: 21, total_exact: false, has_more: true });
+  let resolveCount; api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
+  const counting = view.countTotal();
+  api.pageTable = async () => ({ columns, rows: [], total: 0, total_exact: true, has_more: false, primary_keys: [] });
+  tab.filters = [{ conds: [{ column: 'name', operator: '=', value: 'no-match' }] }]; await view.reload();
+  resolveCount({ total: 1000000, total_exact: true }); await counting;
+  assert.equal(tab.page.total, 0); assert.equal(view.countingTotal, false); view.grid.dispose();
+});
+
+test('expired count re-enables statistics on the new unknown-total page; destroy ignores late count', async () => {
+  const { view, tab, api, columns } = harness();
+  Object.assign(tab.page, { total: 21, total_exact: false, has_more: true });
+  let resolveCount; api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
+  const older = view.countTotal();
+  api.pageTable = async () => ({ columns, rows: [['2', 'blue', 'Bob']], total: 21, total_exact: false, has_more: true, primary_keys: [] });
+  await view.reload();
+  assert.equal(view.footer.querySelector('.grid-count-total').disabled, true);
+  resolveCount({ total: 1000000, total_exact: true }); await older;
+  assert.equal(tab.page.total, 21); assert.equal(view.footer.querySelector('.grid-count-total').disabled, false);
+  api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
+  const latest = view.countTotal(); view.destroy();
+  view.renderFooter = () => assert.fail('late count must not render a destroyed view');
+  resolveCount({ total: 1000000, total_exact: true }); await latest;
+  assert.equal(tab.page.total, 21);
+});
+
+test('failed initial page exposes an inline error, clears busy state and permits retry', async () => {
+  const { view, tab, api } = harness(); tab.page = null;
+  api.pageTable = async () => { throw new Error('offline'); }; await view.reload();
+  assert.equal(view.loading, false); assert.equal(view.el.attributes['aria-busy'], 'false');
+  assert.equal(view.loadStatus.hidden, false); assert.match(view.loadStatus.textContent, /offline/);
+  api.pageTable = async () => ({ columns: [], rows: [], total: 0, total_exact: true, has_more: false, primary_keys: [] }); await view.reload();
+  assert.equal(view.loadStatus.hidden, true); view.grid.dispose();
+});
+
+test('form navigation crosses page boundaries without a count and disables only the unknown last record', async () => {
+  const { view, tab, api, columns } = harness(); tab.pageOffset = 0;
+  Object.assign(tab.page, { rows: Array.from({ length: 20 }, (_, i) => [String(i), 'red', 'Alice']), total: 21, total_exact: false, has_more: true });
+  view.formIndex = 19; let pending;
+  api.pageTable = req => new Promise(resolve => { pending = { req, resolve }; });
+  const nav = view.buildRecordNav(tab.page);
+  assert.equal(nav.children.find(b => b.title.startsWith('最后一条')).disabled, true);
+  const next = nav.children.find(b => b.title === '下一条'); assert.equal(next.disabled, false); next.fire('click');
+  assert.equal(pending.req.offset, 20); assert.equal(pending.req.include_total, false);
+  pending.resolve({ columns, rows: [['20', 'blue', 'Bob']], total: 21, total_exact: true, has_more: false, primary_keys: [] });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(view.formIndex, 0); assert.equal(tab.pageOffset, 20); assert.equal(view.buildRecordNav(tab.page).children.find(b => b.title === '下一条').disabled, true);
+  view.grid.dispose();
+});
+
+function unknownPage(columns, total = 21, hasMore = true, rowCount = 20) {
+  return { columns, rows: Array.from({ length: rowCount }, (_, i) => [String(i), 'red', 'Alice']), total, total_exact: false, has_more: hasMore, primary_keys: [] };
+}
+
+for (const action of ['page', 'sort']) {
+  test(`exact snapshot survives ${action} without another count; explicit refresh invalidates it`, async () => {
+    const { view, tab, api, columns, flushFrame } = harness(); tab.pageOffset = 0;
+    const requests = [];
+    api.pageTable = async req => { requests.push(req); return req.include_total ? { total: 100, total_exact: true } : unknownPage(columns); };
+    await view.reload(); flushFrame(); flushFrame(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(tab.page.total, 100);
+    if (action === 'page') tab.pageOffset = 20; else tab.orderBy = 'name';
+    await view.reload(action); flushFrame(); flushFrame();
+    assert.equal(tab.page.total, 100); assert.equal(requests.filter(req => req.include_total).length, 1);
+    await view.reload(); assert.equal(tab.page.total_exact, false);
+    flushFrame(); flushFrame(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.filter(req => req.include_total).length, 2); view.destroy();
+  });
+}
+
+test('new short-tail evidence wins over an older count from the same filter', async () => {
+  const { view, tab, api, columns, flushFrame } = harness(); tab.pageOffset = 0;
+  api.pageTable = async () => unknownPage(columns); await view.reload();
+  let resolveCount; api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
+  const count = view.countTotal(); tab.pageOffset = 20;
+  api.pageTable = async () => ({ ...unknownPage(columns, 21, false, 1), total_exact: true });
+  await view.reload('page'); resolveCount({ total: 100, total_exact: true }); await count;
+  flushFrame(); flushFrame(); assert.equal(tab.page.total, 21); assert.equal(tab.page.total_exact, true); view.destroy();
+});
+
+test('current page evidence rejects a count older than externally inserted rows', async () => {
+  const { view, tab, api, columns } = harness(); tab.pageOffset = 0;
+  api.pageTable = async () => unknownPage(columns); await view.reload();
+  let resolveCount; api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
+  const count = view.countTotal(); tab.pageOffset = 20;
+  api.pageTable = async () => unknownPage(columns, 41); await view.reload('page');
+  resolveCount({ total: 21, total_exact: true }); await count;
+  assert.equal(tab.page.total_exact, false); assert.match(view.totalError, /过期/);
+  assert.equal(view.footer.querySelectorAll('button').find(b => b.title === '下一页').disabled, false); view.destroy();
+});
+
+test('automatic count failure is inline, never retries itself, and manual retry preserves drafts', async () => {
+  const { view, tab, api, columns, flushFrame, frames, notices } = harness(); tab.pageOffset = 0;
+  api.pageTable = async () => unknownPage(columns); await view.reload();
+  let calls = 0; api.pageTable = async () => { calls++; throw new Error('count offline'); };
+  view.pendingUpdates.set(0, new Map([['name', 'draft']]));
+  flushFrame(); flushFrame(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1); assert.match(view.totalError, /count offline/); assert.equal(notices.length, 0);
+  view.activate(); flushFrame(); flushFrame(); assert.equal(calls, 1); assert.equal(frames.size, 0);
+  api.pageTable = async () => ({ total: 100, total_exact: true }); await view.countTotal();
+  assert.equal(tab.page.total, 100); assert.equal(view.totalError, ''); assert.equal(view.pendingUpdates.get(0).get('name'), 'draft'); view.destroy();
+});
+
+test('transaction, busy connection and unknown write block counts; transaction cleanup permits a new count', async () => {
+  const { view, tab, api, columns, flushFrame } = harness(); tab.pageOffset = 0;
+  api.pageTable = async () => unknownPage(columns); await view.reload();
+  let calls = 0, active = true, busy = false;
+  view.app.manualTransactionFor = () => ({ active }); view.app.manualTransactionIsBusy = () => busy;
+  api.pageTable = async () => { calls++; return { total: 100, total_exact: true }; };
+  flushFrame(); flushFrame(); await view.countTotal(); assert.equal(calls, 0);
+  active = false; busy = true; await view.countTotal(); assert.equal(calls, 0);
+  busy = false; view.mutationEffectsUnknown = 'unconfirmed'; await view.countTotal(); assert.equal(calls, 0);
+  view.mutationEffectsUnknown = null; view.clearTransactionState(); view.scheduleTotalCount();
+  flushFrame(); flushFrame(); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 1); assert.equal(tab.page.total, 100); view.destroy();
+});
+
+for (const outcome of ['applied', 'conflict', 'unknown']) {
+  test(`real mutation execution invalidates totals and ignores the pre-write count (${outcome})`, async () => {
+    const { view, tab, api, columns } = harness(); tab.pageOffset = 0;
+    api.pageTable = async () => unknownPage(columns); await view.reload();
+    let resolveCount; api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
+    const count = view.countTotal();
+    api.previewRowMutation = async () => ({ plan_id: 'plan' });
+    api.executeRowMutation = async () => {
+      assert.equal(view.totalSnapshot, null); assert.equal(tab.page.total_exact, false);
+      return { plan_id: 'plan', status: outcome === 'unknown' ? 'failed' : outcome, transaction: outcome === 'unknown' ? 'unknown' : outcome === 'applied' ? 'committed' : 'rolled_back', affected: outcome === 'applied' ? 1 : 0, verified: outcome === 'applied', mismatches: [] };
+    };
+    const draft = { connection_id: tab.connectionId, schema: tab.schema, table: tab.object, kind: 'delete' };
+    if (outcome === 'applied') await view.runMutation(draft); else await assert.rejects(view.runMutation(draft));
+    resolveCount({ total: 100, total_exact: true }); await count;
+    assert.equal(tab.page.total_exact, false); assert.equal(view.totalSnapshot, null);
+    if (outcome === 'unknown') assert.match(view.totalText(), /待核对/);
+    view.destroy();
+  });
+}
+
+for (const partialFailure of [false, true]) {
+  test(`real save schedules a fresh count after leaving committing state (partial failure: ${partialFailure})`, async () => {
+    const { view, tab, api, columns, context, flushFrame } = harness(); tab.pageOffset = 0;
+    context.toDbValue = value => value === null ? { kind: 'null' } : { kind: 'text', value };
+    api.pageTable = async () => unknownPage(columns); await view.reload();
+    api.pageTable = async () => ({ total: 100, total_exact: true }); await view.countTotal();
+    let executes = 0, counts = 0;
+    api.previewRowMutation = async () => ({ plan_id: 'plan' });
+    api.executeRowMutation = async () => {
+      assert.equal(view.committing, true); assert.equal(tab.page.total_exact, false); executes++;
+      const failed = partialFailure && executes === 2;
+      return { plan_id: 'plan', status: failed ? 'conflict' : 'applied', transaction: failed ? 'rolled_back' : 'committed', affected: failed ? 0 : 1, verified: !failed, mismatches: [] };
+    };
+    api.pageTable = async req => {
+      if (req.include_total) { assert.equal(view.committing, false); counts++; return { total: 98, total_exact: true }; }
+      return unknownPage(columns);
+    };
+    view.pendingDeletes.add(0); view.pendingDeletes.add(1);
+    await view.commitEdits(); assert.equal(view.committing, false); assert.equal(tab.page.total_exact, false);
+    assert.equal(view.pendingDeletes.size, partialFailure ? 1 : 0);
+    flushFrame(); flushFrame(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(executes, 2); assert.equal(counts, 1); assert.equal(tab.page.total, 98); view.destroy();
+  });
+}
+
+test('destroy cancels either queued animation frame before any count IPC', async () => {
+  for (const afterFirstFrame of [false, true]) {
+    const { view, tab, api, columns, flushFrame, frames } = harness(); tab.pageOffset = 0;
+    api.pageTable = async () => unknownPage(columns); await view.reload();
+    let calls = 0; api.pageTable = async () => { calls++; return { total: 100, total_exact: true }; };
+    if (afterFirstFrame) flushFrame(); view.destroy(); flushFrame(); flushFrame();
+    assert.equal(calls, 0); assert.equal(frames.size, 0);
+  }
+});
+
+test('table information waits for first-page data and requests metadata without a hidden row count', async () => {
+  const h = harness(), { view, tab, api, columns } = h;
+  bindColumnInfo(h); view.app.tableMetaCache.clear(); view.app.activeTab = tab; tab.page = null;
+  const calls = [];
+  api.tableStatus = async () => { calls.push('status'); return []; };
+  api.getTableDdl = async () => { calls.push('ddl'); return 'CREATE TABLE items(id INTEGER)'; };
+  api.getTableSchema = async (...args) => { calls.push(['schema', ...args]); return { columns, indexes: [], foreign_keys: [] }; };
+  view.app.updateInfoPanelPublic = () => view.app.renderTableInfoPanel(tab);
+  view.app.renderTableInfoPanel(tab); assert.deepEqual(calls, []);
+  api.pageTable = async req => { calls.push(['page', req.include_total]); return { columns, rows: [], total: 0, total_exact: true, has_more: false, primary_keys: [] }; };
+  await view.reload(); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls, [['page', false], 'status', 'ddl', ['schema', tab.connectionId, tab.schema, tab.object, false]]);
+  assert.equal(view.app.tableMetaCache.size, 1); view.destroy();
 });

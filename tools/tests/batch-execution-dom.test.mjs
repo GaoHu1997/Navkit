@@ -15,6 +15,8 @@ after(async () => {
 });
 async function withPage(run) {
   const page = await fixture.browser.newPage({ viewport: { width: 1280, height: 900 } }); page.setDefaultTimeout(7000);
+  // 「关闭即转后台」会先弹确认框：E2E 一律接受，表示用户同意转入后台。
+  page.on('dialog', dialog => { void dialog.accept(); });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(fixture.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -75,6 +77,44 @@ test('真实 SQL 对话框：两 tab、只读固定目标/路径、五种编码�
   await page.evaluate(() => window.batchFixture.source.releaseRegistration()); await waitContext(page);
   await page.waitForFunction(() => window.batchFixture.source.calls.some(call => call[0] === 'cancel'));
   assert.equal(await page.evaluate(() => window.batchFixture.source.calls.filter(call => call[0] === 'run').length), 0);
+}));
+
+test('SQL 文件总超时默认不限时，明确发送 0，执行与排空期间锁定', async () => withPage(async page => {
+  await page.evaluate(() => { window.batchFixture.source.mode = 'delayed-register'; window.batchFixture.openFile(); });
+  const dialog = fileDialog(page), timeout = dialog.getByLabel('文件总超时（秒）', { exact: true });
+  assert.equal(await timeout.inputValue(), '0');
+  assert.match(await dialog.innerText(), /整个 SQL 文件.*0 表示不限时/);
+  await dialog.getByRole('button', { name: '开始执行', exact: true }).click();
+  assert.equal(await timeout.isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.batchFixture.source.calls.find(call => call[0] === 'register')[1].timeout_ms), 0);
+  assert.equal(await page.evaluate(() => window.batchFixture.ipcCalls.find(call => call[0] === 'register_batch_execution')[1].request.timeout_ms), 0);
+  await page.evaluate(() => window.batchFixture.source.releaseRegistration()); await waitContext(page);
+  await snapshot(page, { state: 'succeeded', pending: true });
+  await page.waitForFunction(() => window.batchFixture.service.list()[0].state === 'succeeded');
+  assert.equal(await timeout.isDisabled(), true);
+  await snapshot(page, { state: 'succeeded', pending: false, elapsed: 4000 });
+  await page.waitForFunction(() => !window.batchFixture.service.list()[0].busy);
+  assert.equal(await timeout.isEnabled(), true);
+}));
+
+test('SQL 文件总超时拦截无效整数，秒转换为毫秒后提交并保留配置', async () => withPage(async page => {
+  await page.evaluate(() => window.batchFixture.openFile());
+  const dialog = fileDialog(page), timeout = dialog.getByLabel('文件总超时（秒）', { exact: true });
+  for (const value of ['', '-1', '1.5', '9007199254741']) {
+    await timeout.fill(value);
+    await dialog.getByRole('button', { name: '开始执行', exact: true }).click();
+    assert.equal(await timeout.getAttribute('aria-invalid'), 'true');
+    assert.equal(await timeout.evaluate(input => input === document.activeElement), true);
+    assert.match(await dialog.innerText(), /必须是非负整数秒/);
+    assert.equal(await page.evaluate(() => window.batchFixture.source.calls.filter(call => call[0] === 'register').length), 0);
+  }
+  await timeout.fill('75');
+  assert.equal(await timeout.getAttribute('aria-invalid'), null);
+  await dialog.getByRole('button', { name: '开始执行', exact: true }).click(); await waitContext(page);
+  assert.equal(await page.evaluate(() => window.batchFixture.source.calls.find(call => call[0] === 'register')[1].timeout_ms), 75000);
+  assert.equal(await page.evaluate(() => window.batchFixture.ipcCalls.find(call => call[0] === 'register_batch_execution')[1].request.timeout_ms), 75000);
+  assert.equal(await timeout.inputValue(), '75');
+  assert.equal(await timeout.isDisabled(), true);
 }));
 
 test('只读 SQL 入口门禁不登记任务', async () => withPage(async page => {

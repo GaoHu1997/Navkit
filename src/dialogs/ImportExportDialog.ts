@@ -5,7 +5,8 @@ import { formatError } from "../core/execution";
 import { bindExportPath } from "../core/export-path";
 import { namespaceLabel } from "../core/database-picker";
 import { accessibleDialog, taskFeedback, openSyncDialog } from "./SyncDialog";
-import type { ConnectionConfig, ExportOptions, ImportOptions } from "../core/types";
+import type { ConnectionConfig, ExportOptions, ExportTaskOptions, ImportOptions } from "../core/types";
+import { toolConnectionError } from "../core/toolCapabilities";
 import { Dialog, field as dialogField, radioGroup, select, textInput } from "../ui/Dialog";
 import { Wizard } from "../ui/Wizard";
 import { TransferProgress } from "../ui/TransferProgress";
@@ -94,6 +95,7 @@ export function openImportWizard(
   let wizard!: Wizard;
   let running = false;
   let started = false;
+  let closed = false;
   let feedback: ReturnType<typeof taskFeedback>;
   /** 后台任务句柄（runImport 中创建，taskFeedback 的进度回调联动刷新）。 */
   let taskHandle: TaskHandle | null = null;
@@ -163,7 +165,7 @@ export function openImportWizard(
         { name: "SQL 文件", extensions: ["sql"] },
         { name: "所有文件", extensions: ["*"] },
       ]);
-      if (f) {
+      if (!closed && f) {
         // 按扩展名自动匹配导入格式（.csv → csv、.json → json、.sql → sql）
         const ext = f.slice(f.lastIndexOf(".") + 1).toLowerCase();
         if (ext === "csv" || ext === "json" || ext === "sql") formatSelect.value = ext;
@@ -196,6 +198,7 @@ export function openImportWizard(
     previewBody.replaceChildren(note);
   }
   async function refreshPreview(): Promise<void> {
+    if (closed) return;
     const request = ++previewRequest, file = fileInput.value.trim();
     preview.setAttribute("aria-busy", "false");
     previewRefresh.disabled = !file || formatSelect.value !== "csv";
@@ -209,7 +212,7 @@ export function openImportWizard(
     try {
       const [headers, samples] = await api.previewCsv(file, delimInput.value || ",", encodingSelect.value, 10);
       // 文件或解析参数改变时，迟到响应不能覆盖最新预览。
-      if (request !== previewRequest) return;
+      if (closed || request !== previewRequest) return;
       const names = hasHeader ? headers : headers.map((_, i) => "column" + (i + 1));
       const rows = hasHeader ? samples : [headers, ...samples].slice(0, 10);
       previewMeta.textContent = names.length + " 列 · 前 " + rows.length + " 行";
@@ -255,7 +258,7 @@ export function openImportWizard(
         empty.textContent = "只有列名，没有数据行。"; previewBody.append(empty);
       }
     } catch (error) {
-      if (request !== previewRequest) return;
+      if (closed || request !== previewRequest) return;
       previewMeta.textContent = "读取失败";
       showPreviewMessage("预览失败：" + formatError(error), true);
     } finally {
@@ -312,16 +315,20 @@ export function openImportWizard(
     targetSchema.disabled = true;
     try {
       const databases = (await api.listDatabases(connection.id)).map(([name]) => name);
+      if (closed) return;
       if (databases.length) {
         targetSchema.replaceChildren(...databases.map(name => new Option(name, name)));
         targetSchema.value = databases.includes(schema) ? schema : databases[0];
         tableStatus.textContent = "";
       } else tableStatus.textContent = "当前连接没有可用数据库或模式。";
-    } catch (reason) { tableStatus.textContent = `数据库元数据读取失败：${String(reason)}`; }
+    } catch (reason) { if (closed) return; tableStatus.textContent = `数据库元数据读取失败：${String(reason)}`; }
+    if (closed) return;
     targetSchema.disabled = false;
     await loadTableChoices();
   };
   const loadTableChoices = async (): Promise<void> => {
+    if (closed) return;
+    invalidateMapping();
     const request = ++tableRequest, selectedSchema = targetSchema.value;
     tableLoading = true;
     targetTable.replaceChildren(new Option("正在读取表…", ""));
@@ -329,12 +336,12 @@ export function openImportWizard(
     tableStatus.textContent = "正在读取表…";
     try {
       const tables = (await api.listTables(connection.id, selectedSchema)).filter(([, type]) => type === "table").map(([name]) => name);
-      if (request !== tableRequest) return;
+      if (closed || request !== tableRequest) return;
       targetTable.replaceChildren(...(tables.length ? tables.map(name => new Option(name, name)) : [new Option("（无可用表）", "")]));
       targetTable.value = selectedSchema === schema && tables.includes(table) ? table : (tables[0] ?? "");
       tableStatus.textContent = tables.length ? "" : "当前数据库或模式没有可用表，可勾选新建表。";
     } catch (reason) {
-      if (request !== tableRequest) return;
+      if (closed || request !== tableRequest) return;
       targetTable.replaceChildren(new Option("读取失败", ""));
       tableStatus.textContent = "表元数据读取失败：" + formatError(reason);
     } finally {
@@ -359,44 +366,60 @@ export function openImportWizard(
   const mapTable = document.createElement("table");
   mapTable.className = "mini-table";
   let mappingInputs: { source: string; target: HTMLSelectElement }[] = [];
-  let mappingError = "", mappingLoading = false;
+  let mappingError = "", mappingLoading = false, mappingRequest = 0;
+  const mappingSnapshot = () => ({ file: fileInput.value.trim(), format: formatSelect.value,
+    delimiter: delimInput.value || ",", encoding: encodingSelect.value, hasHeader: headerInput.checked,
+    schema: targetSchema.value || schema, table: targetTableName(), create: createInput.checked });
+  const invalidateMapping = (): void => {
+    ++mappingRequest; mappingLoading = false; mappingError = "";
+    mappingInputs = []; mapTable.replaceChildren(); mapNote.removeAttribute("role");
+  };
   const mapRefresh = document.createElement("button");
   mapRefresh.className = "btn"; mapRefresh.textContent = "刷新列映射";
   mapRefresh.addEventListener("click", () => void refreshMapping());
   p3.append(mapRefresh);
-  for (const control of [fileInput, delimInput, formatSelect, encodingSelect, headerInput]) control.addEventListener("change", () => { mappingInputs = []; mapTable.replaceChildren(); });
-  targetTable.addEventListener("change", () => { mappingInputs = []; mapTable.replaceChildren(); tableStatus.textContent = ""; });
+  for (const control of [fileInput, delimInput, formatSelect, encodingSelect, headerInput, targetSchema, targetTable, newTableInput, createInput]) {
+    control.addEventListener("change", invalidateMapping);
+    if (control instanceof HTMLInputElement && control.type !== "checkbox") control.addEventListener("input", invalidateMapping);
+  }
+  targetTable.addEventListener("change", () => { tableStatus.textContent = ""; });
   async function refreshMapping() {
-    if (mappingLoading) return;
-    if (formatSelect.value !== "csv") { mapNote.textContent = formatSelect.value === "sql" ? "SQL 按脚本原始目标执行，不使用本向导列映射。" : "JSON 按对象键名自动匹配，未指定的目标列保留默认值。"; return; }
+    if (closed || mappingLoading) return;
+    const snapshot = mappingSnapshot(), request = ++mappingRequest;
+    const current = () => !closed && request === mappingRequest && JSON.stringify(snapshot) === JSON.stringify(mappingSnapshot());
+    if (snapshot.format !== "csv") { mapNote.textContent = snapshot.format === "sql" ? "SQL 按脚本原始目标执行，不使用本向导列映射。" : "JSON 按对象键名自动匹配，未指定的目标列保留默认值。"; return; }
     mappingLoading = true;
     try {
-      const [headers] = await api.previewCsv(fileInput.value.trim(), delimInput.value, encodingSelect.value, 10);
-      const names = headerInput.checked ? headers : headers.map((_, i) => `column${i + 1}`);
+      const [headers] = await api.previewCsv(snapshot.file, snapshot.delimiter, snapshot.encoding, 10);
+      if (!current()) return;
+      const names = snapshot.hasHeader ? headers : headers.map((_, i) => `column${i + 1}`);
       let targets = names;
       try {
-        const meta = await api.getTableSchema(connection.id, targetSchema.value || schema, targetTableName());
+        const meta = await api.getTableSchema(connection.id, snapshot.schema, snapshot.table);
+        if (!current()) return;
         if (!meta.columns.length) throw new Error("目标表列元数据为空，不能推断为新表");
         targets = meta.columns.map(c => c.name);
       } catch (error) {
+        if (!current()) return;
         // 创建开关不是表不存在的证据；权限、网络及未知读取失败仍保持失败。
-        if (!createInput.checked || (error as { code?: unknown } | null)?.code !== "TABLE_NOT_FOUND") throw error;
+        if (!snapshot.create || (error as { code?: unknown } | null)?.code !== "TABLE_NOT_FOUND") throw error;
       }
       mappingInputs = []; mapTable.replaceChildren();
       const head = document.createElement("tr"); for (const title of ["源列", "目标列"]) { const th = document.createElement("th"); th.textContent = title; head.append(th); } mapTable.append(head);
       names.forEach((name, i) => {
-        const target = select([{ value: "", label: "（跳过）" }, ...targets.map(n => ({ value: n, label: n }))], headerInput.checked ? targets.find(n => n.toLowerCase() === name.toLowerCase()) ?? "" : targets[i] ?? "", 220);
+        const target = select([{ value: "", label: "（跳过）" }, ...targets.map(n => ({ value: n, label: n }))], snapshot.hasHeader ? targets.find(n => n.toLowerCase() === name.toLowerCase()) ?? "" : targets[i] ?? "", 220);
         target.setAttribute("aria-label", `${name} 对应目标列`);
         const tr = document.createElement("tr"), a = document.createElement("td"), b = document.createElement("td"); a.textContent = name; b.append(target); tr.append(a, b); mapTable.append(tr); mappingInputs.push({ source: name, target });
       });
-      mappingError = "";
+      mappingError = ""; mapNote.removeAttribute("role");
       mapNote.textContent = "可逐列映射或跳过；未映射目标列取默认值。";
     } catch (error) {
+      if (!current()) return;
       console.error("导入映射读取失败，保留原映射且禁止导入", error);
       mappingError = formatError(error);
       mapNote.textContent = `映射读取失败，原映射已保留，不能导入：${mappingError}`;
       mapNote.setAttribute("role", "alert");
-    } finally { mappingLoading = false; }
+    } finally { if (request === mappingRequest) mappingLoading = false; }
   }
   p3.appendChild(mapTable);
   panels.push(p3);
@@ -433,11 +456,19 @@ export function openImportWizard(
     220,
   );
   conflictSelect.setAttribute("aria-label", "记录冲突策略");
+  const writeStrategySelect = select([
+    { value: "row", label: "逐行导入（默认）" },
+    { value: "pg_copy", label: "PostgreSQL COPY（受限，完整列映射）" },
+  ], "row", 280);
+  writeStrategySelect.setAttribute("aria-label", "导入写入方式");
+  writeStrategySelect.disabled = connection.kind !== "postgresql";
+
   const conflictCols = textInput("");
   conflictCols.setAttribute("placeholder", "冲突键列（逗号分隔，留空用主键）");
   conflictCols.setAttribute("aria-label", "冲突键列");
   p4.append(
     checkGroup(truncateLabel),
+    field("写入方式:", writeStrategySelect),
     field("记录冲突:", conflictSelect),
     field("冲突键列:", conflictCols),
   );
@@ -460,7 +491,7 @@ export function openImportWizard(
   }
 
   const runImport = async (): Promise<boolean> => {
-          if (running) return false;
+          if (closed || running) return false;
           const file = fileInput.value.trim();
           if (!file) {
             dlg.showError("请选择要导入的文件");
@@ -498,7 +529,7 @@ export function openImportWizard(
             conflict_columns: conflictCols.value.split(",").map((x) => x.trim()).filter(Boolean),
           };
           try {
-            const n = await transferTasks.import({ ...opts, task_id: taskId, column_mapping: formatSelect.value === "csv" ? mappingInputs.filter(m => m.target.value).map(m => ({ source: m.source, target: m.target.value })) : [] });
+            const n = await transferTasks.import({ ...opts, task_id: taskId, write_strategy: writeStrategySelect.value as "row" | "pg_copy", column_mapping: formatSelect.value === "csv" ? mappingInputs.filter(m => m.target.value).map(m => ({ source: m.source, target: m.target.value })) : [] });
             feedback.finish();
             taskHandle?.finish(`共导入 ${n} 行`, file);
             taskHandle = null;
@@ -536,6 +567,7 @@ export function openImportWizard(
     },
   });
   mountTransferWizard(dlg, wizard);
+  dlg.onClose(() => { closed = true; ++previewRequest; ++tableRequest; invalidateMapping(); });
   accessibleDialog(dlg, "导入向导");
   // 后台任务中心联动：进度经 taskFeedback 轮询转发给 runImport 里的任务句柄
   // 原生 <progress> 不再占用步骤内容区；自建进度条统一呈现执行状态。
@@ -572,6 +604,26 @@ export function openExportWizard(
     "csv",
   );
   const exportPath = bindExportPath(fileInput, `${schema}_${table}.csv`, formatSelect);
+  const sqlBatchRows = select([{ value: "1", label: "兼容：每条 INSERT 1 行（默认）" }, { value: "256", label: "显式批量：每条 INSERT 最多 256 行" }], "1");
+  sqlBatchRows.setAttribute("aria-label", "SQL INSERT 组包策略");
+  const sqlBatchBytes = select([{ value: "1048576", label: "1 MiB（默认）" }, { value: "262144", label: "256 KiB" }, { value: "4194304", label: "4 MiB" }], "1048576");
+  sqlBatchBytes.setAttribute("aria-label", "SQL 单语句字节上限");
+  const sqlBatchConfirm = document.createElement("input"); sqlBatchConfirm.type = "checkbox";
+  const sqlBatchConsent = document.createElement("label"); sqlBatchConsent.className = "checkbox";
+  sqlBatchConsent.append(sqlBatchConfirm, document.createTextNode("我理解多行恢复的触发器、默认表达式和语句级时间边界可能不同于逐行恢复"));
+  const sqlBatchNote = document.createElement("p"); sqlBatchNote.className = "transfer-hint"; sqlBatchNote.id = `sql-batch-note-${crypto.randomUUID()}`;
+  sqlBatchRows.setAttribute("aria-describedby", sqlBatchNote.id); sqlBatchBytes.setAttribute("aria-describedby", sqlBatchNote.id);
+  const sqlBatchPanel = document.createElement("div");
+  sqlBatchPanel.append(field("SQL 组包策略:", sqlBatchRows), field("语句预算:", sqlBatchBytes), sqlBatchConsent, sqlBatchNote);
+  const sqlBatchProblem = (): string | null => formatSelect.value !== "sql" || sqlBatchRows.value === "1" ? null : toolConnectionError(connection) ?? (!sqlBatchConfirm.checked ? "请确认多行 SQL 的恢复语句语义变化，或选择兼容单行模式。" : null);
+  const syncSqlBatch = () => {
+    const sql = formatSelect.value === "sql", allowed = toolConnectionError(connection) === null, multi = sqlBatchRows.value !== "1";
+    sqlBatchPanel.hidden = !sql; sqlBatchRows.disabled = !allowed; sqlBatchBytes.disabled = !multi || !allowed; sqlBatchConsent.hidden = !multi || !allowed;
+    sqlBatchNote.textContent = allowed ? "批量仅改变 SQL 文件的 INSERT 语句组织，不执行写入、不改变导出行值。跨页缓冲按行数和目标编码/UTF-8 字节硬限刷写；单行超限或编码失败明确中止，不发布文件。默认单行保持旧格式。" : "多行 SQL 仅支持原生 SQLite/MySQL/PostgreSQL；当前连接只允许兼容单行导出。";
+  };
+  formatSelect.addEventListener("change", () => { sqlBatchConfirm.checked = false; syncSqlBatch(); });
+  sqlBatchRows.addEventListener("change", () => { sqlBatchConfirm.checked = false; syncSqlBatch(); });
+  syncSqlBatch();
   const delimInput = textInput(",");
   const encodingSelect = select(ENCODINGS, "utf-8");
   const headerInput = document.createElement("input");
@@ -599,6 +651,7 @@ export function openExportWizard(
   // 第 2 步：输出格式
   const p2 = document.createElement("div");
   p2.appendChild(formatFields(formatSelect, delimInput, encodingSelect));
+  p2.appendChild(sqlBatchPanel);
   const headerLabel = document.createElement("label");
   headerLabel.className = "checkbox";
   headerLabel.appendChild(headerInput);
@@ -665,6 +718,7 @@ export function openExportWizard(
     const formatLabel = formatSelect.selectedOptions[0]?.textContent ?? formatSelect.value;
     const parts = [formatLabel];
     if (formatSelect.value === "csv") parts.push(`分隔符 ${delimInput.value || ","}`);
+    if (formatSelect.value === "sql") parts.push(sqlBatchRows.value === "1" ? "兼容单行 INSERT" : `已确认多行恢复语义；最多 ${sqlBatchRows.value} 行/语句，${sqlBatchBytes.value} 字节硬限`);
     parts.push(`编码 ${encodingSelect.value}`, headerInput.checked ? "包含列名行" : "不含列名行");
     sumFormat.value = parts.join("，");
     const limitValue = limitInput.value.trim();
@@ -693,6 +747,8 @@ export function openExportWizard(
           if (fileError) { dlg.showError(fileError); return false; }
           const rangeError = rangeProblem();
           if (rangeError) { dlg.showError(rangeError); return false; }
+          const sqlError = sqlBatchProblem();
+          if (sqlError) { dlg.showError(sqlError); return false; }
           started = true; retryBtn.hidden = true; running = true; wizard.setBusy(true);
           progress.begin("正在导出，等待数据库返回…");
           const taskId = feedback.begin();
@@ -711,7 +767,8 @@ export function openExportWizard(
             limit: limitInput.value.trim() ? Number(limitInput.value) : null,
           };
           try {
-            const n = await transferTasks.export({ ...opts, task_id: taskId });
+            const taskOptions: ExportTaskOptions = { ...opts, task_id: taskId, sql_batch_rows: opts.format === "sql" ? Number(sqlBatchRows.value) : 1, sql_batch_bytes: opts.format === "sql" && sqlBatchRows.value !== "1" ? Number(sqlBatchBytes.value) : 0 };
+            const n = await transferTasks.export(taskOptions);
             feedback.finish();
             exportTaskHandle?.finish(`共导出 ${n} 行`, file);
             exportTaskHandle = null;
@@ -735,7 +792,7 @@ export function openExportWizard(
     steps: steps.map((label, index) => ({
       label,
       render: host => host.appendChild(panels[index]),
-      validate: index === 0 ? rangeProblem : index === 2 ? exportPath.problem : undefined,
+      validate: index === 0 ? rangeProblem : index === 1 ? sqlBatchProblem : index === 2 ? exportPath.problem : undefined,
     })),
     onEnter: index => {
       if (index === 2) { void exportPath.ready; exportPath.refresh(); }

@@ -2,6 +2,9 @@
 
 import "./styles/base.css";
 import "./styles/connection-dialog.css";
+import "./ui/searchable-select.css";
+import { installSearchableSelects } from "./ui/SearchableSelect";
+import { installSearchableInputs } from "./ui/SearchableInput";
 import { App } from "./core/App";
 import { formatError } from "./core/execution";
 
@@ -10,6 +13,8 @@ if (!root) {
   throw new Error("找不到 #app 根节点");
 }
 
+installSearchableSelects();
+installSearchableInputs();
 const app = new App(root);
 app.init().catch((e) => {
   console.error("应用启动失败", e);

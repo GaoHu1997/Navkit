@@ -164,11 +164,51 @@ pub fn validate_connection_options(state: State<'_, AppState>, id: String) -> Cm
     Ok(out)
 }
 
-/// 测试连接。
+/// 测试连接：握手、版本探测及清理共用一个期限；同步驱动不能阻塞 IPC 执行器。
 #[tauri::command]
 pub async fn test_connection(req: ConnectionRequest) -> CmdResult<TestResult> {
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(req.timeout_secs.clamp(1, 86400));
+    run_connection_test(deadline, test_connection_inner(req, deadline)).await
+}
+
+fn connection_test_timeout() -> TestResult {
+    TestResult {
+        ok: false,
+        message: "CONNECT_TIMEOUT: 测试连接超时；后台继续清理迟到连接，未保存配置".into(),
+        version: String::new(),
+        charset: String::new(),
+    }
+}
+
+async fn run_connection_test<F>(deadline: tokio::time::Instant, work: F) -> CmdResult<TestResult>
+where
+    F: std::future::Future<Output = CmdResult<TestResult>> + Send + 'static,
+{
+    let runtime = tokio::runtime::Handle::current();
+    let context = crate::sql_history::current_context();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    // ODBC/driver discovery may block before its first await. A plain async spawn
+    // would still occupy the runtime; never abort this owner on caller timeout.
+    tokio::task::spawn_blocking(move || {
+        let result = runtime.block_on(crate::sql_history::scope(context, work));
+        let _ = send.send(result);
+    });
+    match tokio::time::timeout_at(deadline, receive).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(AppError::coded("CONNECTION_TEST_UNKNOWN", "测试连接工作任务异常退出；未保存配置")),
+        Err(_) => Ok(connection_test_timeout()),
+    }
+}
+
+#[cfg(test)]
+#[path = "commands_connection_test_deadline_tests.rs"]
+mod connection_test_deadline_tests;
+
+async fn test_connection_inner(req: ConnectionRequest, deadline: tokio::time::Instant) -> CmdResult<TestResult> {
     match db::open(&req).await {
         Ok(conn) => {
+            let result = tokio::time::timeout_at(deadline, async {
             let mut version = String::new();
             let mut charset = String::new();
             match &conn {
@@ -254,6 +294,12 @@ pub async fn test_connection(req: ConnectionRequest) -> CmdResult<TestResult> {
                 version,
                 charset,
             })
+            }).await.unwrap_or_else(|_| Ok(connection_test_timeout()));
+            // Always dispose the owned test connection, including a late handshake
+            // or timed-out metadata probe; no test connection is registered.
+            db::shutdown_db(&conn).await;
+            drop(conn);
+            result
         }
         Err(e) => Ok(TestResult {
             ok: false,
@@ -337,6 +383,17 @@ pub async fn list_databases(
     schema::list_databases(db.as_ref(), kind_of(&state, &id)?).await.map_err(AppError::from)
 }
 
+/// 表设计器「选项」页的真实候选项（引擎 / 字符集 / 排序规则 / 行格式）。
+#[tauri::command]
+pub async fn table_option_choices(
+    state: State<'_, AppState>,
+    id: String,
+) -> CmdResult<schema::TableOptionChoices> {
+    let _activity_guard = state.activity.enter()?;
+    let db = ensure_db(&state, &id).await?;
+    schema::table_option_choices(db.as_ref(), kind_of(&state, &id)?).await.map_err(AppError::from)
+}
+
 /// 列出某数据库下的表与视图。
 #[tauri::command]
 pub async fn list_tables(
@@ -382,10 +439,28 @@ pub async fn get_table_schema(
     id: String,
     schema_name: String,
     table: String,
+    include_row_count: Option<bool>,
 ) -> CmdResult<TableSchema> {
     let _activity_guard = state.activity.enter()?;
     let db = scoped_db(&state, &id, &schema_name).await?;
-    schema::table_schema(db.as_ref(), kind_of(&state, &id)?, &schema_name, &table).await.map_err(AppError::from)
+    let kind = kind_of(&state, &id)?;
+    if include_row_count == Some(false) {
+        schema::table_schema_for_page(db.as_ref(), kind, &schema_name, &table).await.map_err(AppError::from)
+    } else {
+        schema::table_schema(db.as_ref(), kind, &schema_name, &table).await.map_err(AppError::from)
+    }
+}
+
+/// 只读关系图目录：不复用完整编辑结构验证，不统计表行数。
+#[tauri::command]
+pub async fn get_diagram_metadata(
+    state: State<'_, AppState>,
+    id: String,
+    schema_name: String,
+) -> CmdResult<crate::schema_diagram::DiagramMetadata> {
+    let _activity_guard = state.activity.enter()?;
+    let db = scoped_db(&state, &id, &schema_name).await?;
+    crate::schema_diagram::load(db.as_ref(), kind_of(&state, &id)?, &schema_name).await.map_err(AppError::from)
 }
 
 /// 分页读取表数据。
@@ -1183,40 +1258,10 @@ pub async fn run_export(
     let kind = kind_of(&state, &id)?;
     let db = scoped_db(&state, &id, &opts.schema).await?;
     protect_export_path(&state, &opts.file, db.as_ref()).await?;
-    let (names, rows) = crate::transfer::fetch_transfer_rows(
-        db.as_ref(),
-        &kind,
-        &opts.schema,
-        &opts.table,
-        opts.where_clause.as_deref(),
-        opts.limit,
-    )
-    .await
-    .map_err(AppError::from)?;
-    match opts.format.to_ascii_lowercase().as_str() {
-        "csv" => crate::transfer::export_csv(
-            &opts.file,
-            &names,
-            &rows,
-            &opts.delimiter,
-            &opts.encoding,
-            opts.has_header,
-        )
-        .map_err(AppError::from),
-        "json" => crate::transfer::export_json(&opts.file, &names, &rows, &opts.encoding)
-            .map_err(AppError::from),
-        "sql" => crate::transfer::export_sql(
-            &opts.file,
-            kind,
-            &opts.schema,
-            &opts.table,
-            &names,
-            &rows,
-            &opts.encoding,
-        )
-        .map_err(AppError::from),
-        other => Err(AppError::new(format!("不支持的导出格式: {}", other))),
-    }
+    // 与交互导出同一条流式管线：游标读取 + 有界写入 + 原子发布，避免整表物化。
+    crate::transfer::export_table_streaming(db.as_ref(), &kind, &opts)
+        .await
+        .map_err(AppError::from)
 }
 
 /// 导出查询结果（结果网格导出）。
@@ -1434,8 +1479,13 @@ pub async fn run_sync(
 pub async fn sync_diff(
     state: State<'_, AppState>,
     req: crate::sync::SyncDiffRequest,
+    bounded: Option<bool>,
+    memory: Option<crate::sync::DiffMemoryOptions>,
 ) -> CmdResult<crate::sync::SyncDiffReport> {
     let _activity_guard = state.activity.enter()?;
+    if memory.is_some() && bounded.unwrap_or(false) {
+        return Err(AppError::new("MEMORY_BUDGET_INVALID: memory与bounded=true互斥，请仅选择一种比较策略"));
+    }
     let source_kind = kind_of(&state, &req.source_connection)?;
     let target_kind = kind_of(&state, &req.target_connection)?;
     if !crate::sync::supported(&source_kind) || !crate::sync::supported(&target_kind) {
@@ -1443,7 +1493,25 @@ pub async fn sync_diff(
     }
     let source = scoped_db(&state, &req.source_connection, &req.source_schema).await?;
     let target = scoped_db(&state, &req.target_connection, &req.target_schema).await?;
-    crate::sync::diff(source.as_ref(), &source_kind, target.as_ref(), &target_kind, &req).await.map_err(AppError::from)
+    if let Some(memory) = memory {
+        owned_tool_task(Box::pin(async move {
+            crate::sync::diff_with_memory(source.as_ref(), &source_kind, target.as_ref(), &target_kind, &req, &memory).await
+        }), _activity_guard).await
+    } else if bounded.unwrap_or(false) {
+        crate::sync::diff_bounded(source.as_ref(), &source_kind, target.as_ref(), &target_kind, &req).await.map_err(AppError::from)
+    } else {
+        crate::sync::diff(source.as_ref(), &source_kind, target.as_ref(), &target_kind, &req).await.map_err(AppError::from)
+    }
+}
+
+/// Only OS resource sampling; execution revalidates and never trusts this preview.
+#[tauri::command]
+pub async fn preview_diff_memory(
+    state: State<'_, AppState>,
+    memory: Option<crate::sync::DiffMemoryOptions>,
+) -> CmdResult<crate::sync::DiffMemoryPreview> {
+    let _activity_guard = state.activity.enter()?;
+    crate::sync::preview_diff_memory(memory).map_err(AppError::from)
 }
 
 /// 整库同步（库到库）：逐表独立事务，单表失败继续并在报告中记录。
@@ -1574,18 +1642,8 @@ pub fn list_backups(connection_id: String, schema_name: String) -> CmdResult<Vec
                 .ok()
                 .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default();
-            // 注释写在文件头 "-- 注释     : xxx"
-            let comment = std::fs::read_to_string(&p)
-                .unwrap_or_default()
-                .lines()
-                .take(12)
-                .find_map(|l| l.trim().strip_prefix("-- 注释"))
-                .map(|s| {
-                    s.trim_start_matches(|c: char| c == ' ' || c == ':' || c == '：')
-                        .trim()
-                        .to_string()
-                })
-                .unwrap_or_default();
+            // 注释写在文件头 "-- 注释     : xxx"；只读取有界前缀，绝不为前 12 行加载整个备份。
+            let comment = storage::read_backup_comment(&p).unwrap_or_default();
             out.push(BackupInfo {
                 name,
                 modified,
@@ -1598,9 +1656,25 @@ pub fn list_backups(connection_id: String, schema_name: String) -> CmdResult<Vec
     Ok(out)
 }
 
-/// 创建整库备份（转储为 SQL 文件），返回 (数据行数, 文件字节数)。
+/// 已发布备份的完整路径；显示失败不改变已经成功落盘的备份结果。
+fn backup_saved_path(file: &std::path::Path) -> String {
+    let resolved = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let path = resolved.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{}", unc);
+        }
+        if let Some(local) = path.strip_prefix(r"\\?\") {
+            return local.to_owned();
+        }
+    }
+    path.into_owned()
+}
+
+/// 创建整库备份（转储为 SQL 文件），返回行数、字节数、实际路径与跳过警告。
 #[tauri::command]
-pub async fn create_backup(state: State<'_, AppState>, opts: BackupOptions) -> CmdResult<(u64, u64)> {
+pub async fn create_backup(state: State<'_, AppState>, opts: BackupOptions) -> CmdResult<crate::models::BackupResult> {
     let _activity_guard = state.activity.enter()?;
     let id = opts.connection_id.clone();
     let kind = kind_of(&state, &id)?;
@@ -1620,7 +1694,7 @@ pub async fn create_backup(state: State<'_, AppState>, opts: BackupOptions) -> C
             dir.join(format!("{}_{}.sql", opts.schema, stamp))
         }
     };
-    let (rows, bytes) = crate::transfer::dump_database(
+    let report = crate::transfer::dump_database_with_consistency(
         db.as_ref(),
         &kind,
         &opts.schema,
@@ -1630,6 +1704,8 @@ pub async fn create_backup(state: State<'_, AppState>, opts: BackupOptions) -> C
         opts.include_data,
         &file.to_string_lossy(),
         &opts.comment,
+        opts.skip_incompatible_tables,
+        opts.source_consistency.as_deref(),
     )
     .await
     .map_err(AppError::from)?;
@@ -1640,11 +1716,16 @@ pub async fn create_backup(state: State<'_, AppState>, opts: BackupOptions) -> C
             opts.schema,
             id,
             file.file_name().map(|s| s.to_string_lossy()).unwrap_or_default(),
-            rows,
-            bytes
+            report.rows,
+            report.bytes
         ),
     );
-    Ok((rows, bytes))
+    Ok(crate::models::BackupResult {
+        rows: report.rows,
+        bytes: report.bytes,
+        path: backup_saved_path(&file),
+        warnings: report.warnings,
+    })
 }
 
 /// 数据库右键「运行 SQL 文件」：逐条执行选中的 SQL 文件，返回每条语句的执行报告。
@@ -1737,6 +1818,7 @@ pub async fn restore_backup_detailed(
     connection_id: String,
     schema_name: String,
     file: String,
+    task_id: Option<String>,
 ) -> CmdResult<crate::transfer::RestoreReport> {
     let _activity_guard = state.activity.enter()?;
     let _manual_guard = state.manual_transactions.ordinary(&[&connection_id]).await?;
@@ -1748,10 +1830,11 @@ pub async fn restore_backup_detailed(
     let kind = kind_of(&state, &connection_id)?;
     require_writable_connection(&state, &connection_id)?;
     let (_, db) = query_db(&state, &connection_id, Some(&schema_name)).await?;
-    let report =
-        crate::transfer::restore_sql_file_detailed(db.as_ref(), &kind, &path.to_string_lossy())
-            .await
-            .map_err(AppError::from)?;
+    let report = if let Some(task_id) = task_id.as_deref() {
+        crate::transfer::restore_sql_file_task(db.as_ref(), &path.to_string_lossy(), task_id).await
+    } else {
+        crate::transfer::restore_sql_file_detailed(db.as_ref(), &kind, &path.to_string_lossy()).await
+    }.map_err(AppError::from)?;
     storage::log_line(
         "backup",
         &format!(

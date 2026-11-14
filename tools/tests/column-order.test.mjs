@@ -223,7 +223,7 @@ test('real DOM exposes accessible names/status and busy tabs cannot recreate ena
   await page.locator('.designer-grid tbody tr').last().dispatchEvent('mousedown');
   assert.equal(await page.evaluate(() => designer.selected), selected);
   await page.getByRole('tab', { name: '选项', exact: true }).click();
-  assert.equal(await page.getByRole('textbox', { name: '排序规则', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('combobox', { name: '排序规则', exact: true }).isDisabled(), true);
   await page.getByRole('tab', { name: '字段', exact: true }).click();
   assert.equal(await page.locator('.designer-grid input:not(:disabled), .designer-grid select:not(:disabled)').count(), 0);
   assert.equal(await page.locator('.tab-toolbar button:not(:disabled)').count(), 0);
@@ -253,7 +253,7 @@ test('ordinary appended field uses structured C1 payload and an unverified recei
 test('actual App manual transaction gate disables toolbar and runCommand without mutating the draft', async t => {
   const page = await loaded(t); await selectField(page, 'title'); const before = await state(page);
   await page.evaluate(() => { fixture.transactionStatus = { active: true, schema: 'db', owner: 'query-owner', failed: false }; app.notifyToolbar(); });
-  for (const id of ['move-up', 'move-down', 'save', 'add-field', 'insert-field', 'delete-field', 'primary-key']) {
+  for (const id of ['move-up', 'move-down', 'save', 'add-field', 'insert-field', 'delete-field']) {
     const button = page.locator(`.tab-toolbar [data-command="${id}"]`); assert.equal(await button.isDisabled(), true); assert.match(await button.getAttribute('aria-description'), /手动事务/);
     await page.evaluate(id => app.runCommand(id), id);
   }

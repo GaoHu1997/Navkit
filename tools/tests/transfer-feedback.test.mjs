@@ -48,7 +48,7 @@ class Element {
     ['input', 'select', 'textarea', 'button'].includes(c.tagName) && !c.disabled); }
 }
 
-function harness() {
+function harness(options = {}) {
   const intervals = new Map();
   const requests = [];
   const cancellations = [];
@@ -84,7 +84,7 @@ function harness() {
     },
   });
   vm.runInContext(compiled, context, { filename: sourcePath.pathname });
-  const feedback = context.taskFeedback(dlg, status);
+  const feedback = context.taskFeedback(dlg, status, undefined, undefined, options);
   const progress = body.children.find(c => c.tagName === 'progress');
   const cancel = footer.children.find(c => c.tagName === 'button');
   return {
@@ -187,4 +187,33 @@ test('finish followed by begin isolates an old rejection and allows the new task
   assert.equal(h.status.textContent, '新任务完成\n4 / 4 行 · 100%');
   assert.equal(h.intervals.size, 0);
   h.feedback.finish();
+});
+
+test('restore display close preserves background task and invalidates late progress', async () => {
+  const h = harness({ cancelOnClose: false, unit: '条语句', cancelLabel: '停止后续语句' });
+  const id = h.feedback.begin();
+  assert.equal(h.cancel.textContent, '停止后续语句');
+  const poll = h.poll();
+  const before = writesOf(h);
+  h.close();
+  assert.deepEqual(h.cancellations, [], 'closing display is not a database cancel request');
+  poll.request.resolve(response(id, { processed: 3, total: 10 }));
+  await poll.pending;
+  assert.deepEqual(writesOf(h), before);
+  assert.equal(h.intervals.size, 0);
+});
+
+test('restore uses statement units and explicitly requests between-statement stopping', async () => {
+  const h = harness({ cancelOnClose: false, unit: '条语句', cancelLabel: '停止后续语句' });
+  const id = h.feedback.begin();
+  const poll = h.poll();
+  poll.request.resolve(response(id, { processed: 2, total: 10 }));
+  await poll.pending;
+  assert.equal(h.status.textContent, '当前任务正在写入\n2 / 10 条语句 · 20%');
+  await h.cancel.listeners.get('click')();
+  assert.deepEqual(h.cancellations, [id]);
+  assert.equal(h.cancel.disabled, true);
+  assert.match(h.status.textContent, /等待当前数据库操作完成/);
+  h.feedback.finish();
+  assert.equal(h.intervals.size, 0);
 });

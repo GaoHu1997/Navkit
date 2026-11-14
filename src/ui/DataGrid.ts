@@ -65,6 +65,11 @@ export interface GridOptions {
   lined?: boolean;
   /** 跳过 Null（NULL 单元格显示为空白）。 */
   skipNull?: boolean;
+  /**
+   * 列宽铺满容器：按内容量宽后，把容器剩余宽度按比例分给各列，右侧不留大片空白。
+   * 手动拖拽过的列保持用户宽度，不再参与分摊；内容本就超出容器时不压缩。
+   */
+  fillWidth?: boolean;
   /** 行标记（未提交状态：insert=新增行 / delete=待删除行 / dirty=已修改行）。 */
   rowFlags?: Record<number, "insert" | "delete" | "dirty">;
   /** 待提交单元格集合（"row:col" 键）。 */
@@ -124,6 +129,10 @@ export class DataGrid {
   private opts: GridOptions;
   private cb: GridCallbacks;
   private colWidths: number[] = [];
+  /** 内容量出的基准列宽（fillWidth 分摊前），容器变宽时按它重新分配。 */
+  private baseWidths: number[] = [];
+  /** 用户手动调过宽度的列：fillWidth 时固定为用户宽，不参与剩余空间分摊。 */
+  private userSizedCols = new Set<number>();
   private defaultWidth = 96;
   /** 列宽自适应下限 / 上限（逻辑px）。 */
   private static readonly MIN_COL_WIDTH = 64;
@@ -232,6 +241,7 @@ export class DataGrid {
     if (w === this.lastViewport.w && h === this.lastViewport.h) return;
     this.lastViewport = { w, h };
     this.measureMetrics();
+    // renderRows 会应用 fillWidth 的最新列宽，同时重算可视行窗口。
     this.renderRows();
   }
 
@@ -270,9 +280,16 @@ export class DataGrid {
     this.opts = { ...this.opts, ...opts };
     if (columnsChanged) {
       // 列宽自适应：按列名与样本数据量宽，至少完整展示列名（不再均分固定宽）。
-      this.colWidths = this.measureColumnWidths();
+      this.baseWidths = this.measureColumnWidths();
+      this.colWidths = this.baseWidths.slice();
+      this.userSizedCols.clear();
       this.renderHeader();
     } else {
+      if (this.opts.fillWidth) {
+        // 同列刷新也重新量内容，保留用户锁定宽度（空列表加载出数据时尤其重要）。
+        this.baseWidths = this.measureColumnWidths();
+        this.colWidths = this.baseWidths.map((w, i) => this.userSizedCols.has(i) ? this.colWidths[i] : w);
+      }
       this.updateHeaderState();
     }
     this.updateColumnSelectionVisual();
@@ -290,8 +307,8 @@ export class DataGrid {
       const canvas = this.measureCanvas ??= document.createElement("canvas");
       const ctx = canvas.getContext?.("2d");
       if (!ctx) return fallback();
-    const thStyle = getComputedStyle(this.thead);
-    const tdStyle = getComputedStyle(this.tbody);
+    const thStyle = getComputedStyle((this.opts.fillWidth && this.thead.querySelector("th")) || this.thead);
+    const tdStyle = getComputedStyle((this.opts.fillWidth && this.tbody.querySelector("td[data-col]")) || this.tbody);
     // 表头字号加粗（与 base.css 的表头样式一致），数据用正文字体。
     ctx.font = `${thStyle.fontStyle} ${thStyle.fontWeight} ${thStyle.fontSize} ${thStyle.fontFamily}`;
     const headerPad = 18; // 内边距 + 排序三角/拖宽手柄余量
@@ -306,7 +323,8 @@ export class DataGrid {
       const row = this.opts.rows[r] ?? [];
       row.forEach((value, c) => {
         if (value == null || c >= widths.length) return;
-        const w = ctx.measureText(value).width + cellPad;
+        const iconPad = this.opts.fillWidth && c === 0 && this.opts.rowIcons?.[r] ? 23 : 0;
+        const w = ctx.measureText(value).width + cellPad + iconPad;
         if (w > widths[c]) widths[c] = Math.ceil(Math.min(DataGrid.MAX_COL_WIDTH, w));
       });
     }
@@ -322,6 +340,8 @@ export class DataGrid {
   setColWidths(ws: number[]): void {
     this.colWidths = ws.slice(0, this.opts.columns.length);
     while (this.colWidths.length < this.opts.columns.length) this.colWidths.push(this.defaultWidth);
+    this.baseWidths = this.colWidths.slice();
+    this.userSizedCols.clear();
     this.renderHeader();
     this.applyColumnWidths();
   }
@@ -436,22 +456,58 @@ export class DataGrid {
 
   /** 应用列宽到表头与表体（table-layout:fixed 需要表格有确定总宽）。 */
   private applyColumnWidths(): void {
+    const widths = this.effectiveColWidths();
     this.thead.querySelectorAll<HTMLElement>("th[data-col]").forEach((th) => {
       const i = Number(th.dataset.col);
-      th.style.width = `${this.colWidths[i]}px`;
-      th.querySelector(".grid-column-resize-handle")?.setAttribute("aria-valuenow", String(this.colWidths[i]));
+      th.style.width = `${widths[i]}px`;
+      th.querySelector(".grid-column-resize-handle")?.setAttribute("aria-valuenow", String(widths[i]));
     });
     this.tbody.querySelectorAll<HTMLElement>("tr").forEach((tr) => {
       tr.querySelectorAll<HTMLElement>("td[data-col]").forEach((td) => {
         const i = Number(td.dataset.col);
-        td.style.width = `${this.colWidths[i]}px`;
+        td.style.width = `${widths[i]}px`;
       });
     });
-    const sum = this.colWidths.reduce((a, b) => a + b, 0);
-    const rowHeader = this.opts.showRowNumbers === false ? 0 : this.opts.rowHeaderWidth
-      ?? (this.opts.rowNumberOffset !== undefined ? Math.max(40, String(this.opts.rowNumberOffset + this.opts.rows.length).length * 7 + 16) : 40);
+    const sum = widths.reduce((a, b) => a + b, 0);
+    const rowHeader = this.rowHeaderPx();
     this.table.style.setProperty("--grid-row-header-width", `${rowHeader}px`);
     this.table.style.width = `${sum + rowHeader}px`;
+  }
+
+  /** 行号列宽（不显示行号时为 0）。 */
+  private rowHeaderPx(): number {
+    if (this.opts.showRowNumbers === false) return 0;
+    return this.opts.rowHeaderWidth
+      ?? (this.opts.rowNumberOffset !== undefined ? Math.max(40, String(this.opts.rowNumberOffset + this.opts.rows.length).length * 7 + 16) : 40);
+  }
+
+  /**
+   * 实际渲染用的列宽。
+   * fillWidth 开启时：内容量出的基准宽先铺满容器，剩余宽度按基准宽比例分摊给各列，
+   * 右侧不再留大片空白；用户手动拖过的列锁定用户宽度、不参与分摊；
+   * 基准宽本来就超出容器（需要横向滚动）时不压缩，保持可读。
+   */
+  private effectiveColWidths(): number[] {
+    const widths = this.colWidths.slice();
+    if (!this.opts.fillWidth) return widths;
+    const available = this.scroll.clientWidth - this.rowHeaderPx();
+    if (!(available > 0) || widths.length === 0) return widths;
+    const isFree = (i: number) => !this.userSizedCols.has(i);
+    const contentSum = widths.reduce((a, b) => a + b, 0);
+    if (contentSum >= available) return widths;
+    const freeIndexes = widths.map((_, i) => i).filter(isFree);
+    const freeBase = freeIndexes.reduce((a, i) => a + (this.baseWidths[i] ?? widths[i]), 0);
+    if (freeIndexes.length === 0 || freeBase <= 0) return widths;
+    const extra = available - contentSum;
+    let used = 0;
+    for (const i of freeIndexes) {
+      const share = Math.floor((extra * (this.baseWidths[i] ?? widths[i])) / freeBase);
+      widths[i] += share;
+      used += share;
+    }
+    // 取整余数补给最后一个自由列，保证总宽正好等于容器宽（否则留 1~n px 白边）。
+    widths[freeIndexes[freeIndexes.length - 1]] += extra - used;
+    return widths;
   }
 
   /** 虚拟滚动渲染（rAF 合并滚动事件；可视窗口没变时跳过重建，避免逐像素滚动整表闪烁）。 */
@@ -654,8 +710,16 @@ export class DataGrid {
     const th = handle.closest<HTMLElement>("th[data-col]");
     if (!th) return;
     const i = Number(th.dataset.col);
-    this.colWidths[i] = e.key === "Home" ? this.defaultWidth
-      : Math.max(40, this.colWidths[i] + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 24 : 8));
+    if (e.key === "Home") {
+      // Home = 恢复基准宽：同时解除用户锁定，重新参与 fillWidth 分摊。
+      this.colWidths[i] = this.opts.fillWidth ? this.baseWidths[i] ?? this.defaultWidth : this.defaultWidth;
+      this.userSizedCols.delete(i);
+    } else {
+      // 必须先取分摊后的宽，再锁定该列，否则首个方向键会跳回内容基准宽。
+      const current = this.effectiveColWidths()[i] ?? this.colWidths[i];
+      this.userSizedCols.add(i);
+      this.colWidths[i] = Math.max(40, current + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 24 : 8));
+    }
     this.applyColumnWidths();
   };
 
@@ -668,7 +732,7 @@ export class DataGrid {
     if ((e.target as HTMLElement).closest(".grid-column-resize-handle") || e.clientX >= rect.right - 8) {
       e.preventDefault();
       this.suppressNextHeaderClick = true;
-      this.resizing = { col: i, startX: e.clientX, startW: this.colWidths[i] };
+      this.resizing = { col: i, startX: e.clientX, startW: this.effectiveColWidths()[i] };
       // 视口坐标配 fixed 定位，水平滚动/DPI 下不混用 thead 局部坐标。
       const r = document.createElement("div");
       r.className = "grid-resizer";
@@ -684,7 +748,7 @@ export class DataGrid {
         border: "1px solid var(--accent-500)", borderRadius: "var(--r-1)",
         fontSize: "var(--fs-11)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
       });
-      width.textContent = `${Math.round(this.colWidths[i])} px`;
+      width.textContent = `${Math.round(this.resizing.startW)} px`;
       r.appendChild(width);
       // 全屏透明拖动层让指针移到单元格/工具栏仍保持 col-resize，避免子元素默认光标覆盖 body。
       const overlay = document.createElement("div");
@@ -706,7 +770,9 @@ export class DataGrid {
   private onMouseMove = (e: MouseEvent): void => {
     if (!this.resizing) return;
     const delta = e.clientX - this.resizing.startX;
+    if (delta === 0 && !this.userSizedCols.has(this.resizing.col)) return;
     const w = Math.max(40, this.resizing.startW + delta);
+    this.userSizedCols.add(this.resizing.col);
     this.colWidths[this.resizing.col] = w;
     this.applyColumnWidths();
     const th = this.thead.querySelector<HTMLElement>(`th[data-col="${this.resizing.col}"]`);

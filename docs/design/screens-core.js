@@ -38,21 +38,21 @@ import {
 
 export function tokensScreen() {
   const colors = [
-    ["--bg-app", "#eff2f6"],
-    ["--bg-chrome", "#ffffff"],
-    ["--bg-subtle", "#f6f8fa"],
-    ["--bg-hover", "#eff2f6"],
-    ["--bg-selected", "#eef4fe"],
-    ["--accent-500", "#2f6fed"],
-    ["--accent-600", "#1f5bd4"],
-    ["--border", "#dde3ea"],
-    ["--border-strong", "#c6cfda"],
-    ["--text", "#262e38"],
-    ["--text-secondary", "#5a6675"],
-    ["--text-tertiary", "#7b8695"],
+    ["--bg-app", "#f7f8fa"],
+    ["--bg-chrome", "#f7f8fa"],
+    ["--bg-subtle", "#f7f8fa"],
+    ["--bg-hover", "#f1f3f6"],
+    ["--bg-selected", "#e3edfd"],
+    ["--accent-500", "#3574f0"],
+    ["--accent-600", "#2b62d9"],
+    ["--border", "#e4e7ec"],
+    ["--border-strong", "#d3d8e0"],
+    ["--text", "#23272f"],
+    ["--text-secondary", "#5c6673"],
+    ["--text-tertiary", "#7d8794"],
     ["--ok-500", "#1f9254"],
-    ["--warn-500", "#b5760a"],
-    ["--danger-500", "#d93636"],
+    ["--warn-500", "#b54708"],
+    ["--danger-500", "#d92d20"],
     ["--n-25", "#fbfcfd"],
   ];
   return screen(
@@ -85,10 +85,10 @@ export function tokensScreen() {
       <div class="specimen">
         <div class="specimen-label">命令条具象图标 · 24px 填充色块（原创构成，每个 2–3 色）</div>
         <div style="display:flex;gap:12px;flex-wrap:wrap">
-          ${Object.keys(PICT_ICONS)
+          ${[["连接","连接"],["新建查询","新建查询"],["表","表"],["视图","视图"],["函数","函数"],["用户","用户"],["其它","其它"],["查询工具","查询"],["备份","备份"],["自动运行","自动任务"],["图表","图表"],["模型","关系图"]]
             .map(
-              (k) =>
-                `<div style="display:flex;flex-direction:column;align-items:center;gap:5px;width:64px">${pictIcon(k, 26)}<span style="font-size:10px;color:var(--text-tertiary)">${k}</span></div>`,
+              ([k, l]) =>
+                `<div style="display:flex;flex-direction:column;align-items:center;gap:5px;width:64px">${pictIcon(k, 26)}<span style="font-size:10px;color:var(--text-tertiary)">${l}</span></div>`,
             )
             .join("")}
         </div>
@@ -243,7 +243,7 @@ export function objectsScreen() {
 
   return screen(
     "对象页 · 主视图",
-    "四栏结构：标题栏(38) / 命令条(46) / 标签条(34) / 页工具栏(34)；网格斑马底 28px 行高",
+    "四栏结构：标题栏 36 / 命令条 44 / 标签条 32 / 页工具栏 32；网格斑马底 26px 行高",
     shell({
       doc: "dbswitch — localhost",
       active: "表",
@@ -290,7 +290,7 @@ export function objectsScreen() {
 }
 
 function gridToolbar() {
-  return `<div style="display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-bottom:1px solid var(--border-subtle)">
+  return `<div style="display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-bottom:1px solid var(--border-subtle)">
     <span style="font-size:12px;font-weight:600;color:var(--text)">对象</span>
     <span style="font-size:11px;color:var(--text-tertiary)">19 个表 · 3 个视图</span>
     <div style="flex:1"></div>

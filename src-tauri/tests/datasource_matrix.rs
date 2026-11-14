@@ -61,7 +61,7 @@ async fn all_datasources_live_matrix() {
             let objects = schema::list_tables(connection.as_ref(), f.request.kind.clone(), &f.container).await?;
             anyhow::ensure!(objects.iter().any(|(name,_)| name == &f.object), "sentinel object not in real tree");
             let page = schema::page_table(connection.as_ref(), f.request.kind.clone(), &PageRequest {
-                connection_id: id.clone(), schema:f.container.clone(),table:f.object.clone(),offset:0,limit:50,
+                connection_id: id.clone(), schema:f.container.clone(),table:f.object.clone(),offset:0,limit:50,include_total:true,
                 order_by:None,ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None,
             }).await?;
             anyhow::ensure!(!page.columns.is_empty(), "browse returned no columns");

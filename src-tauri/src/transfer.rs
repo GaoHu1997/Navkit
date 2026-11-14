@@ -16,13 +16,43 @@ use crate::transfer_stream::{CsvStream, JsonStream, TransferLimits};
 use futures::TryStreamExt;
 
 #[path = "transfer_output.rs"] mod transfer_output;
+#[path = "transfer_sql_batch.rs"] mod transfer_sql_batch;
 #[path = "transfer_export_cursor.rs"] mod transfer_export_cursor;
 #[path = "transfer_sql_reader.rs"] mod transfer_sql_reader;
+#[path = "transfer_restore_stream.rs"] mod transfer_restore_stream;
+#[path = "transfer_import_batch.rs"] mod transfer_import_batch;
+#[path = "transfer_pg_copy.rs"] mod transfer_pg_copy;
+#[path = "transfer_preview.rs"] mod transfer_preview;
+#[path = "transfer_backup_snapshot.rs"] mod transfer_backup_snapshot;
+#[path = "transfer_backup_native.rs"] mod transfer_backup_native;
+#[path = "transfer_admission.rs"] mod transfer_admission;
+pub use transfer_admission::TransferAdmissionProfile;
+#[cfg(test)]
+#[path = "transfer_admission_task_tests.rs"] mod transfer_admission_task_tests;
 use transfer_output::{FileEncoder, StagedOutput};
 use transfer_sql_reader::PreparedScript;
 
 use crate::db::{qualified, quote_ident, Db};
 use crate::models::{DbKind, DumpOptions, ExportOptions, ImportOptions, TransferOptions};
+
+#[derive(Debug)]
+pub(super) struct UnsupportedExportValue {
+    pub column: String,
+    pub data_type: String,
+}
+impl std::fmt::Display for UnsupportedExportValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "导出列 {}（{}）尚不能无损解码，未将非 NULL 值伪造为 NULL", self.column, self.data_type)
+    }
+}
+impl std::error::Error for UnsupportedExportValue {}
+
+#[derive(Debug, Serialize)]
+pub struct DumpDatabaseReport {
+    pub rows: u64,
+    pub bytes: u64,
+    pub warnings: Vec<String>,
+}
 
 /// 按编码解码文件内容（支持 utf-8 / gbk / latin1）。
 fn read_text(path: &str, encoding: &str) -> Result<String> {
@@ -164,21 +194,6 @@ pub fn export_sql_typed(path: &str, kind: &DbKind, schema: &str, table: &str, na
     }
     write_text(path, encoding, &out)?;
     Ok(rows.len() as u64)
-}
-
-/// 解析 CSV 内容为表头与行。
-fn parse_csv(content: &str, delimiter: char, has_header: bool) -> Result<(Vec<String>, Vec<Vec<String>>)> {
-    let mut rdr = csv::ReaderBuilder::new().delimiter(delimiter as u8)
-        .has_headers(false).flexible(false).from_reader(content.trim_start_matches('\u{feff}').as_bytes());
-    let mut names = Vec::new();
-    let mut rows = Vec::new();
-    for (i, rec) in rdr.records().enumerate() {
-        let vals = rec.with_context(|| format!("CSV 第 {} 条记录无效", i + 1))?.iter().map(str::to_string).collect::<Vec<_>>();
-        if i == 0 && has_header { names = vals; } else { rows.push(vals); }
-    }
-    if !has_header { names = (0..rows.first().map_or(0, Vec::len)).map(|i| format!("column{}", i + 1)).collect(); }
-    validate_names(&names)?;
-    Ok((names, rows))
 }
 
 /// CSV / JSON / SQL imports share validation, mapping and a single target transaction.
@@ -360,9 +375,65 @@ pub async fn dump_database(
     path: &str,
     comment: &str,
 ) -> Result<(u64, u64)> {
+    let report = dump_database_with_policy(db, kind, schema, tables, routines, include_structure, include_data, path, comment, false).await?;
+    Ok((report.rows, report.bytes))
+}
+
+pub async fn dump_database_with_policy(
+    db: &Db,
+    kind: &DbKind,
+    schema: &str,
+    tables: &[String],
+    routines: &[String],
+    include_structure: bool,
+    include_data: bool,
+    path: &str,
+    comment: &str,
+    skip_incompatible_tables: bool,
+) -> Result<DumpDatabaseReport> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
+    if let Db::Sqlite(pool) = db {
+        // Explicit main namespace only; preserve other existing protocol/options
+        // rather than pretending their per-table sessions share this snapshot.
+        if matches!(schema,""|"main") && routines.is_empty() {
+            let file: String = crate::sql_history::query_scalar("SELECT file FROM pragma_database_list WHERE name='main'").fetch_one(pool).await?;
+            // A private memory DB cannot be reopened as a dedicated snapshot.
+            // Keep its existing path instead of publishing an empty second DB.
+            if !file.is_empty() {
+                protect_database_path(db,path).await?;
+                return transfer_backup_snapshot::run(pool,kind,schema,tables,include_structure,include_data,path,comment,skip_incompatible_tables).await;
+            }
+        }
+    }
     ensure_writable(path)?;
+    let stage = StagedOutput::new(path)?;
+    let report = dump_database_to_stage(db,kind,schema,tables,routines,include_structure,include_data,comment,skip_incompatible_tables,&stage).await?;
+    stage.publish(||Ok(()))?;
+    Ok(report)
+    }).await
+}
+
+/// Explicit native task-level consistency; missing/compat preserves the existing public API and SQLite branch.
+pub async fn dump_database_with_consistency(
+    db: &Db, kind: &DbKind, schema: &str, tables: &[String], routines: &[String],
+    include_structure: bool, include_data: bool, path: &str, comment: &str,
+    skip_incompatible_tables: bool, source_consistency: Option<&str>,
+) -> Result<DumpDatabaseReport> {
+    let mode = transfer_backup_native::mode(kind,source_consistency)?;
+    if mode == transfer_backup_native::Mode::Compat {
+        return dump_database_with_policy(db,kind,schema,tables,routines,include_structure,include_data,path,comment,skip_incompatible_tables).await;
+    }
+    let context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(context,transfer_backup_native::run(db,kind,schema,tables,routines,include_structure,include_data,path,comment,skip_incompatible_tables,mode)).await
+}
+
+/// Common legacy DDL/typed-value writer: write + sync only, never publish a native session's stage.
+async fn dump_database_to_stage(
+    db: &Db, kind: &DbKind, schema: &str, tables: &[String], routines: &[String],
+    include_structure: bool, include_data: bool, comment: &str,
+    skip_incompatible_tables: bool, stage: &StagedOutput,
+) -> Result<DumpDatabaseReport> {
     let all = crate::schema::list_tables(db, kind.clone(), schema).await?;
     let wanted: Vec<&(String, crate::models::ObjectType)> = if tables.is_empty() {
         // 表在前、视图在后，保证还原顺序
@@ -378,15 +449,18 @@ pub async fn dump_database(
             .collect()
     };
 
-    let stage=StagedOutput::new(path)?;
     let mut w=stage.encoder("utf8")?;
     let mut bytes = 0u64;
     let mut rows_total = 0u64;
+    let mut warnings = Vec::new();
 
     let mut head = String::new();
     head.push_str("-- ------------------------------------------------------------\r\n");
     head.push_str("-- NavKit 备份文件\r\n--\r\n");
     head.push_str(&format!("-- 源数据库 : {}\r\n", schema));
+    if let Some(consistency) = transfer_backup_native::consistency_label() {
+        head.push_str(&format!("-- 一致性 : {}\r\n", consistency));
+    }
     head.push_str(&format!(
         "-- 备份时间 : {}\r\n",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
@@ -415,6 +489,9 @@ pub async fn dump_database(
     bytes += head.len() as u64;
 
     for (name, ty) in &wanted {
+        w.flush()?;
+        // 表起点必须在结构 DDL 之前：跳过整表时要连结构一起撤回。
+        let table_start = stage.file_clone()?.metadata()?.len();
         let full = qualified(&kind, schema, name);
         let is_view = *ty != crate::models::ObjectType::Table;
 
@@ -447,7 +524,23 @@ pub async fn dump_database(
             // try_clone 与原 writer 共享文件位置；先排空结构缓冲，再由游标接续写入。
             w.flush()?;
             let before = stage.file_clone()?.metadata()?.len();
-            let rows = transfer_export_cursor::append_dump_data(db, kind, schema, name, &stage).await?;
+            let rows = match transfer_export_cursor::append_dump_data(db, kind, schema, name, &stage).await {
+                Ok(rows) => rows,
+                Err(error) if skip_incompatible_tables
+                    && error.downcast_ref::<UnsupportedExportValue>().is_some()
+                    && !format!("{error:#}").contains("TRANSFER_EFFECTS_UNKNOWN") => {
+                    // 撤回本表已写入的结构和数据，避免留下无数据的半表；之后由本 writer 续写警告。
+                    rollback_dump_table(&stage, table_start)?;
+                    bytes = table_start;
+                    let warning = format!("已跳过表 {}：{}。其依赖的视图、例程和外键可能需要手动调整", name, error);
+                    let line = format!("-- 警告：{}\r\n", warning.replace(['\r', '\n'], " "));
+                    w.write_all(line.as_bytes())?;
+                    bytes += line.len() as u64;
+                    warnings.push(warning);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let added = stage.file_clone()?.metadata()?.len().checked_sub(before).ok_or_else(|| anyhow!("转储 stage 长度发生倒退"))?;
             bytes = bytes.checked_add(added).ok_or_else(|| anyhow!("转储文件长度溢出"))?;
             rows_total = rows_total.checked_add(rows).ok_or_else(|| anyhow!("转储行数溢出"))?;
@@ -485,11 +578,16 @@ pub async fn dump_database(
     w.write_all(tail.as_bytes())?;
     bytes += tail.len() as u64;
     w.finish()?.get_ref().sync_all()?;
-    stage.publish(||Ok(()))?;
 
-    Ok((rows_total, bytes))
+    Ok(DumpDatabaseReport { rows: rows_total, bytes, warnings })
+}
 
-    }).await
+fn rollback_dump_table(stage: &StagedOutput, start: u64) -> Result<()> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = stage.file_clone()?;
+    file.set_len(start)?;
+    file.seek(SeekFrom::Start(start))?;
+    Ok(())
 }
 
 /// 取例程真实类型与定义；不存在/权限错误绝不当成成功的空备份。
@@ -787,17 +885,31 @@ pub struct RestoreStep {
     pub affected: Option<u64>,
     /// 失败原因 / 跳过说明。
     pub error: Option<String>,
-    /// 是否为被跳过的守卫语句。
+    /// 是否为守卫或前序失败后的跳过语句。
     pub skipped: bool,
+    /// committed / rolled_back / skipped / failed / unknown；acked 仅用于执行中的临时状态。
+    pub effect: String,
 }
 
-/// 还原结果汇总。
+/// 还原结果汇总。计数独立于有界 steps；succeeded 仅表示已确认提交，acked 可包含后来回滚的语句。
 #[derive(Debug, Clone, Serialize)]
 pub struct RestoreReport {
     pub total: usize,
     pub succeeded: usize,
     pub failed: usize,
     pub steps: Vec<RestoreStep>,
+    pub acked: usize,
+    pub committed: usize,
+    pub rolled_back: usize,
+    pub skipped: usize,
+    pub unknown: usize,
+    pub attempted: usize,
+    pub first_failed_index: Option<usize>,
+    pub omitted_steps: usize,
+    pub effects_unknown: bool,
+    pub error: Option<String>,
+    pub cleanup_error: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 /// 单批事务的语句条数上限与字节预算：达到任一上限即提交，避免一条长事务压住全部 DML。
@@ -933,22 +1045,27 @@ pub async fn restore_sql_file_detailed(
 ) -> Result<RestoreReport> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("无法读取备份文件: {}", path))?;
-    let stmts = script_statements(db, &content)?;
+    transfer_restore_stream::run(db, path, true).await
 
-    let mut steps: Vec<RestoreStep> = Vec::with_capacity(stmts.len());
-    match db {
-        Db::Sqlite(pool) => script_with_connection!(pool, sqlx::SqliteConnection, "BEGIN", &stmts, true, steps),
-        Db::Mysql(pool) => script_with_connection!(pool, sqlx::MySqlConnection, "START TRANSACTION", &stmts, true, steps),
-        Db::Postgres(pool) => script_with_connection!(pool, sqlx::PgConnection, "BEGIN", &stmts, true, steps),
-        _ => script_loop_serial!(db, &stmts, true, steps),
-    }
-    let succeeded = steps.iter().filter(|step| step.ok && !step.skipped).count();
-    let failed = steps.iter().filter(|step| !step.ok && !step.skipped).count();
+    }).await
+}
 
-    Ok(RestoreReport { total: stmts.len(), succeeded, failed, steps })
-
+/// Detailed restore task with explicit between-statement cancellation. The task
+/// remains running until the physical session and private spool actually settle.
+pub async fn restore_sql_file_task(db: &Db, path: &str, task_id: &str) -> Result<RestoreReport> {
+    let context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(context, async {
+    let task = TaskControl::begin(task_id)?;
+    let result = transfer_restore_stream::run_with_control(db,path,true,Some(&task)).await;
+    let terminal: Result<()> = match &result {
+        Ok(report) if report.effects_unknown => Err(anyhow!("TRANSFER_EFFECTS_UNKNOWN: {}",report.error.as_deref().unwrap_or("还原结果未确认"))),
+        Ok(report) if report.failed > 0 || report.error.is_some() || report.cleanup_error.is_some() => Err(anyhow!("{}", report.error.as_deref().or(report.cleanup_error.as_deref()).unwrap_or("还原部分失败"))),
+        // A late cancellation after a confirmed COMMIT is not a cancelled write.
+        Ok(_) => Ok(()),
+        Err(error) => Err(anyhow!("{error:#}")),
+    };
+    task.finish(&terminal);
+    result
     }).await
 }
 
@@ -963,21 +1080,7 @@ pub async fn run_sql_file_detailed(
 ) -> Result<RestoreReport> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("无法读取 SQL 文件: {}", path))?;
-    let stmts = script_statements(db, &content)?;
-
-    let mut steps: Vec<RestoreStep> = Vec::with_capacity(stmts.len());
-    match db {
-        Db::Sqlite(pool) => script_with_connection!(pool, sqlx::SqliteConnection, "BEGIN", &stmts, stop_on_error, steps),
-        Db::Mysql(pool) => script_with_connection!(pool, sqlx::MySqlConnection, "START TRANSACTION", &stmts, stop_on_error, steps),
-        Db::Postgres(pool) => script_with_connection!(pool, sqlx::PgConnection, "BEGIN", &stmts, stop_on_error, steps),
-        _ => script_loop_serial!(db, &stmts, stop_on_error, steps),
-    }
-    let succeeded = steps.iter().filter(|step| step.ok && !step.skipped).count();
-    let failed = steps.iter().filter(|step| !step.ok && !step.skipped).count();
-
-    Ok(RestoreReport { total: stmts.len(), succeeded, failed, steps })
+    transfer_restore_stream::run(db, path, stop_on_error).await
 
     }).await
 }
@@ -1135,12 +1238,9 @@ pub fn export_query_csv(
     export_csv(path, names, rows, delimiter, encoding, true)
 }
 
-/// 读取 CSV 文件的表头（供导入向导预览）。
+/// 读取有界 CSV 样本；在解析器分配记录前限制解码字节，达到样本上限即停止。
 pub fn preview_csv(path: &str, delimiter: &str, encoding: &str, limit: usize) -> Result<(Vec<String>, Vec<Vec<String>>)> {
-    let content = read_text(path, encoding)?;
-    let (names, mut rows) = parse_csv(&content, validate_delimiter(delimiter)?, true)?;
-    rows.truncate(limit.min(1000));
-    Ok((names, rows))
+    transfer_preview::read(path, delimiter, encoding, limit)
 }
 
 /// 检查路径可写。
@@ -1177,46 +1277,70 @@ pub struct ImportTaskOptions {
     #[serde(flatten)] pub options: ImportOptions,
     pub task_id: String,
     #[serde(default)] pub column_mapping: Vec<ImportColumnMapping>,
+    #[serde(default)] pub write_strategy: ImportWriteStrategy,
 }
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportWriteStrategy { #[default] Row, PgCopy }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportTaskOptions { #[serde(flatten)] pub options: ExportOptions, pub task_id: String }
+pub struct ExportTaskOptions { #[serde(flatten)] pub options: ExportOptions, pub task_id: String, #[serde(default)] pub sql_batch_rows: u32, #[serde(default)] pub sql_batch_bytes: u64 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskProgress {
     pub task_id: String, pub status: String, pub phase: String,
     pub processed: u64, pub total: u64, pub message: String,
 }
-struct TaskEntry { cancel: Arc<AtomicBool>, progress: TaskProgress }
+struct TaskEntry { cancel: Arc<AtomicBool>, progress: TaskProgress, owner: Arc<()>, admission: Option<transfer_admission::AdmissionPermit> }
 fn tasks() -> &'static parking_lot::Mutex<HashMap<String, TaskEntry>> {
     static TASKS: OnceLock<parking_lot::Mutex<HashMap<String, TaskEntry>>> = OnceLock::new();
     TASKS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 #[derive(Clone)]
-pub struct TaskControl { id: String, cancel: Arc<AtomicBool> }
+pub struct TaskControl { id: String, cancel: Arc<AtomicBool>, owner: Arc<()>, admission: Option<transfer_admission::AdmissionPermit> }
 impl TaskControl {
-    pub fn begin(id: &str) -> Result<Self> {
+    /// Compatibility: the 128 retained task records are logs, not a resource budget.
+    /// Coordinators/legacy callers remain unclassified; never guess from task id.
+    pub fn begin(id: &str) -> Result<Self> { Self::register(id, || Ok(None)) }
+    /// Explicit import/export producer only. Busy means immediate rejection, not
+    /// queueing under a database lock. Call before acquiring database resources.
+    pub fn begin_transfer(id: &str, profile: TransferAdmissionProfile) -> Result<Self> {
+        Self::register(id, || Ok(Some(transfer_admission::global().try_begin(id, profile.reserved_bytes)?)))
+    }
+    /// Serial sub-operation/cursor of the SAME bounded producer; not free parallel
+    /// work. Root bytes remain charged until parent and every child have finished.
+    pub fn begin_nested(id: &str, parent: &Self) -> Result<Self> {
+        parent.check()?;
+        let permit = parent.admission.as_ref().ok_or_else(|| anyhow!("父任务没有传输生产者准入配额"))?;
+        Self::register(id, || Ok(Some(permit.nested(id)?)))
+    }
+    fn register(id: &str, reserve: impl FnOnce() -> Result<Option<transfer_admission::AdmissionPermit>>) -> Result<Self> {
         if id.is_empty() || id.len() > 128 || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) { bail!("任务标识无效"); }
         let mut all = tasks().lock();
         if all.contains_key(id) { bail!("任务标识已使用，请创建新的任务"); }
         if all.len() >= 128 { all.retain(|_, t| t.progress.status == "running"); }
         if all.len() >= 128 { bail!("同时执行的任务过多"); }
-        let cancel = Arc::new(AtomicBool::new(false));
-        all.insert(id.into(), TaskEntry { cancel: cancel.clone(), progress: TaskProgress {
+        let admission = reserve()?;
+        let cancel = Arc::new(AtomicBool::new(false)); let owner = Arc::new(());
+        all.insert(id.into(), TaskEntry { cancel: cancel.clone(), owner: owner.clone(), admission: admission.clone(), progress: TaskProgress {
             task_id: id.into(), status: "running".into(), phase: "validate".into(), processed: 0, total: 0, message: "正在校验参数".into(),
         }});
-        Ok(Self { id: id.into(), cancel })
+        Ok(Self { id: id.into(), cancel, owner, admission })
     }
     // 取消本身不承诺回滚：是否回滚由执行通道（事务/逐条提交）说明。
     pub fn check(&self) -> Result<()> { if self.cancel.load(Ordering::Relaxed) { bail!("任务已取消"); } Ok(()) }
     pub fn update(&self, phase: &str, processed: u64, total: u64, message: &str) {
-        if let Some(t) = tasks().lock().get_mut(&self.id) {
+        if let Some(t) = tasks().lock().get_mut(&self.id).filter(|t| Arc::ptr_eq(&t.owner, &self.owner)) {
             t.progress.phase = phase.into(); t.progress.processed = processed; t.progress.total = total; t.progress.message = message.into();
         }
     }
+    /// Caller must finish only AFTER actual work and background workers settle,
+    /// including error cleanup/join. Cancellation and dropping clones do not
+    /// release anything; unfinished Drop deliberately leaves admission fail-closed.
     pub fn finish<T>(&self, result: &Result<T>) {
-        if let Some(t) = tasks().lock().get_mut(&self.id) {
+        if let Some(t) = tasks().lock().get_mut(&self.id).filter(|t| Arc::ptr_eq(&t.owner, &self.owner) && t.progress.status == "running") {
             let unknown = result.as_ref().err().is_some_and(|error| format!("{error:#}").contains("TRANSFER_EFFECTS_UNKNOWN"));
             t.progress.status = if result.is_ok() { "completed" } else if unknown { "unknown" } else if self.cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
             t.progress.message = result.as_ref().err().map(|e| format!("{:#}", e)).unwrap_or_else(|| "执行完成".into());
+            if let Some(permit) = t.admission.take() { permit.finish(); }
         }
     }
 }
@@ -1301,8 +1425,8 @@ pub async fn execute_atomic(db: &Db, statements: &[(String, bool)], task: Option
 pub async fn run_import_task(db: &Db, kind: &DbKind, opts: &ImportTaskOptions) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
-    let task = TaskControl::begin(&opts.task_id)?;
-    let result = run_import_data(db, kind, &opts.options, &opts.column_mapping, Some(&task)).await;
+    let task = TaskControl::begin_transfer(&opts.task_id, TransferAdmissionProfile::default())?;
+    let result = run_import_data_with_strategy(db, kind, &opts.options, &opts.column_mapping, Some(&task), true, opts.write_strategy).await;
     task.finish(&result); result
 
     }).await
@@ -1399,6 +1523,8 @@ struct ImportMapper {
     conflict_cols: Vec<String>,
     cols: Vec<String>,
     types: Vec<String>,
+    schema: String,
+    table: String,
 }
 
 impl ImportMapper {
@@ -1419,42 +1545,70 @@ impl ImportMapper {
 
 /// 分批执行导入语句：事务型通道整批一个事务，非事务通道逐条自动提交。
 /// 每批之间检查取消信号并更新进度，保证大文件不会先全部读入再假装分批。
-async fn execute_import_batches(db: &Db, prefix: &[(String, bool)], feeder: &mut RowFeeder, mapper: &ImportMapper, limits: &TransferLimits, task: Option<&TaskControl>) -> Result<u64> {
+async fn execute_import_batches(db: &Db, prefix: &[(String, bool)], feeder: &mut RowFeeder, mapper: &ImportMapper, limits: &TransferLimits, task: Option<&TaskControl>, enable_batch: bool, write_strategy: ImportWriteStrategy) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
+    if write_strategy == ImportWriteStrategy::PgCopy {
+        if let Db::Postgres(pool) = db { return transfer_pg_copy::execute(pool, prefix, feeder, mapper, limits, task).await; }
+        bail!("COPY 仅支持原生 PostgreSQL 目标");
+    }
     macro_rules! run_tx {
-        ($pool:expr) => {{
-            let mut count = 0u64;
+        ($pool:expr, $gate:path) => {{
             let mut tx = $pool.begin().await?;
-            for (sql, is_row) in prefix {
-                match crate::sql_history::query(sql).execute(&mut *tx).await {
-                    Ok(r) => if *is_row { count += r.rows_affected(); },
-                    Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context("导入前置语句执行失败，未提交数据已回滚")); }
+            let result: Result<u64> = async {
+                let mut count = 0u64;
+                for (sql, is_row) in prefix {
+                    let receipt = crate::sql_history::query(sql).execute(&mut *tx).await
+                        .context("导入前置语句执行失败")?;
+                    if *is_row { count += receipt.rows_affected(); }
                 }
-            }
-            let mut batches = 0u64;
-            loop {
-                if let Some(t) = task { t.check().map_err(|e| e.context("任务已取消，未提交的目标修改已回滚"))?; }
-                let Some(rows) = feeder.next_batch(limits)? else { break };
-                let stmts = mapper.statements(&rows)?;
-                for (sql, is_row) in &stmts {
-                    match crate::sql_history::query(sql).execute(&mut *tx).await {
-                        Ok(r) => if *is_row { count += r.rows_affected(); },
-                        Err(e) => { let _ = tx.rollback().await; return Err(anyhow!(e).context(format!("第 {} 批导入语句执行失败，未提交数据已回滚", batches + 1))); }
+                let mut batches = 0u64;
+                let mut batch_allowed: Option<bool> = None;
+                loop {
+                    if let Some(t) = task { t.check()?; }
+                    let Some(rows) = feeder.next_batch(limits)? else { break };
+                    // Do not charge small imports for extra metadata probes. For large
+                    // imports the one-time gate is checked inside the target transaction.
+                    let use_batch = if enable_batch && rows.len() >= 32 {
+                        match batch_allowed {
+                            Some(allowed) => allowed,
+                            None => { let allowed = $gate(&mut *tx, mapper).await?; batch_allowed = Some(allowed); allowed }
+                        }
+                    } else { false };
+                    let stmts = if use_batch { transfer_import_batch::statements(mapper, &rows, limits)? }
+                        else { mapper.statements(&rows)? };
+                    for (sql, is_row) in &stmts {
+                        if let Some(t) = task { t.check()?; }
+                        let receipt = crate::sql_history::query(sql).execute(&mut *tx).await
+                            .with_context(|| format!("第 {} 批导入语句执行失败", batches + 1))?;
+                        if *is_row { count = count.checked_add(receipt.rows_affected()).ok_or_else(|| anyhow!("导入行数溢出"))?; }
                     }
+                    batches += 1;
+                    if let Some(t) = task { t.update("write", count, 0, if use_batch {
+                        "正在有界多值写入目标（单事务、提交前可取消）"
+                    } else { "正在逐行写入目标（单事务、提交前可取消）" }); }
+                    tokio::task::yield_now().await;
                 }
-                batches += 1;
-                if let Some(t) = task { t.update("write", count, 0, "正在分批写入目标（提交前可取消）"); }
-                tokio::task::yield_now().await;
+                if let Some(t) = task { t.check()?; }
+                Ok(count)
+            }.await;
+            match result {
+                Ok(count) => {
+                    tx.commit().await.map_err(|error| anyhow!("TRANSFER_EFFECTS_UNKNOWN: 导入 COMMIT 回执未确认；禁止重放，须核对目标：{error}"))?;
+                    Ok(count)
+                }
+                Err(error) => match tx.rollback().await {
+                    Ok(()) if !mapper.kind.is_mysql_family() => Err(error.context("导入事务回滚已确认；未提交的目标修改已回滚")),
+                    Ok(()) => Err(error.context("TRANSFER_EFFECTS_UNKNOWN: MySQL 待提交事务已回滚，但 DDL/非事务引擎及副作用可能已生效；禁止自动重放")),
+                    Err(rollback) => Err(error.context(format!("TRANSFER_EFFECTS_UNKNOWN: 导入 ROLLBACK 回执未确认；禁止重放：{rollback}"))),
+                },
             }
-            tx.commit().await?;
-            Ok(count)
         }};
     }
     match db {
-        Db::Sqlite(p) => run_tx!(p),
-        Db::Mysql(p) => run_tx!(p),
-        Db::Postgres(p) => run_tx!(p),
+        Db::Sqlite(p) => run_tx!(p, transfer_import_batch::sqlite_can_batch),
+        Db::Mysql(p) => run_tx!(p, transfer_import_batch::no_batch),
+        Db::Postgres(p) => run_tx!(p, transfer_import_batch::no_batch),
         Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => {
             let mut count = 0u64;
             for (sql, is_row) in prefix {
@@ -1523,8 +1677,20 @@ async fn execute_prepared_script(db: &Db, script: &mut PreparedScript, task: Opt
 }
 
 async fn run_import_data(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: &[ImportColumnMapping], task: Option<&TaskControl>) -> Result<u64> {
+    run_import_data_with_policy(db, kind, opts, mapping, task, true).await
+}
+
+// Private policy seam for same-entry A/B tests; no mutable process-wide tuning or error replay.
+async fn run_import_data_with_policy(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: &[ImportColumnMapping], task: Option<&TaskControl>, enable_batch: bool) -> Result<u64> {
+    run_import_data_with_strategy(db, kind, opts, mapping, task, enable_batch, ImportWriteStrategy::Row).await
+}
+
+async fn run_import_data_with_strategy(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: &[ImportColumnMapping], task: Option<&TaskControl>, enable_batch: bool, write_strategy: ImportWriteStrategy) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
+    if write_strategy == ImportWriteStrategy::PgCopy && (kind.id() != "postgresql" || !matches!(db, Db::Postgres(_)) || !matches!(opts.format.to_ascii_lowercase().as_str(), "csv" | "json") || opts.create_table || !matches!(opts.on_conflict.as_str(), "" | "error") || !opts.conflict_columns.is_empty()) {
+        bail!("COPY 仅支持原生 PostgreSQL、CSV/JSON、已有表及遇冲突报错模式；未修改目标");
+    }
     validate_names(&[opts.table.clone()])?;
     if opts.sheet.as_deref().is_some_and(|s| !s.is_empty()) { bail!("CSV/JSON/SQL 导入不支持工作表参数"); }
     let limits = TransferLimits::default();
@@ -1575,6 +1741,7 @@ async fn run_import_data(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: 
     let cols = pairs.iter().map(|(_, c)| c.clone()).collect::<Vec<_>>();
     validate_names(&cols)?;
     if pairs.is_empty() { bail!("没有匹配的列，未修改目标"); }
+    if write_strategy == ImportWriteStrategy::PgCopy && (!exists || cols.len() != target_cols.len() || pairs.len() != names.len() || pairs.iter().map(|(i,_)| *i).collect::<HashSet<_>>().len() != names.len()) { bail!("COPY 必须完整映射源列和已有目标表全部列；未修改目标"); }
     let full = qualified(kind, &opts.schema, &opts.table);
     let strategy = { let v = opts.on_conflict.to_ascii_lowercase(); if v.is_empty() { "error".to_string() } else { v } };
     if !matches!(strategy.as_str(), "error" | "skip" | "update") { bail!("导入冲突策略无效：仅支持 error/skip/update"); }
@@ -1598,8 +1765,9 @@ async fn run_import_data(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: 
     if opts.truncate { prefix.push((format!("DELETE FROM {}", full), false)); }
     let quoted = cols.iter().map(|c| quote_ident(kind, c)).collect::<Vec<_>>().join(", ");
     let types = pairs.iter().map(|(_, name)| target_meta.as_ref().and_then(|s| s.columns.iter().find(|c| c.name == *name)).map(|c| c.data_type.clone()).unwrap_or_else(|| "TEXT".to_string())).collect::<Vec<_>>();
-    let mapper = ImportMapper { pairs, kind: kind.clone(), full, quoted, strategy, conflict_cols, cols, types };
-    execute_import_batches(db, &prefix, &mut feeder, &mapper, &limits, task).await
+    let mapper = ImportMapper { pairs, kind: kind.clone(), full, quoted, strategy, conflict_cols, cols, types,
+        schema: opts.schema.clone(), table: opts.table.clone() };
+    execute_import_batches(db, &prefix, &mut feeder, &mapper, &limits, task, enable_batch, write_strategy).await
 
     }).await
 }
@@ -1687,7 +1855,26 @@ async fn fetch_rows_sql(db: &Db, kind: &DbKind, schema: &str, table: &str, sql: 
             Ok((names, rows))
         }};
     }
-    match db { Db::Sqlite(p) => fetch!(p, crate::values::sqlite_row_values), Db::Mysql(p) => fetch!(p, crate::values::my_row_values), Db::Postgres(p) => fetch!(p, crate::values::pg_row_values),
+    match db { Db::Sqlite(p) => fetch!(p, crate::values::sqlite_row_values), Db::Mysql(p) => fetch!(p, crate::values::my_row_values),
+        Db::Postgres(p) => {
+            // MONEY 必须在真实会话中解析；fetch_all 完成后同一连接才可再次借用。
+            let mut connection = p.acquire().await?;
+            let fetched = crate::sql_history::query(sql).fetch_all(&mut *connection).await?;
+            let names = fetched.first().map(|row| row.columns().iter().map(|c| c.name().to_string()).collect::<Vec<_>>()).unwrap_or(names);
+            let mut rows = Vec::with_capacity(fetched.len());
+            for row in fetched {
+                let mut vals = crate::values::pg_row_values(&row, names.len());
+                crate::values::pg_resolve_money_values(&mut connection, &row, &mut vals).await?;
+                for i in 0..names.len() {
+                    let ty = row.try_get_raw(i)?.type_info().name().to_ascii_uppercase();
+                    if ty.contains("BLOB") || ty.contains("BINARY") || ty == "BYTEA" {
+                        vals[i] = row.try_get::<Option<Vec<u8>>, _>(i)?.map(|bytes| format!("0x{}", bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()));
+                    }
+                }
+                rows.push(vals);
+            }
+            Ok((names, rows))
+        },
         Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => {
             let (mut names, rows) = db.generic_rows(sql).await?;
             if names.is_empty() {
@@ -1704,7 +1891,7 @@ async fn fetch_rows_sql(db: &Db, kind: &DbKind, schema: &str, table: &str, sql: 
 pub(crate) enum ExportSink {
     Csv { out: FileEncoder, delim: char, columns: usize },
     Json { out: FileEncoder, first: bool, names: Vec<String> },
-    Sql { out: FileEncoder, kind: DbKind, prefix: String, types: Vec<String>, buffer: Vec<u8> },
+    Sql { out: FileEncoder, kind: DbKind, prefix: String, types: Vec<String>, buffer: Vec<u8>, batch: Option<transfer_sql_batch::Assembler> },
 }
 
 impl ExportSink {
@@ -1729,6 +1916,13 @@ impl ExportSink {
             "csv" => {
                 let delim = validate_delimiter(delimiter)?;
                 if has_header {
+                    // Before allocating escaped cells/joined header, bound their exact UTF-8 size.
+                    let escaped_bytes = names.iter().enumerate().try_fold(2u64, |sum, (index, name)| {
+                        let quoted = name.contains(delim) || name.bytes().any(|b| matches!(b, 34 | 10 | 13));
+                        let quotes = if quoted { name.bytes().filter(|b| *b == 34).count() as u64 + 2 } else { 0 };
+                        sum.checked_add(name.len() as u64)?.checked_add(quotes)?.checked_add(if index == 0 { 0 } else { delim.len_utf8() as u64 })
+                    });
+                    if !escaped_bytes.is_some_and(|bytes| bytes <= TransferLimits::default().max_record_bytes) { bail!("CSV escaped header exceeds the record limit"); }
                     let cells: Vec<String> = names.iter().map(|n| csv_escape(n, delim)).collect();
                     out.write_all((cells.join(&delim.to_string()) + "\r\n").as_bytes())?;
                 }
@@ -1744,7 +1938,9 @@ impl ExportSink {
                 if kind.protocol() == crate::models::Protocol::Mssql && types.iter().any(|ty| ty.eq_ignore_ascii_case("rowversion") || ty.eq_ignore_ascii_case("timestamp")) {
                     out.write_all("-- SQL Server rowversion 为服务器生成的只读值；下方保留原始 0xHEX，恢复归档数据时该目标列须为 BINARY(8)，不能显式写入真实 rowversion 列。\r\n".as_bytes())?;
                 }
-                Ok(ExportSink::Sql { out, kind: kind.clone(), prefix: format!("INSERT INTO {} ({}) VALUES (", full, cols), types: if types.is_empty() { vec!["TEXT".into(); names.len()] } else { types.to_vec() }, buffer: Vec::with_capacity(1024) })
+                let prefix = format!("INSERT INTO {} ({}) VALUES (", full, cols);
+                let batch = transfer_sql_batch::current().map(|(policy, metrics)| transfer_sql_batch::Assembler::new(prefix.trim_end_matches('(').to_owned(), encoding, policy, metrics)).transpose()?;
+                Ok(ExportSink::Sql { out, kind: kind.clone(), prefix, types: if types.is_empty() { vec!["TEXT".into(); names.len()] } else { types.to_vec() }, buffer: Vec::with_capacity(1024), batch })
             }
             _ => bail!("不支持的导出格式"),
         }
@@ -1783,13 +1979,13 @@ impl ExportSink {
                     count += 1;
                 }
             }
-            ExportSink::Sql { out, kind, prefix, types, buffer } => {
+            ExportSink::Sql { out, kind, prefix, types, buffer, batch } => {
                 for row in rows {
-                    // 单条 INSERT 结构/顺序不变；复用有界序列化缓冲，编码器每行只处理一次。
-                    // 不攒整表，不合并多行 INSERT，转义扩张仍在写入缓冲前核对上限。
+                    let row_limit = batch.as_ref().map_or(limits.max_record_bytes, |batch| batch.row_limit());
+                    if row.iter().map(|v| v.as_ref().map_or(0, String::len) as u64).sum::<u64>() > row_limit { bail!("SQL 单行原始 UTF-8 超过语句缓冲预算，没有发布文件"); }
                     buffer.clear();
-                    let mut record = LimitedRecordWriter { inner: &mut *buffer, bytes: 0, max_bytes: limits.max_record_bytes };
-                    record.write_all(prefix.as_bytes())?;
+                    let mut record = LimitedRecordWriter { inner: &mut *buffer, bytes: 0, max_bytes: row_limit };
+                    if batch.is_some() { record.write_all(b"(")?; } else { record.write_all(prefix.as_bytes())?; }
                     for (i, value) in row.iter().enumerate() {
                         let ty = &types[i];
                         let literal_type = if kind.protocol() == crate::models::Protocol::Mssql && (ty.eq_ignore_ascii_case("rowversion") || ty.eq_ignore_ascii_case("timestamp")) { "BINARY(8)" } else { ty };
@@ -1797,8 +1993,8 @@ impl ExportSink {
                         if i > 0 { record.write_all(b", ")?; }
                         record.write_all(value.as_bytes())?;
                     }
-                    record.write_all(b");\r\n")?;
-                    out.write_all(buffer)?;
+                    if batch.is_some() { record.write_all(b")")?; } else { record.write_all(b");\r\n")?; }
+                    if let Some(batch) = batch { batch.push(out, std::str::from_utf8(buffer)?)?; } else { out.write_all(buffer)?; }
                     count += 1;
                 }
             }
@@ -1808,7 +2004,8 @@ impl ExportSink {
 
     pub(crate) fn finish(self) -> Result<()> {
         let out = match self {
-            ExportSink::Csv { out, .. } | ExportSink::Sql { out, .. } => out,
+            ExportSink::Csv { out, .. } => out,
+            ExportSink::Sql { mut out, mut batch, .. } => { if let Some(batch) = &mut batch { batch.flush(&mut out)?; } out },
             ExportSink::Json { mut out, .. } => { out.write_all(b"\n]\n")?; out },
         };
         out.finish()?.get_ref().sync_all()?;
@@ -1865,22 +2062,47 @@ fn transcode_file(src: &Path, dst: &Path, encoding: &str) -> Result<()> {
 pub async fn run_export_task(db: &Db, kind: &DbKind, opts: &ExportTaskOptions) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
-    let task = TaskControl::begin(&opts.task_id)?;
+    let task = TaskControl::begin_transfer(&opts.task_id, TransferAdmissionProfile::default())?;
+    let metrics = Arc::new(parking_lot::Mutex::new(transfer_sql_batch::Metrics::default()));
     let result = async {
         let o = &opts.options;
         validate_export(o)?; protect_database_path(db, &o.file).await?; task.check()?;
         task.update("read", 0, 0, "正在读取源数据");
 
         // 所有编码复用有界写入器和受控 stage，编码/读取/取消失败均不发布目标。
+        let policy = transfer_sql_batch::Policy::for_task(db, kind, opts)?;
+        let stage = StagedOutput::new(&o.file)?;
+        let count = transfer_sql_batch::scoped(policy, metrics.clone(), transfer_export_cursor::export_cursor(db, kind, o, &task, &stage)).await?;
+        if policy.is_some() { let metrics = metrics.lock(); if metrics.rows != count || metrics.peak_utf8_bytes == 0 { bail!("显式 SQL 组包未完整到达表数据写入器（视图只支持兼容定义导出，或任务 scope 丢失），没有发布文件"); } }
+        stage.publish(|| task.check())?;
+        let message = if policy.is_some() { let metrics = metrics.lock(); format!("文件已保存；显式多行 SQL：{} 语句，{} 行，目标编码 {} 字节，UTF-16 等价 {} 字节，缓冲峰值 {} 字节（恢复语句语义不同于逐行）", metrics.statements, metrics.rows, metrics.encoded_bytes, metrics.utf16_bytes, metrics.peak_utf8_bytes) } else { "文件已保存".into() };
+        task.update("export", count, count, &message); Ok(count)
+    }.await;
+    task.finish(&result);
+    if let Ok(count) = &result { if opts.sql_batch_rows > 1 { let metrics = metrics.lock(); let message = format!("文件已保存；显式多行 SQL：{} 语句，{} 行，目标编码 {} 字节，UTF-16 等价 {} 字节，缓冲峰值 {} 字节（恢复语句语义不同于逐行）", metrics.statements, metrics.rows, metrics.encoded_bytes, metrics.utf16_bytes, metrics.peak_utf8_bytes); task.update("export", *count, *count, &message); } }
+    result
+
+    }).await
+}
+
+/// 遗留导出入口（定时任务等）：复用与交互导出相同的游标、有界写入和原子发布，
+/// 不再整表物化到内存。内部登记独立任务 ID，行为与 run_export_task 一致。
+pub async fn export_table_streaming(db: &Db, kind: &DbKind, o: &ExportOptions) -> Result<u64> {
+    let __sql_history_context = crate::sql_history::db_context(db);
+    crate::sql_history::scope(__sql_history_context, async {
+    let task = TaskControl::begin_transfer(&format!("export_{}", uuid::Uuid::new_v4().simple()), TransferAdmissionProfile::default())?;
+    let result = async {
+        validate_export(o)?; protect_database_path(db, &o.file).await?; task.check()?;
+        task.update("read", 0, 0, "正在读取源数据");
         let stage = StagedOutput::new(&o.file)?;
         let count = transfer_export_cursor::export_cursor(db, kind, o, &task, &stage).await?;
         stage.publish(|| task.check())?;
         task.update("export", count, count, "文件已保存"); Ok(count)
     }.await;
     task.finish(&result); result
-
     }).await
 }
+
 pub async fn protect_database_path(db: &Db, output: &str) -> Result<()> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
@@ -1903,6 +2125,12 @@ mod transfer_spool_tests;
 #[cfg(test)]
 #[path = "transfer_streaming_tests.rs"]
 mod transfer_streaming_tests;
+#[cfg(test)]
+#[path = "transfer_sql_cycle_bench.rs"]
+mod transfer_sql_cycle_bench;
+#[cfg(test)]
+#[path = "transfer_preview_bench.rs"]
+mod transfer_preview_bench;
 
 #[cfg(test)]
 mod import_conflict_tests {

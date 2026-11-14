@@ -57,7 +57,11 @@ function viewMethod(name, context = {}) {
   const source = `class TestView { ${methods.map(method => method.getText(ast)).join('\n')} }\nglobalThis.TestView = TestView;`;
   const sandbox = vm.createContext({ toDbValue, ...context });
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), sandbox);
-  return new sandbox.TestView();
+  const view = new sandbox.TestView();
+  // Focused method fixtures do not instantiate the view's DOM/count lifecycle.
+  view.invalidateTotal = () => {};
+  view.scheduleTotalCount = () => {};
+  return view;
 }
 
 test('grid edits distinguish SQL NULL from empty text and can restore NULL', () => {

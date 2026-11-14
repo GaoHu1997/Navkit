@@ -104,8 +104,10 @@ function fixture({ snapshot, execute, grant = false, total = 3, pageSize = 200 }
     chooseLeave: async () => choice, confirmTransactionAction: async () => confirmAnswer, openObjectAction: () => ({ onClose() {}, close() {}, showError() {} }),
   });
   vm.runInContext(ts.transpile(classSource + '\nObject.assign(globalThis, { App, QueryTabView });', { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.None }), context);
-  const app = Object.create(context.App.prototype), tab = { id: 'query-owner', kind: 'query', title: '查询', connectionId: cfg.id, schema: 'main', sql: 'SELECT id,label FROM items', activeResult: -1, results: null, dirty: false };
+  const app = Object.create(context.App.prototype), tab = { id: 'query-owner', kind: 'query', title: '查询', connectionId: cfg.id, schema: 'main', sql: 'SELECT id,label FROM items', activeResult: -1, results: null, dirty: false, selectedRows: new Set() };
   Object.assign(app, { settings: {}, draftPreparing: false, favorites, publishFavorites() {}, connections: [cfg], tabs: [tab], views: new Map(), activeTabId: tab.id, contentHost: doc.createElement('main'), copyOwner: null, copyContext: null,
+    // App construction is intentionally bypassed; preserve its toolbar boundary for the real leave guard.
+    ribbon: { updateDisabled() { calls.push(['ribbon-update']); } },
     connectionById: id => id === cfg.id ? cfg : undefined, connectionsValue: () => [cfg], manualTransactionFor: () => undefined, manualTransactionIsBusy: () => false,
     refreshManualTransactionStatus: async () => {}, renderTabs() {}, renderTabsPublic() {}, renderStatus() {}, notifyToolbar() {}, draftChanged() {}, toast: (...args) => notices.push(args.join(':')), skipNullState: () => false, showGridLinesState: () => true,
   });
@@ -151,6 +153,7 @@ test('dirty typed rows or raw field input block rerun, paging, context change an
 test('close guard asks before discarding dirty result edits; cancel keeps the page and unknown writes block closing', async () => {
   const f = fixture({ execute: async () => { throw new Error('ACK lost'); } }), panel = await run(f); stage(panel);
   f.choose('cancel'); assert.equal(await f.app.closeTabs([f.tab.id]), false); assert.equal(f.app.views.get(f.tab.id), f.view);
+  assert.equal(f.calls.filter(([name]) => name === 'ribbon-update').length, 1); assert.equal(f.app.draftPreparing, false);
   assert.equal(await panel.previewSelected(), true); consent(panel); assert.equal(await panel.confirmPreview(), false); assert.equal(f.view.draftBusy(), true); assert.equal(await f.app.closeTabs([f.tab.id]), false);
   assert.throws(() => f.view.destroy(), /禁止销毁/);
   assert.equal(f.calls.filter(([name]) => name === 'execute').length, 1); assert.equal(f.calls.filter(([name]) => name === 'sql').length, 1); assert.equal(f.view.controlledResult, panel);
@@ -191,6 +194,7 @@ test('closing saves unsaved SQL to the bound query when chosen, and closes witho
     f.favorites.push({ id: 'f_saved', name: '已存查询', sql: 'SELECT id,label FROM items', connection_id: 'connection-a', schema: 'main', timestamp: 0 });
     f.view.editor.setSql('SELECT 2'); f.choose(choice);
     assert.equal(await f.app.closeTabs([f.tab.id]), true); await tick();
+    assert.equal(f.calls.filter(([name]) => name === 'ribbon-update').length, 1); assert.equal(f.app.draftPreparing, false);
     assert.equal(f.app.views.has(f.tab.id), false); assert.equal(f.tab.id === f.app.activeTabId, false);
     assert.equal(f.calls.filter(([name]) => name === 'release_query_result').length, 1); assert.equal(f.calls.filter(([name]) => name === 'sql').length, 1);
     const saves = f.calls.filter(([name]) => name === 'addFavorite');
@@ -203,12 +207,14 @@ test('a failed query save keeps the page and its edits open', async () => {
   f.favorites.push({ id: 'f_saved', name: '已存查询', sql: 'SELECT id,label FROM items', connection_id: 'connection-a', schema: 'main', timestamp: 0 });
   f.view.editor.setSql('SELECT 3'); f.choose('save'); f.failSave();
   assert.equal(await f.app.closeTabs([f.tab.id]), false); assert.equal(f.app.views.get(f.tab.id), f.view); assert.equal(f.view.editor.getSql(), 'SELECT 3');
+  assert.equal(f.calls.filter(([name]) => name === 'ribbon-update').length, 1); assert.equal(f.app.draftPreparing, false);
   assert.ok(f.notices.some(value => value.includes('未离开当前页面')));
 });
 test('pending preview and pending execute prevent host rerun, close, refresh and page movement', async () => {
   const previewGate = deferred(), executeGate = deferred(), f = fixture({ execute: () => executeGate.promise }), panel = await run(f); stage(panel);
   const invoke = globalThis.__PL21_HOST_INVOKE__; globalThis.__PL21_HOST_INVOKE__ = (command, args) => command === 'preview_query_row_mutation' ? previewGate.promise : invoke(command, args);
   const previewing = panel.previewSelected(); await tick(); assert.equal(f.view.draftBusy(), true); assert.equal(await f.app.closeTabs([f.tab.id]), false); await f.view.executeSelection(false); await f.view.loadResultPage('next');
+  assert.equal(f.calls.filter(([name]) => name === 'ribbon-update').length, 1); assert.equal(f.app.draftPreparing, false);
   const plan = makePlan(); previewGate.resolve(plan); assert.equal(await previewing, true); consent(panel); const confirming = panel.confirmPreview(); await tick(); assert.equal(f.view.draftBusy(), true); await f.view.reload(); assert.equal(await f.app.closeTabs([f.tab.id]), false);
   executeGate.resolve(receipt(plan)); assert.equal(await confirming, true); assert.equal(f.calls.filter(([name]) => name === 'execute').length, 1); assert.equal(f.calls.filter(([name]) => name === 'sql').length, 1); assert.equal(f.calls.filter(([name]) => name === 'page').length, 0); f.view.destroy();
 });

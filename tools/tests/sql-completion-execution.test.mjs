@@ -235,7 +235,7 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function queryHarness() {
+function queryHarness(bindings = {}) {
   // 查询页构造时会挂 document 级监听（selectionchange），桩提供 no-op。
   const document = { createElement: tag => new Element(tag), addEventListener() {}, removeEventListener() {} };
   const calls = [], notices = [], evidenceCalls = [];
@@ -273,10 +273,11 @@ function queryHarness() {
   };
   const context = vm.createContext({ ...transactionFixtureBindings, QueryResultPages, ExecutionController, explainQuerySql, logStamp: () => '2026-01-01 00:00:00', queryResultApi, crypto: webcrypto, setTimeout, clearTimeout, document, api, SqlEditor, DataGrid, iconSvgByName: () => '', svg: () => '', ICON_PAGE_FIRST: {}, ICON_PAGE_PREV: {}, ICON_PAGE_NEXT: {}, ICON_PAGE_LAST: {}, renderCellPreview() {}, GRID_CONTEXT_MENU: [],
     TabView: class { constructor(app, tab) { this.app = app; this.tab = tab; this.el = new Element(); } },
+    ...bindings,
   });
   const source = appSource.slice(appSource.indexOf('class QueryTabView extends'), appSource.indexOf('/** 表结构视图（可编辑'));
   vm.runInContext(ts.transpile(source + '\nglobalThis.QueryTabView = QueryTabView;', { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.None }), context);
-  const tab = { id: 'query-a', connectionId: 'a', schema: '', sql: 'SELECT 1; SELECT 2;', results: null, activeResult: 0 };
+  const tab = { id: 'query-a', connectionId: 'a', schema: '', sql: 'SELECT 1; SELECT 2;', results: null, activeResult: 0, selectedRows: new Set() };
   const transactions = new Map(), busyTransactions = new Set();
   const app = { connectionsValue: () => [{ id: 'a', name: 'A' }], connectionById: id => ({ id, name: id, kind: 'sqlite' }), settingsValue: {},
     async guardLeave(ids, _cause, action) { assert.deepEqual(Array.from(ids), tab.schema || tab.savedQueryId ? ['query-a'] : []); await action(); return true; },
@@ -331,7 +332,7 @@ test('run always executes the whole editor text; only run-selected reads the sel
   assert.match(view.stopBtn.title, /不支持取消|没有正在执行|取消能力/);
 });
 
-test('真实查询页停止等待后端终态，冻结上下文并保留旧结果可复制', async t => {
+test('真实查询页停止等待后端终态，冻结上下文；本次执行一开始就作废上一次结果', async t => {
   const { view, api, tab } = queryHarness(), pending = deferred(); let sent, stops = 0;
   t.after(() => { view.execution.dispose(); pending.resolve({ execution_id: sent?.execution_id, state: 'cancelled', result: null, error: null }); });
   const old = { sets: [], messages: ['旧结果'], elapsed_ms: 1 }; tab.results = old;
@@ -343,12 +344,13 @@ test('真实查询页停止等待后端终态，冻结上下文并保留旧结�
   view.stopBtn.fire('click'); await view.execution.cancel();
   assert.equal(stops, 1); assert.equal(view.running, true); assert.equal(view.stopBtn.disabled, true);
   pending.resolve({ execution_id: sent.execution_id, state: 'cancelled', result: null, error: null }); await running;
-  assert.equal(tab.results, old); assert.equal(view.running, false); assert.match(view.lastMessages[0].text, /不保证回滚/); assert.equal(view.runbar.attributes['aria-busy'], 'false');
+  // 新执行提交即失效旧结果：等待期间屏上不能留着上一次的输出被读成本次结果。
+  assert.equal(tab.results, null); assert.equal(view.running, false); assert.match(view.lastMessages[0].text, /不保证回滚/); assert.equal(view.runbar.attributes['aria-busy'], 'false');
 });
-test('结果unknown锁住重试和新事务，保留SQL草稿与旧结果', async () => {
+test('结果unknown锁住重试和新事务，保留SQL草稿但作废旧结果', async () => {
   const { view, api, tab, notices } = queryHarness(); let runs = 0; const old = { sets: [], messages: [], elapsed_ms: 1 }; tab.results = old;
   api.executeSqlV2 = async request => { runs++; return { execution_id: request.execution_id, state: 'unknown', result: null, error: { message: '控制通道失联' } }; };
-  const sql = tab.sql; await view.execute(sql, false); assert.equal(tab.results, old); assert.equal(tab.sql, sql); assert.equal(view.runBtn.disabled, true);
+  const sql = tab.sql; await view.execute(sql, false); assert.equal(tab.results, null); assert.equal(tab.sql, sql); assert.equal(view.runBtn.disabled, true);
   await view.execute(sql, false); assert.equal(runs, 1); assert.match(notices.at(-1)[1], /禁止重试/);
   await assert.rejects(view.prepareForTransaction(), /结果未知/);
 });
@@ -601,13 +603,14 @@ test('legacy results explicitly export only loaded rows and never fetch or rerun
   assert.deepEqual(calls.find(call => call[0] === 'export-loaded')[3], [['loaded']]);
 });
 
-test('failed execution retains old spool and message page; successful replacement and connection switch release it', async () => {
+test('a new execution expires the previous spool up front; failure and success never leave it on screen', async () => {
   const { view, api, tab, calls, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
   api.executeSql = async () => spoolResult('old'); await view.execute('SELECT 1', false);
-  await readOnlyResultsSettled(view, evidenceCalls); const old = tab.results;
+  await readOnlyResultsSettled(view, evidenceCalls);
   api.executeSql = async () => { throw new Error('syntax failure'); }; await view.execute('bad sql', false);
-  assert.equal(tab.results, old); assert.equal(tab.activeResult, -1); assert.match(view.lastMessages[0].text, /syntax failure/);
-  assert.equal(calls.some(call => call[0] === 'drop'), false);
+  assert.equal(tab.results, null); assert.equal(tab.activeResult, -1); assert.match(view.lastMessages[0].text, /syntax failure/);
+  // 旧结果在本次执行提交时就被作废，缓存随之释放，不再作为「上次的只读快照」留在屏上。
+  assert.deepEqual(calls.filter(call => call[0] === 'drop').map(call => call[1].spoolId), ['old']);
   api.executeSql = async () => spoolResult('new'); await view.execute('SELECT 2', false);
   await readOnlyResultsSettled(view, evidenceCalls);
   assert.deepEqual(calls.filter(call => call[0] === 'drop').map(call => call[1].spoolId), ['old']);
@@ -769,4 +772,102 @@ test('page numbers share fixed last-page offsets and reject invalid and empty-re
   assert.equal(pages.pageNumber(2), 0); assert.equal(pages.pageCount(2), 0);
   for (const number of [0, -1, 1.5, 3, NaN, Infinity]) assert.equal(pages.pageOffset(0, number), null);
   assert.equal(pages.pageOffset(2, 1), null);
+});
+
+function queryClockFixture() {
+  let now = 0, next = 0;
+  const timers = new Map();
+  const h = queryHarness({
+    performance: { now: () => now },
+    setInterval: callback => { const id = ++next; timers.set(id, callback); return id; },
+    clearInterval: id => timers.delete(id),
+  });
+  return { ...h, timers, advance(ms) { now += ms; for (const callback of [...timers.values()]) callback(); } };
+}
+
+test('rerun clears old grid, selection, preview and spool before capability response; live clocks stay synchronized', async () => {
+  const h = queryClockFixture(), { view, api, tab, calls, timers, advance, renderResults, evidenceCalls } = h;
+  view.renderResults = renderResults;
+  api.executeSql = async () => spoolResult('previous');
+  await view.execute('SELECT value FROM previous', false);
+  await readOnlyResultsSettled(view, evidenceCalls);
+  tab.selectedRows.add(0);
+  const oldExport = view.captureResultExport();
+  const capabilities = deferred(), outcome = deferred(); let sent;
+  api.executionCapabilities = () => capabilities.promise;
+  api.executeSqlV2 = request => { sent = request; return outcome.promise; };
+  api.cancelExecution = async context => ({ execution_id: context.execution_id, accepted: true, state: 'cancel_requested', message: '' });
+  const task = view.execute('SELECT value FROM next', false);
+  assert.equal(tab.results, null);
+  assert.equal(tab.activeResult, -1);
+  assert.equal(tab.selectedRows.size, 0);
+  assert.equal(view.grid.data.rows.length, 0);
+  assert.equal(view.grid.data.columns.length, 0);
+  assert.equal(view.cellPreviewEl.children.length, 0);
+  assert.equal(view.executionLabelEl.textContent, '查询中');
+  assert.equal(timers.size, 1);
+  assert.deepEqual(calls.filter(c => c[0] === 'drop').map(c => c[1].spoolId), ['previous']);
+  await assert.rejects(view.exportResultSnapshot(exportOptions, oldExport), /已经替换/);
+  advance(372);
+  assert.equal(view.executionTimerEl.textContent, '0.372 s');
+  assert.equal(view.executionMessageTimerEl.textContent, '0.372 s');
+  assert.equal(view.executionMessageTimerEl.attributes['aria-hidden'], 'true');
+  assert.equal(view.lastMessages[0].text, '查询中… 0.372 s');
+  capabilities.resolve({ cancel: { level: 'supported', reason: '' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(timers.size, 1, 'queued publication must not reset the clock');
+  await view.execution.cancel();
+  advance(128);
+  assert.equal(view.executionMessageLabelEl.textContent, '停止中…');
+  assert.equal(view.executionMessageTimerEl.textContent, '0.500 s');
+  outcome.resolve({ execution_id: sent.execution_id, state: 'cancelled', result: null, error: null });
+  await task;
+  assert.equal(timers.size, 0);
+  assert.equal(view.executionTimerEl.textContent, '0.500 s');
+  advance(1000);
+  assert.equal(view.executionTimerEl.textContent, '0.500 s');
+  assert.equal(tab.results, null);
+  view.destroy();
+});
+
+test('capability failure freezes the clock and reports failure rather than leaving 查询中 active', async () => {
+  const { view, api, timers, advance } = queryClockFixture();
+  const pending = deferred(); api.executionCapabilities = () => pending.promise;
+  const task = view.execute('SELECT 1', false);
+  advance(123);
+  pending.reject(new Error('capability lookup failed'));
+  await task;
+  assert.equal(view.executionLabelEl.textContent, '执行失败');
+  assert.equal(view.executionStatusEl.attributes['data-state'], 'failed');
+  assert.equal(view.executionTimerEl.textContent, '0.123 s');
+  assert.equal(view.executionClockStartedAt, null);
+  assert.equal(timers.size, 0);
+  assert.match(view.lastMessages[0].text, /capability lookup failed/);
+  assert.equal(view.running, false);
+  view.destroy();
+});
+
+test('completion log is not a live timer during transaction cleanup, and destroy cancels a pending clock', async () => {
+  const h = queryClockFixture(), { view, api, app, timers, advance, renderResults } = h;
+  view.renderResults = renderResults;
+  const cleanup = deferred(); app.refreshManualTransactionStatus = () => cleanup.promise;
+  const task = view.execute('SELECT 1', false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(view.running, true, 'transaction confirmation still owns the busy gate');
+  assert.equal(timers.size, 0);
+  assert.equal(view.executionMessageTimerEl, null);
+  assert.equal(view.messagesEl.children[0].className.includes('msg-running'), false);
+  const record = view.lastMessages[0].text;
+  advance(500);
+  assert.equal(view.lastMessages[0].text, record);
+  cleanup.resolve(); await task;
+  view.destroy();
+  const pending = deferred(), fresh = queryClockFixture();
+  fresh.api.executionCapabilities = () => pending.promise;
+  const running = fresh.view.execute('SELECT 2', false);
+  assert.equal(fresh.timers.size, 1);
+  fresh.view.destroy();
+  assert.equal(fresh.timers.size, 0);
+  pending.resolve({ cancel: { level: 'unsupported', reason: '' } });
+  await running;
 });

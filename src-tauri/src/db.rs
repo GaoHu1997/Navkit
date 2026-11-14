@@ -602,8 +602,9 @@ pub async fn execute(
                             .collect();
                         let mut out = Vec::with_capacity(rows.len());
                         for r in &rows {
-                            let vals: Vec<Option<String>> =
+                            let mut vals: Vec<Option<String>> =
                                 crate::values::pg_row_values(r, cols.len());
+                            crate::values::pg_resolve_money_values(&mut conn, r, &mut vals).await?;
                             out.push(vals);
                         }
                         let n = out.len() as u64;
@@ -689,6 +690,9 @@ pub async fn execute(
         }
         // HTTP REST 类：语句交给适配器执行（ES DSL / Mango / Cypher / SQL 等）
         Db::Http(h) => {
+            if h.supports_sql_batch() {
+                return h.run_sql_batch(&h.database, sql).await;
+            }
             // JSON/DSL/protocol commands are not SQL: do not reinterpret escaped quotes or semicolons.
             let stmts = http_command_statements(h.kind.id(), sql);
             for stmt in stmts {

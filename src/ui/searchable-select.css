@@ -1,0 +1,72 @@
+/* 闭合触发控件继续使用原 select 样式。 */
+select:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 1px;
+}
+
+.searchable-select-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: var(--sp-1);
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  gap: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12);
+  box-shadow: var(--shadow-pop);
+  z-index: var(--z-menu);
+}
+.searchable-select-popover:popover-open { display: flex; flex-direction: column; }
+.searchable-select-popover > .searchable-select-search {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--h-control);
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  color: var(--text);
+  background: var(--bg-surface);
+  font: inherit;
+}
+.searchable-select-popover > .searchable-select-search:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: -1px;
+}
+.searchable-select-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.searchable-select-option {
+  min-height: var(--h-control);
+  box-sizing: border-box;
+  padding: var(--sp-1) var(--sp-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: var(--r-1);
+}
+.searchable-select-check {
+  display: inline-block;
+  width: 1em;
+  margin-right: var(--sp-2);
+  visibility: hidden;
+}
+.searchable-select-option[aria-selected="true"] > .searchable-select-check { visibility: visible; }
+.searchable-select-option[aria-selected="true"] { color: var(--text-accent); }
+.searchable-select-option.is-active { background: var(--bg-selected); outline: 1px solid var(--accent-500); outline-offset: -1px; }
+.searchable-select-option[aria-disabled="true"] { color: var(--text-secondary); cursor: not-allowed; }
+.searchable-select-empty { padding: var(--sp-2); color: var(--text-secondary); }

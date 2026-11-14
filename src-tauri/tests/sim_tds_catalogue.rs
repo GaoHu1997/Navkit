@@ -26,7 +26,7 @@ impl Server {
 }
 impl Drop for Server {fn drop(&mut self){if matches!(self.child.try_wait(),Ok(None)){let _=self.child.kill();}let _=self.child.wait();if self.dir.is_absolute()&&self.dir.file_name().and_then(|s|s.to_str()).is_some_and(|s|s.starts_with("navkit-sim-tds-")){let _=std::fs::remove_dir_all(&self.dir);}}}
 fn lit(s:&str)->String{format!("N'{}'",s.replace('\'',"''"))}
-fn page(id:&str,table:&str,offset:u64,limit:u64)->PageRequest{PageRequest{connection_id:id.into(),schema:"dbo".into(),table:table.into(),offset,limit,order_by:Some("id".into()),ascending:true,filters:vec![],filter_logic:Default::default(),order_rules:None}}
+fn page(id:&str,table:&str,offset:u64,limit:u64)->PageRequest{PageRequest{connection_id:id.into(),schema:"dbo".into(),table:table.into(),offset,limit,include_total:true,order_by:Some("id".into()),ascending:true,filters:vec![],filter_logic:Default::default(),order_rules:None}}
 async fn run(server:&Server,kind:&str,steps:&mut Vec<Value>)->Result<Value>{
  let req=server.req(kind);let registry=DbRegistry::default();let id=format!("tds-{}",uuid::Uuid::new_v4().simple());let table=format!("rows_{}",uuid::Uuid::new_v4().simple());let full=format!("[dbo].[{table}]");
  let original=format!("{}:中文;O'Reilly\\尾🙂",uuid::Uuid::new_v4());let updated=format!("changed:{}",original);

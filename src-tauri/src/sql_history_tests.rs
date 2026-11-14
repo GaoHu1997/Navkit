@@ -2,6 +2,9 @@ use super::*;
 use crate::models::{DbKind, FilterCondition, FilterLine, FilterLogic, PageRequest, SortRule};
 use futures::TryStreamExt;
 
+#[path = "sql_history_page_tests.rs"]
+mod page_tests;
+
 #[test]
 fn queued_writer_keeps_sink_order_and_flush_barriers() {
     let root = std::env::temp_dir().join(format!("navkit-history-batches-{}", uuid::Uuid::new_v4()));
@@ -162,6 +165,7 @@ async fn page_filter_order_count_and_metadata_are_real_sql() {
         table: "items".into(),
         offset: 0,
         limit: 1,
+        include_total: true,
         order_by: None,
         ascending: false,
         filters: vec![FilterLine {

@@ -4,9 +4,22 @@ use anyhow::{anyhow,bail,Result};
 use async_trait::async_trait;
 use reqwest::Method;
 use serde_json::Value;
+use serde::{Deserialize,Serialize};
 use std::collections::{BTreeSet,HashSet};
-use crate::{http_db::{HttpAdapter,HttpColumn,HttpRows},models::ConnectionRequest,strict_rest::{self as rest,Session,Auth}};
+use crate::{http_db::{HttpAdapter,HttpColumn,HttpExportPage,HttpRows},models::ConnectionRequest,strict_rest::{self as rest,Session,Auth}};
 
+const MAX_EXPORT_TOKEN_BYTES:usize=64*1024;
+#[derive(Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportToken{version:String,object:String,columns:Vec<String>,next:String,total:u64,returned:u64}
+struct ExportBudget{bytes:usize}
+impl std::io::Write for ExportBudget{
+    fn write(&mut self,data:&[u8])->std::io::Result<usize>{
+        if data.len()>rest::MAX_BODY.saturating_sub(self.bytes){return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"Salesforce 导出页超过 16 MiB；未截断为成功结果"));}
+        self.bytes+=data.len();Ok(data.len())
+    }
+    fn flush(&mut self)->std::io::Result<()>{Ok(())}
+}
 struct Salesforce {http:Session,version:String}
 pub(crate) async fn connect(req:&ConnectionRequest)->Result<Box<dyn HttpAdapter>>{
     let params=rest::params(&req.params,&["api_version"])?;
@@ -38,6 +51,7 @@ impl Salesforce {
         if cols.is_empty(){bail!("Salesforce describe 返回空字段，不能据此伪造表结构");}Ok(cols)
     }
     fn next(&self,raw:&str)->Result<reqwest::Url>{
+        if raw.len()>MAX_EXPORT_TOKEN_BYTES{bail!("Salesforce nextRecordsUrl 超过 64 KiB 上限");}
         let expected=format!("/services/data/{}/query/",self.version);
         if !raw.starts_with(&expected)||raw.contains(['\\','#','%']){bail!("Salesforce nextRecordsUrl 不是当前 API 的安全相对 query 路径");}
         let url=self.http.base.join(raw)?;
@@ -91,4 +105,64 @@ impl HttpAdapter for Salesforce {
             _=>bail!("Salesforce 支持 SOQL 或 JSON op=query/create/update/delete；不伪装执行 SQL DDL")
         }
     }
+    async fn export_page(&self,container:&str,object:&str,token:Option<&str>,limit:u64)->Result<HttpExportPage>{
+        self.namespace(container)?;rest::identifier(object)?;
+        // Freeze describe metadata across pages; never buffer all records or use browse OFFSET.
+        let (columns,url,expected_total,returned)=match token.filter(|_|limit!=0){
+            None=>{
+                let columns:Vec<String>=self.describe(object).await?.into_iter().map(|f|f.name).collect();
+                if limit==0{return Ok(HttpExportPage{data:HttpRows{columns,rows:Vec::new()},next:None});}
+                if serde_json::to_vec(&columns)?.len()>MAX_EXPORT_TOKEN_BYTES/2{bail!("Salesforce 导出字段元数据超过游标容量；拒绝不完整字段导出");}
+                let order=if columns.iter().any(|c|c=="Id"){" ORDER BY Id"}else{""};
+                let soql=format!("SELECT {} FROM {}{}",columns.join(","),object,order);
+                if soql.len()>100_000{bail!("Salesforce SOQL 超出长度限制");}
+                let mut query=self.url(&["query"])?;query.query_pairs_mut().append_pair("q",&soql);
+                (columns,query,None,0)
+            }
+            Some(raw)=>{
+                if raw.len()>MAX_EXPORT_TOKEN_BYTES{bail!("Salesforce 导出游标超过 64 KiB 上限");}
+                let saved:ExportToken=serde_json::from_str(raw).map_err(|_|anyhow!("Salesforce 导出游标结构无效"))?;
+                if saved.version!=self.version||saved.object!=object{bail!("Salesforce 导出游标属于不同 API 或对象");}
+                let mut unique=HashSet::new();
+                for column in &saved.columns{rest::identifier(column)?;if !unique.insert(column){bail!("Salesforce 导出游标有重复字段");}}
+                if saved.columns.is_empty()||saved.returned>=saved.total{bail!("Salesforce 导出游标字段或记录计数无效");}
+                let url=self.next(&saved.next)?;
+                (saved.columns,url,Some(saved.total),saved.returned)
+            }
+        };
+        let previous_path=url.path().to_string();
+        let v=self.http.json(Method::GET,url,None).await?;
+        let total=v.get("totalSize").and_then(Value::as_u64).ok_or_else(||anyhow!("Salesforce query 缺少 totalSize"))?;
+        if expected_total.is_some_and(|n|n!=total){bail!("Salesforce 分页 totalSize 变化；拒绝不完整成功结果");}
+        let done=v.get("done").and_then(Value::as_bool).ok_or_else(||anyhow!("Salesforce query 缺少 done"))?;
+        let page=v.get("records").and_then(Value::as_array).ok_or_else(||anyhow!("Salesforce query 缺少 records"))?;
+        let returned=returned.checked_add(page.len() as u64).ok_or_else(||anyhow!("Salesforce 导出记录计数溢出"))?;
+        if returned>total||done&&returned!=total||!done&&returned>=total{bail!("Salesforce done/totalSize 与实际导出记录数不一致；拒绝截断或重复成功");}
+        if !done&&page.is_empty(){bail!("Salesforce 未结束的分页返回空记录；拒绝无限循环/伪成功");}
+        let known:HashSet<&str>=columns.iter().map(String::as_str).collect();
+        let mut budget=ExportBudget{bytes:4};
+        serde_json::to_writer(&mut budget,&columns)?;
+        let mut rows=Vec::with_capacity(page.len());
+        for item in page{
+            let record=item.as_object().ok_or_else(||anyhow!("Salesforce record 必须为对象"))?;
+            if record.get("attributes").is_some_and(|v|!v.is_object()){bail!("Salesforce attributes 必须为对象");}
+            if record.keys().any(|key|key!="attributes"&&!known.contains(key.as_str())){bail!("Salesforce record 返回 describe 未声明的字段；拒绝静默丢列");}
+            if columns.iter().any(|column|!record.contains_key(column)){bail!("Salesforce record 缺少所选字段；不能将缺失字段伪造为 NULL");}
+            let row:Vec<Option<String>>=columns.iter().map(|column|item.get(column).and_then(crate::native_db::cell)).collect();
+            std::io::Write::write_all(&mut budget,b",")?;
+            serde_json::to_writer(&mut budget,&row)?;
+            rows.push(row);
+        }
+        let next=if done{
+            if v.get("nextRecordsUrl").is_some_and(|v|!v.is_null()){bail!("Salesforce 已结束分页仍返回 nextRecordsUrl");}None
+        }else{
+            let next=self.next(rest::string(&v,"nextRecordsUrl")?)?.path().to_string();
+            if next==previous_path{bail!("Salesforce nextRecordsUrl 未推进；拒绝重复分页");}
+            let token=serde_json::to_string(&ExportToken{version:self.version.clone(),object:object.into(),columns:columns.clone(),next,total,returned})?;
+            if token.len()>MAX_EXPORT_TOKEN_BYTES{bail!("Salesforce 导出游标超过 64 KiB 上限");}
+            Some(token)
+        };
+        Ok(HttpExportPage{data:HttpRows{columns,rows},next})
+    }
+    async fn finish_export(&self,_token:Option<&str>)->Result<()>{Ok(())}
 }

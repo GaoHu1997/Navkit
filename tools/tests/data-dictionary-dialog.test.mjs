@@ -1,4 +1,4 @@
-// 数据字典导出向导（需求 1.1）：步骤流转 / 对象勾选 / 格式约束 / 文件名校验 / 后台执行。
+// 数据字典导出向导（需求 1.1）：步骤流转 / 对象勾选 / 格式约束 / 文件名校验 / 导出路径拼接 / 导出中关闭即转后台。
 // 使用项目既有的 esbuild + VM + 最小 DOM 方式；IPC 走 __PREVIEW_MOCK__，不访问真实网络。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -128,27 +128,31 @@ function harness(exportResult = 2048) {
   };
   const document = { activeElement: null, createElement(tag) { const element = new Element(tag); element.ownerDocument = document; return element; } };
   document.body = document.createElement('body'); document.activeElement = document.body;
-  const microtasks = [], module = { exports: {} };
+  const microtasks = [], module = { exports: {} }, confirmations = [];
   const context = vm.createContext({
     module, exports: module.exports, document, HTMLElement: Element, crypto: webcrypto, Error,
     queueMicrotask: callback => microtasks.push(callback),
-    setTimeout: callback => microtasks.push(callback),
+    // 错误提示的自动消失计时器不应在 settle() 时立即触发，否则断言前提示已被清掉。
+    setTimeout: () => 0,
     clearTimeout: () => {},
     console,
-    window: { innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {}, __PREVIEW_MOCK__: mock },
+    window: {
+      innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {},
+      __PREVIEW_MOCK__: mock,
+      confirm: message => { confirmations.push(message); return true; },
+    },
   });
   vm.runInContext(built.outputFiles[0].text, context, { filename: 'data-dictionary-dialog.cjs' });
   const settle = async () => {
     while (microtasks.length) microtasks.shift()();
     for (let turn = 0; turn < 6; turn++) await Promise.resolve();
   };
-  return { ...module.exports, document, settle, calls, exports };
+  return { ...module.exports, document, settle, calls, exports, confirmations };
 }
 
 const connections = [{ id: 'c1', name: '本地 MySQL', kind: 'mysql', database: 'navkit_demo' }];
 const nextBtn = dlg => dlg.footer.children[0].children[1];
 const backBtn = dlg => dlg.footer.children[0].children[0];
-const backgroundBtn = dlg => dlg.footer.children[dlg.footer.children.length - 1];
 const steps = dlg => dlg.body.children[0].children.filter(step => step.classList.contains('wizard-step'));
 const activeStepIndex = dlg => steps(dlg).findIndex(step => step.className.includes('active'));
 
@@ -370,12 +374,12 @@ test('文件名校验：非法字符被拦截，填写路径后放行', async ()
   await nextBtn(dlg).emit('click');
   await settle();
   assert.equal(activeStepIndex(dlg), 4, '填写后进入导出步');
-  // 后台执行按钮只在导出步出现
-  assert.equal(backgroundBtn(dlg).hidden, false);
-  assert.equal(backgroundBtn(dlg).textContent, '后台执行');
+  // 导出步的完成按钮就是「开始导出」；独立的「后台执行」按钮已移除（关闭窗口即转后台）
+  assert.equal(nextBtn(dlg).textContent, '开始导出');
+  assert.equal(nextBtn(dlg).disabled, false);
 });
 
-test('后台执行：调用 dictionary_export 并注册 dictionary 任务', async () => {
+test('导出：调用 dictionary_export 并注册 dictionary 任务', async () => {
   const { openDataDictionaryDialog, settle, calls, taskCenter } = harness();
   taskCenter.reset();
   let donePath = '';
@@ -385,7 +389,7 @@ test('后台执行：调用 dictionary_export 并注册 dictionary 任务', asyn
   dlg.body.querySelector('input[aria-label="输出路径"]').value = 'D:\\导出';
   await nextBtn(dlg).emit('click');
   await settle();
-  await backgroundBtn(dlg).emit('click');
+  await nextBtn(dlg).emit('click');
   await settle();
   const exportCall = calls.find(c => c[0] === 'dictionary_export');
   assert.ok(exportCall, '应调用 dictionary_export');
@@ -397,6 +401,49 @@ test('后台执行：调用 dictionary_export 并注册 dictionary 任务', asyn
   assert.ok(dictTask, '任务中心应有 dictionary 任务');
   assert.equal(dictTask.status, 'success');
   assert.match(dictTask.detail, /2\.0 KB/);
+});
+
+test('导出完成后完成按钮变为禁用的「已导出」，改动配置后恢复', async () => {
+  const { openDataDictionaryDialog, settle } = harness();
+  const dlg = openDataDictionaryDialog(connections, connections[0], 'navkit_demo', () => {});
+  await settle();
+  for (let i = 0; i < 4; i += 1) { await nextBtn(dlg).emit('click'); await settle(); }
+  dlg.body.querySelector('input[aria-label="输出路径"]').value = 'D:\\导出';
+  await nextBtn(dlg).emit('click');
+  await settle();
+  assert.equal(nextBtn(dlg).textContent, '开始导出');
+  await nextBtn(dlg).emit('click');
+  await settle();
+  assert.equal(nextBtn(dlg).textContent, '已导出', '导出成功后按钮文案切换');
+  assert.equal(nextBtn(dlg).disabled, true, '导出成功后按钮禁用，避免重复导出');
+  await dlg.body.emit('input');
+  assert.equal(nextBtn(dlg).textContent, '开始导出', '改动配置后恢复可导出');
+  assert.equal(nextBtn(dlg).disabled, false);
+});
+
+test('导出进行中关闭窗口：确认后转后台，任务继续完成', async () => {
+  let resolveExport;
+  const pending = new Promise(resolve => { resolveExport = resolve; });
+  const { openDataDictionaryDialog, settle, taskCenter, confirmations } = harness(pending);
+  taskCenter.reset();
+  let donePath = '';
+  const dlg = openDataDictionaryDialog(connections, connections[0], 'navkit_demo', path => { donePath = path; });
+  await settle();
+  for (let i = 0; i < 4; i += 1) { await nextBtn(dlg).emit('click'); await settle(); }
+  dlg.body.querySelector('input[aria-label="输出路径"]').value = 'D:\\导出';
+  await nextBtn(dlg).emit('click');
+  await settle();
+  await nextBtn(dlg).emit('click');
+  await settle();
+  dlg.close();
+  assert.equal(confirmations.length, 1, '导出进行中关闭应先确认');
+  assert.match(confirmations[0], /后台/);
+  resolveExport(2048);
+  await settle();
+  const dictTask = taskCenter.snapshot().tasks.find(t => t.kind === 'dictionary');
+  assert.ok(dictTask, '关闭窗口后任务仍在任务中心');
+  assert.equal(dictTask.status, 'success');
+  assert.ok(donePath.endsWith('.md'), `onDone 收到产物路径：${donePath}`);
 });
 
 test('Excel 单 sheet 模式把 excel_sheet_mode 传给后端', async () => {
@@ -418,4 +465,38 @@ test('Excel 单 sheet 模式把 excel_sheet_mode 传给后端', async () => {
   const exportCall = calls.find(c => c[0] === 'dictionary_export');
   assert.equal(exportCall[1], 'excel');
   assert.equal(exportCall[3], 'per_table');
+});
+
+test('导出路径：目录只拼接一次文件名，路径误填成文件时被拦截', async () => {
+  const { openDataDictionaryDialog, settle, calls } = harness();
+  const dlg = openDataDictionaryDialog(connections, connections[0], 'navkit_demo', () => {});
+  await settle();
+  for (let i = 0; i < 3; i += 1) { await nextBtn(dlg).emit('click'); await settle(); }
+  assert.equal(activeStepIndex(dlg), 3, '进入文件步');
+  const pathInput = dlg.body.querySelector('input[aria-label="输出路径"]');
+  const nameInput = dlg.body.querySelector('input[aria-label="文档名称"]');
+  nameInput.value = 'navkit_demo数据库设计文档20261112';
+  // 「将生成」预览只能拼接一次扩展名，不能出现 x.pdf\x.pdf
+  pathInput.value = 'C:\\Users\\gaohu\\Desktop';
+  await pathInput.emit('input');
+  assert.match(dlg.body.textContent, /Desktop\\navkit_demo数据库设计文档20261112\.md/);
+  assert.ok(!/\.(pdf|md|markdown|docx|xlsx|html?)\\/i.test(dlg.body.textContent), '预览路径不应重复拼接扩展名');
+  // 把完整文件路径填进「输出路径」：应被拦截并提示填写目录
+  pathInput.value = 'C:\\Users\\gaohu\\Desktop\\navkit_demo数据库设计文档20261112.pdf';
+  await pathInput.emit('input');
+  await nextBtn(dlg).emit('click');
+  await settle();
+  assert.equal(activeStepIndex(dlg), 3, '输出路径是文件时应拦截');
+  assert.match(dlg.body.textContent, /请填写目录/);
+  // 正确填目录后导出：最终 filePath 只拼接一次
+  pathInput.value = 'C:\\Users\\gaohu\\Desktop';
+  await pathInput.emit('input');
+  await nextBtn(dlg).emit('click');
+  await settle();
+  assert.equal(activeStepIndex(dlg), 4, '目录正确时进入导出步');
+  await nextBtn(dlg).emit('click');
+  await settle();
+  const exportCall = calls.find(c => c[0] === 'dictionary_export');
+  assert.equal(exportCall[2], 'C:\\Users\\gaohu\\Desktop\\navkit_demo数据库设计文档20261112.md');
+  assert.ok(!/\.(pdf|md|markdown|docx|xlsx|html?)\\/i.test(exportCall[2]), `路径不应重复拼接扩展名：${exportCall[2]}`);
 });

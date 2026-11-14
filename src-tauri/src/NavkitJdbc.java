@@ -65,7 +65,7 @@ class NavkitJdbc {
       default: return rs.getString(index);
     }
   }
-  static void emit(PrintWriter out, ResultSet rs, long offset, long limit) throws SQLException {
+  static String resultJson(ResultSet rs, long offset, long limit) throws SQLException {
     ResultSetMetaData m = rs.getMetaData();
     int n = m.getColumnCount();
     StringBuilder b = new StringBuilder("{\"columns\":[");
@@ -81,7 +81,10 @@ class NavkitJdbc {
       for (int i=1; i<=n; i++) { if(i>1)b.append(','); b.append(json(cell(rs,m,i))); }
       b.append(']');
     }
-    out.println(b.append("]}").toString());
+    return b.append("]}").toString();
+  }
+  static void emit(PrintWriter out, ResultSet rs, long offset, long limit) throws SQLException {
+    out.println(resultJson(rs,offset,limit));
   }
   static void rowsJson(PrintWriter out, List<String[]> rows, String[] cols) {
     StringBuilder b = new StringBuilder("{\"columns\":[");

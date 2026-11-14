@@ -14,7 +14,8 @@ use super::transfer_output::{checked_absolute, identity, StagedOutput, BUFFER_BY
 
 const MAX_LOOKAHEAD: usize = 128;
 const DEFAULT_SPILL_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
-#[derive(Clone, Copy, PartialEq, Eq)] pub(super) enum ScriptDialect { Sqlite, Mysql, Postgres }
+#[derive(Clone, Copy, PartialEq, Eq)] pub(super) enum ScriptDialect { Sqlite, Mysql, Postgres, Generic }
+#[derive(Clone, Copy, PartialEq, Eq)] enum ScriptPolicy { Ordinary, BackupGuards, Restore }
 impl ScriptDialect {
     pub(super) fn from_kind(kind:&DbKind)->Result<Self>{match kind.protocol(){
         Protocol::Sqlite=>Ok(Self::Sqlite),Protocol::Mysql=>Ok(Self::Mysql),Protocol::Postgres=>Ok(Self::Postgres),
@@ -25,15 +26,15 @@ impl ScriptDialect {
 enum Mode { Normal, Quote{close:u8,escaped:bool}, LineComment, BlockComment(usize), Dollar(Vec<u8>) }
 
 pub(super) struct SqlStatementReader<R:Read> {
-    reader:BufReader<R>, look:VecDeque<u8>, dialect:ScriptDialect, delimiter:Vec<u8>, line_start:bool, max_bytes:usize, backup_guards:bool,
+    reader:BufReader<R>, look:VecDeque<u8>, dialect:ScriptDialect, delimiter:Vec<u8>, line_start:bool, max_bytes:usize, policy:ScriptPolicy,
 }
 impl<R:Read> SqlStatementReader<R> {
     pub(super) fn new(reader:R,dialect:ScriptDialect,max_bytes:usize)->Self {
-        Self {reader:BufReader::with_capacity(BUFFER_BYTES,reader),look:VecDeque::with_capacity(MAX_LOOKAHEAD),dialect,delimiter:vec![b';'],line_start:true,max_bytes,backup_guards:false}
+        Self {reader:BufReader::with_capacity(BUFFER_BYTES,reader),look:VecDeque::with_capacity(MAX_LOOKAHEAD),dialect,delimiter:vec![b';'],line_start:true,max_bytes,policy:ScriptPolicy::Ordinary}
     }
     /// 仅本地备份还原允许生成器的三个精确会话守卫，普通导入仍完全拒绝控制命令。
     pub(super) fn for_backup_restore(reader:R,dialect:ScriptDialect,max_bytes:usize)->Self {
-        let mut reader=Self::new(reader,dialect,max_bytes);reader.backup_guards=true;reader
+        let mut reader=Self::new(reader,dialect,max_bytes);reader.policy=ScriptPolicy::BackupGuards;reader
     }
     fn peek(&mut self,n:usize)->Result<Option<u8>> {
         if n>=MAX_LOOKAHEAD {bail!("SQL 词法标记超过上限");}
@@ -62,6 +63,7 @@ impl<R:Read> SqlStatementReader<R> {
     fn copy(&mut self,out:&mut Vec<u8>,count:usize)->Result<()> {for _ in 0..count{let b=self.take()?.ok_or_else(||anyhow!("SQL 词法标记意外结束"))?;self.append(out,b)?;}Ok(())}
     fn dollar_tag(&mut self)->Result<Option<Vec<u8>>> {
         if self.peek(0)?!=Some(b'$'){return Ok(None);}if self.peek(1)?==Some(b'$'){return Ok(Some(b"$$".to_vec()));}
+        if self.peek(1)?.is_some_and(|b| b>=0x80) {bail!("RESTORE_COMPATIBILITY_BOUNDARY: dollar 引用标签目前只支持 ASCII 标识符；未发送 SQL");}
         if !self.peek(1)?.is_some_and(|b|b.is_ascii_alphabetic()||b==b'_'){return Ok(None);}
         let mut tag=vec![b'$'];
         for i in 1..=64 {let Some(b)=self.peek(i)? else{return Ok(None)};
@@ -89,7 +91,7 @@ impl<R:Read> SqlStatementReader<R> {
                 if !matches!(mode,Mode::Normal|Mode::LineComment){bail!("SQL 引号、dollar 引用或块注释未结束；预扫描失败，未修改目标");}
                 if body_depth!=0||case_depth!=0 {bail!("SQLite 触发器 BEGIN/CASE 没有对应 END；未修改目标");}
                 if !has_sql{return Ok(None);}if self.delimiter!=b";"{bail!("SQL 末尾缺少当前 DELIMITER；未修改目标");}
-                return make_statement(out,keywords,self.backup_guards);
+                return make_statement(out,keywords,self.policy);
             };
             match &mut mode {
                 Mode::LineComment=>{self.copy(&mut out,1)?;if b==b'\n'||b==b'\r'{mode=Mode::Normal;}continue;},
@@ -105,7 +107,7 @@ impl<R:Read> SqlStatementReader<R> {
                     if b==*close {self.copy(&mut out,1)?;if self.peek(0)?==Some(*close){self.copy(&mut out,1)?;}else{mode=Mode::Normal;}}
                     else if b==b'\\' {
                         if *escaped {self.copy(&mut out,2)?;}
-                        else if self.dialect==ScriptDialect::Mysql||self.dialect==ScriptDialect::Postgres&&*close==b'\'' {
+                        else if self.dialect==ScriptDialect::Generic || self.dialect==ScriptDialect::Mysql||self.dialect==ScriptDialect::Postgres&&*close==b'\'' {
                             bail!("SQL 字符串含依赖会话模式的反斜杠；请使用无歧义字面量（PostgreSQL 可用 E 字符串），未修改目标");
                         } else {self.copy(&mut out,1)?;}
                     }else{self.copy(&mut out,1)?;}continue;
@@ -113,13 +115,14 @@ impl<R:Read> SqlStatementReader<R> {
                 Mode::Normal=>{},
             }
             let word_byte=b.is_ascii_alphanumeric()||b==b'_'||b>=0x80||(b==b'$'&&!word.is_empty());
+            let pg_e_prefix = b==b'\'' && !word_long && word.eq_ignore_ascii_case(b"E");
             if !word_byte {observe_word(&mut word,&mut word_long,&mut keywords,self.dialect,&mut trigger,&mut trigger_body,&mut body_depth,&mut case_depth,&self.delimiter)?;}
             if !has_sql&&self.directive()? {out.clear();continue;}
             if self.starts(&self.delimiter.clone(),false)?&&body_depth==0 {
                 let delimiter=self.delimiter.len();for _ in 0..delimiter{self.take()?;}
                 if !has_sql {out.clear();keywords.clear();continue;}
                 if self.delimiter==b";"{self.append(&mut out,b';')?;}
-                return make_statement(out,keywords,self.backup_guards);
+                return make_statement(out,keywords,self.policy);
             }
             let mysql_line=self.dialect!=ScriptDialect::Mysql||!self.peek(2)?.is_some_and(|third|!third.is_ascii_whitespace()&&third>0x20);
             if self.starts(b"--",false)?&&mysql_line {self.copy(&mut out,2)?;mode=Mode::LineComment;continue;}
@@ -128,11 +131,12 @@ impl<R:Read> SqlStatementReader<R> {
                 if self.peek(2)?==Some(b'!')||self.peek(2)?.is_some_and(|c|c.eq_ignore_ascii_case(&b'M'))&&self.peek(3)?==Some(b'!') {bail!("SQL 脚本不允许 MySQL/MariaDB 可执行注释；完整预扫描拒绝，未修改目标");}
                 self.copy(&mut out,2)?;mode=Mode::BlockComment(1);continue;
             }
-            if matches!(b,b'\''|b'"'|b'`')||b==b'['&&self.dialect==ScriptDialect::Sqlite {
-                has_sql=true;let escaped=self.dialect==ScriptDialect::Postgres&&b==b'\''&&out.last().is_some_and(|c|c.eq_ignore_ascii_case(&b'E'));
+            if matches!(b,b'\''|b'"'|b'`')||b==b'['&&matches!(self.dialect,ScriptDialect::Sqlite|ScriptDialect::Generic) {
+                has_sql=true;let escaped=self.dialect==ScriptDialect::Postgres&&pg_e_prefix;
                 self.copy(&mut out,1)?;mode=Mode::Quote{close:if b==b'['{b']'}else{b},escaped};continue;
             }
             if b==b'$'&&word.is_empty()&&self.dialect==ScriptDialect::Postgres {if let Some(tag)=self.dollar_tag()?{has_sql=true;self.copy(&mut out,tag.len())?;mode=Mode::Dollar(tag);continue;}}
+            if self.dialect==ScriptDialect::Generic && matches!(b,b'$'|b'\\') {bail!("RESTORE_COMPATIBILITY_BOUNDARY: 非 native 有界兼容扫描仅支持分号/标准引号语句，不支持 dollar、反斜杠客户端命令或过程体；未发送 SQL");}
             if b==0 {bail!("SQL 脚本包含 NUL；未修改目标");}
             if !b.is_ascii_whitespace(){has_sql=true;}
             if word_byte {if word.len()<64{word.push(b);}else{word_long=true;}}
@@ -143,6 +147,12 @@ impl<R:Read> SqlStatementReader<R> {
 fn observe_word(word:&mut Vec<u8>,long:&mut bool,keywords:&mut Vec<String>,dialect:ScriptDialect,trigger:&mut bool,body_seen:&mut bool,body:&mut usize,cases:&mut usize,delimiter:&[u8])->Result<()> {
     if word.is_empty(){return Ok(());}let text=if *long{String::new()}else{String::from_utf8_lossy(word).to_ascii_uppercase()};word.clear();*long=false;
     if keywords.len()<32 {keywords.push(text.clone());}
+    if dialect==ScriptDialect::Generic && (text=="BEGIN" || matches!(text.as_str(),"TRIGGER"|"PROCEDURE"|"PROC"|"FUNCTION")) && keywords.first().is_some_and(|word|matches!(word.as_str(),"CREATE"|"ALTER")) {
+        bail!("RESTORE_COMPATIBILITY_BOUNDARY: 非 native 兼容扫描不支持过程/触发器体；请使用数据库专用脚本通道，未发送 SQL");
+    }
+    if dialect==ScriptDialect::Postgres && text=="BEGIN" && keywords.first().is_some_and(|word|matches!(word.as_str(),"CREATE"|"DO")) && keywords.iter().any(|word|matches!(word.as_str(),"FUNCTION"|"PROCEDURE"|"DO")) {
+        bail!("RESTORE_COMPATIBILITY_BOUNDARY: PostgreSQL 非 dollar 引用的 BEGIN ATOMIC/过程体不受支持；请使用 dollar 引用，未发送 SQL");
+    }
     if keywords.first().map(String::as_str)==Some("CREATE")&&keywords.len()<=8&&text=="TRIGGER" { *trigger=true; }
     if dialect==ScriptDialect::Mysql&&delimiter==b";"&&keywords.first().map(String::as_str)==Some("CREATE")&&text=="BEGIN"&&keywords.iter().any(|k|matches!(k.as_str(),"TRIGGER"|"PROCEDURE"|"FUNCTION"|"EVENT")) {
         bail!("MySQL 复合例程/触发器请显式使用 DELIMITER；未修改目标");
@@ -154,12 +164,30 @@ fn observe_word(word:&mut Vec<u8>,long:&mut bool,keywords:&mut Vec<String>,diale
     }
     Ok(())
 }
-fn make_statement(bytes:Vec<u8>,keywords:Vec<String>,backup_guards:bool)->Result<Option<Statement>> {
+fn make_statement(bytes:Vec<u8>,keywords:Vec<String>,policy:ScriptPolicy)->Result<Option<Statement>> {
     let sql=String::from_utf8(bytes).context("SQL 输入不是有效 UTF-8")?;
     let statement=Statement{sql,keywords};
     let normalized=crate::db::strip_leading_comments(&statement.sql).trim().trim_end_matches(';').trim().to_ascii_uppercase();
-    if !(backup_guards && matches!(normalized.as_str(), "SET NAMES UTF8MB4" | "SET FOREIGN_KEY_CHECKS = 0" | "SET FOREIGN_KEY_CHECKS = 1")) { validate_statement(&statement)?; }
+    match policy {
+        ScriptPolicy::Restore => validate_restore_statement(&statement)?,
+        ScriptPolicy::BackupGuards if matches!(normalized.as_str(), "SET NAMES UTF8MB4" | "SET FOREIGN_KEY_CHECKS = 0" | "SET FOREIGN_KEY_CHECKS = 1") => {},
+        _ => validate_statement(&statement)?,
+    }
     Ok(Some(statement))
+}
+/// 详细还原独立策略，不放宽普通 SQL 导入。显式事务和词法模式切换不能与自动 DML 批安全混用。
+fn validate_restore_statement(statement:&Statement)->Result<()> {
+    let first=statement.keywords.first().map(String::as_str).unwrap_or("");
+    if matches!(first,"BEGIN"|"START"|"COMMIT"|"ROLLBACK"|"SAVEPOINT"|"RELEASE"|"END"|"USE"|"ATTACH"|"DETACH"|"LOCK"|"UNLOCK"|"COPY"|"DELIMITER"|"GO"|"CALL"|"DO") {
+        bail!("RESTORE_COMPATIBILITY_BOUNDARY: 详细还原不能安全混用显式事务、命名空间、锁或客户端数据命令；请使用专用脚本通道，完整预扫描未发送 SQL");
+    }
+    if first=="SET" {
+        let normalized:String=crate::db::strip_leading_comments(&statement.sql).trim().trim_end_matches(';').chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
+        if !matches!(normalized.as_str(),"SETNAMESUTF8MB4"|"SETFOREIGN_KEY_CHECKS=0"|"SETFOREIGN_KEY_CHECKS=1"|"SETSESSION_REPLICATION_ROLE=REPLICA"|"SETSESSION_REPLICATION_ROLE=ORIGIN") {
+            bail!("RESTORE_COMPATIBILITY_BOUNDARY: 详细还原仅允许已验证的备份 SET 守卫；其他会话/服务器/词法或事务模式设置请用专用脚本通道，未发送 SQL");
+        }
+    }
+    Ok(())
 }
 fn validate_statement(statement:&Statement)->Result<()> {
     let first=statement.keywords.first().map(String::as_str).unwrap_or("");
@@ -186,22 +214,29 @@ fn frame_mac(key:&[u8;32],index:u64,length:&[u8;4],sql:&[u8])->[u8;32] {
     inner_pad.zeroize();outer_pad.zeroize();outer.finalize().into()
 }
 pub(super) struct PreparedScript {
-    _stage:StagedOutput, reader:BufReader<File>, digest:[u8;32], read_digest:Sha256, key:[u8;32], count:u64, remaining:u64, max_bytes:usize, last_counts_rows:bool,
+    _stage:Option<StagedOutput>, reader:Option<BufReader<File>>, digest:[u8;32], read_digest:Sha256, key:[u8;32], count:u64, remaining:u64, max_bytes:usize, last_counts_rows:bool,
 }
-impl Drop for PreparedScript {fn drop(&mut self){self.key.zeroize();}}
+impl Drop for PreparedScript {fn drop(&mut self){self.reader.take();self._stage.take();self.key.zeroize();}}
 impl PreparedScript {
-    pub(super) fn prepare(path:&str,encoding:&str,kind:&DbKind,max_bytes:usize,spill_budget:Option<&str>,mut check:impl FnMut()->Result<()>)->Result<Self> {
-        check()?;let dialect=ScriptDialect::from_kind(kind)?;let path=checked_absolute(Path::new(path))?;
+    pub(super) fn prepare(path:&str,encoding:&str,kind:&DbKind,max_bytes:usize,spill_budget:Option<&str>,check:impl FnMut()->Result<()>)->Result<Self> {
+        Self::prepare_with_policy(path,encoding,ScriptDialect::from_kind(kind)?,max_bytes,spill_budget,ScriptPolicy::Ordinary,check)
+    }
+    pub(super) fn prepare_restore(path:&str,dialect:ScriptDialect,max_bytes:usize,spill_budget:Option<&str>,check:impl FnMut()->Result<()>)->Result<Self> {
+        Self::prepare_with_policy(path,"utf8",dialect,max_bytes,spill_budget,ScriptPolicy::Restore,check)
+    }
+    fn prepare_with_policy(path:&str,encoding:&str,dialect:ScriptDialect,max_bytes:usize,spill_budget:Option<&str>,policy:ScriptPolicy,mut check:impl FnMut()->Result<()>)->Result<Self> {
+        check()?;let path=checked_absolute(Path::new(path))?;
         let mut options=OpenOptions::new();options.read(true);
         #[cfg(windows)] {use std::os::windows::fs::OpenOptionsExt;options.share_mode(1);}
         let mut source=options.open(&path).context("无法固定 SQL 输入文件")?;let source_id=identity(&source)?;let before=source.metadata()?;
         if !before.is_file(){bail!("SQL 输入必须是普通文件");}
         let budget=spill_budget.map(str::parse::<u64>).transpose().context("SQL spill 上限必须是十进制字节字符串")?.unwrap_or(DEFAULT_SPILL_BUDGET);
         let target=std::env::temp_dir().join(format!("navkit-sql-preflight-{}.snapshot",uuid::Uuid::new_v4()));
-        let stage=StagedOutput::new(target.to_str().ok_or_else(||anyhow!("SQL 临时目录不是有效文本路径"))?)?;
-        let mut output=BufWriter::with_capacity(BUFFER_BYTES,stage.file_clone()?);let source_digest=Arc::new(Mutex::new(Sha256::new()));
+        let mut stage=Some(StagedOutput::new(target.to_str().ok_or_else(||anyhow!("SQL 临时目录不是有效文本路径"))?)?);
+        let result = (|| -> Result<Self> {
+        let mut output=BufWriter::with_capacity(BUFFER_BYTES,stage.as_ref().unwrap().file_clone()?);let source_digest=Arc::new(Mutex::new(Sha256::new()));
         let input=DecodeReader::new(HashingReader{file:source.try_clone()?,digest:source_digest.clone()},encoding)?;
-        let mut parser=SqlStatementReader::new(input,dialect,max_bytes);let mut hash=Sha256::new();let mut size=0u64;let mut count=0u64;
+        let mut parser=SqlStatementReader::new(input,dialect,max_bytes);parser.policy=policy;let mut hash=Sha256::new();let mut size=0u64;let mut count=0u64;
         let mut secret=Sha256::new();secret.update(uuid::Uuid::new_v4().as_bytes());secret.update(uuid::Uuid::new_v4().as_bytes());let key:[u8;32]=secret.finalize().into();
         while let Some(statement)=parser.next_statement()? {
             check()?;let bytes=u32::try_from(statement.sql.len()).context("SQL 单条语句超过可用帧大小")?;
@@ -221,25 +256,37 @@ impl PreparedScript {
         loop {check()?;let read=loop{match source.read(&mut bytes){Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,other=>break other?}};if read==0{break;}rehash.update(&bytes[..read]);}
         let after=source.metadata()?;let current=options.open(&path)?;
         if identity(&current)?!=source_id||before.len()!=after.len()||before.modified()?!=after.modified()?||<[u8;32]>::from(rehash.finalize())!=expected_source {bail!("SQL 输入在预扫描时发生变化；未修改目标");}
-        let digest=hash.finalize().into();let mut file=stage.file_clone()?;file.seek(SeekFrom::Start(0))?;
-        let mut prepared=Self{_stage:stage,reader:BufReader::with_capacity(BUFFER_BYTES,file),digest,read_digest:Sha256::new(),key,count,remaining:count,max_bytes,last_counts_rows:false};
-        prepared.verify()?;check()?;Ok(prepared)
+        let digest=hash.finalize().into();let mut file=stage.as_ref().unwrap().file_clone()?;file.seek(SeekFrom::Start(0))?;
+        let mut prepared=Self{_stage:None,reader:Some(BufReader::with_capacity(BUFFER_BYTES,file)),digest,read_digest:Sha256::new(),key,count,remaining:count,max_bytes,last_counts_rows:false};
+        prepared.verify()?;check()?;prepared._stage=stage.take();Ok(prepared)
+        })();
+        match result {
+            Ok(prepared) => Ok(prepared),
+            Err(error) => { if let Some(stage)=stage.take() { if let Err(cleanup)=stage.cleanup() { return Err(error.context(format!("SQL 预扫描失败且私有快照清理失败：{cleanup}；未发送 SQL"))); } } Err(error) },
+        }
+    }
+    pub(super) fn cleanup(mut self)->Result<()> {
+        // Windows 必须先释放所有读取克隆，才允许删除私有 stage。
+        self.reader.take();
+        if let Some(stage)=self._stage.take(){stage.cleanup()?;}Ok(())
     }
     pub(super) fn count(&self)->u64{self.count}
     pub(super) fn counts_rows(&self)->bool{self.last_counts_rows}
     pub(super) fn verify(&mut self)->Result<()> {
-        self.reader.seek(SeekFrom::Start(0))?;let mut hash=Sha256::new();let mut bytes=vec![0;BUFFER_BYTES];
-        loop{let read=self.reader.read(&mut bytes)?;if read==0{break;}hash.update(&bytes[..read]);}
+        let reader=self.reader.as_mut().ok_or_else(||anyhow!("SQL 快照已关闭"))?;
+        reader.seek(SeekFrom::Start(0))?;let mut hash=Sha256::new();let mut bytes=vec![0;BUFFER_BYTES];
+        loop{let read=reader.read(&mut bytes)?;if read==0{break;}hash.update(&bytes[..read]);}
         if <[u8;32]>::from(hash.finalize())!=self.digest {bail!("SQL 预扫描快照摘要不匹配；未修改目标");}
-        self.reader.seek(SeekFrom::Start(0))?;self.read_digest=Sha256::new();self.remaining=self.count;Ok(())
+        reader.seek(SeekFrom::Start(0))?;self.read_digest=Sha256::new();self.remaining=self.count;Ok(())
     }
     pub(super) fn next_statement(&mut self)->Result<Option<String>> {
+        let reader=self.reader.as_mut().ok_or_else(||anyhow!("SQL 快照已关闭"))?;
         if self.remaining==0 {
-            let mut tail=[0];if self.reader.read(&mut tail)?!=0||<[u8;32]>::from(self.read_digest.clone().finalize())!=self.digest {bail!("SQL 快照在执行过程中变化；停止发送后续语句");}return Ok(None);
+            let mut tail=[0];if reader.read(&mut tail)?!=0||<[u8;32]>::from(self.read_digest.clone().finalize())!=self.digest {bail!("SQL 快照在执行过程中变化；停止发送后续语句");}return Ok(None);
         }
-        let mut header=[0u8;4];self.reader.read_exact(&mut header)?;let bits=u32::from_le_bytes(header);let length=(bits&0x7fff_ffff) as usize;
+        let mut header=[0u8;4];reader.read_exact(&mut header)?;let bits=u32::from_le_bytes(header);let length=(bits&0x7fff_ffff) as usize;
         if length==0||length>self.max_bytes{bail!("SQL 快照帧超过单条语句上限");}
-        let mut mac=[0u8;32];self.reader.read_exact(&mut mac)?;let mut bytes=vec![0;length];self.reader.read_exact(&mut bytes)?;
+        let mut mac=[0u8;32];reader.read_exact(&mut mac)?;let mut bytes=vec![0;length];reader.read_exact(&mut bytes)?;
         let expected=frame_mac(&self.key,self.count-self.remaining,&header,&bytes);
         if mac.iter().zip(expected.iter()).fold(0u8,|diff,(a,b)|diff|(*a^*b))!=0 {bail!("SQL 快照帧授权/顺序不匹配；本条及后续语句未发送");}
         self.read_digest.update(header);self.read_digest.update(mac);self.read_digest.update(&bytes);self.remaining-=1;self.last_counts_rows=bits&0x8000_0000!=0;
@@ -263,6 +310,10 @@ impl PreparedScript {
     #[test] fn sql_reader_pg_dollar_e_strings_and_nested_comments() {
         let out=statements("/* outer /* nested */ end */ CREATE FUNCTION f() RETURNS void AS $body$ BEGIN PERFORM 'x;'; END; $body$ LANGUAGE plpgsql; SELECT E'a\\\';b';",ScriptDialect::Postgres).unwrap();
         assert_eq!(out.len(),2);assert!(out[0].contains("PERFORM 'x;'"));
+    }
+    #[test] fn sql_reader_pg_e_string_requires_a_separate_prefix_token() {
+        assert!(statements("SELECT tableE'abc\\'; COMMIT; --';",ScriptDialect::Postgres).is_err());
+        assert_eq!(statements("SELECT E'abc\\'; still literal';SELECT 2;",ScriptDialect::Postgres).unwrap().len(),2);
     }
     #[test] fn sql_reader_mysql_delimiter_procedure_and_reset() {
         let out=statements("DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT ';'; IF 1=1 THEN SELECT 2; END IF; END$$\nDELIMITER ;\nINSERT INTO t VALUES ('literal $$');",ScriptDialect::Mysql).unwrap();
@@ -331,9 +382,20 @@ impl PreparedScript {
         let mut script=PreparedScript::prepare(source.to_str().unwrap(),"latin1",&DbKind::of("sqlite"),4096,None,||Ok(())).unwrap();assert!(script.next_statement().unwrap().unwrap().contains("é"));
         std::fs::write(&source,b"CREATE TABLE t(v);\xe4\xb8").unwrap();assert!(PreparedScript::prepare(source.to_str().unwrap(),"utf8",&DbKind::of("sqlite"),4096,None,||Ok(())).is_err());
     }
+    #[test] fn sql_snapshot_mac_checked_again_before_each_statement() {
+        let dir=Directory::new();let source=dir.0.join("input.sql");std::fs::write(&source,"INSERT INTO t VALUES(1);").unwrap();
+        let mut script=PreparedScript::prepare_restore(source.to_str().unwrap(),ScriptDialect::Sqlite,4096,None,||Ok(())).unwrap();
+        let mut file=script._stage.as_ref().unwrap().file_clone().unwrap();file.seek(SeekFrom::Start(36)).unwrap();file.write_all(b"X").unwrap();file.flush().unwrap();drop(file);
+        script.reader.as_mut().unwrap().seek(SeekFrom::Start(0)).unwrap();assert!(script.next_statement().is_err());script.cleanup().unwrap();
+    }
+    #[test] fn sql_snapshot_source_changed_during_preflight_is_rejected() {
+        let dir=Directory::new();let source=dir.0.join("input.sql");std::fs::write(&source,"INSERT INTO t VALUES(1);INSERT INTO t VALUES(2);").unwrap();let mut checks=0;
+        let result=PreparedScript::prepare_restore(source.to_str().unwrap(),ScriptDialect::Sqlite,4096,None,||{checks+=1;if checks==2 {std::fs::write(&source,"DELETE FROM t;").context("固定句柄阻止源写入")?;}Ok(())});
+        assert!(result.is_err());
+    }
     #[test] fn sql_snapshot_cancel_preflight_and_frame_tampering_do_not_send() {
         let dir=Directory::new();let source=dir.0.join("input.sql");std::fs::write(&source,"INSERT INTO t VALUES(1);").unwrap();
         assert!(PreparedScript::prepare(source.to_str().unwrap(),"utf8",&DbKind::of("sqlite"),4096,None,||bail!("cancel")).is_err());
-        let mut script=PreparedScript::prepare(source.to_str().unwrap(),"utf8",&DbKind::of("sqlite"),4096,None,||Ok(())).unwrap();let mut file=script._stage.file_clone().unwrap();file.seek(SeekFrom::Start(4)).unwrap();file.write_all(b"COMMIT").unwrap();file.flush().unwrap();assert!(script.verify().is_err());
+        let mut script=PreparedScript::prepare(source.to_str().unwrap(),"utf8",&DbKind::of("sqlite"),4096,None,||Ok(())).unwrap();let mut file=script._stage.as_ref().unwrap().file_clone().unwrap();file.seek(SeekFrom::Start(4)).unwrap();file.write_all(b"COMMIT").unwrap();file.flush().unwrap();assert!(script.verify().is_err());
     }
 }

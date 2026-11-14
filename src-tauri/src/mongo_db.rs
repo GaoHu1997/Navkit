@@ -11,6 +11,9 @@ use mongodb::{Client, options::FindOptions};
 
 use crate::models::{ConnectionRequest, DbKind};
 
+/// 导出游标每批从服务端拉取的文档数（仅控制网络批量，不限制总行数）。
+const EXPORT_BATCH_SIZE: u32 = 1000;
+
 pub struct MongoDb {
     client: Client,
     /// 连接配置中选择的默认库（可为空）。
@@ -150,6 +153,41 @@ impl MongoDb {
             })
             .collect();
         Ok((cols, rows))
+    }
+
+    /// 流式导出用的单个 `find` 游标：服务端按 `batch_size` 分批拉取，
+    /// 不使用 `skip` 分页（避免深分页的线性扫描开销），也不把整集合读入内存。
+    ///
+    /// - `filter_json`：与查询页同语义的 JSON 过滤条件；空 / `{}` 表示全部文档。
+    /// - `limit = Some(0)`：不执行 `find`，返回 `Ok(None)`（导出 0 行）。
+    /// - `limit = None`：不限行数。
+    pub async fn find_export_cursor(
+        &self,
+        db: &str,
+        coll: &str,
+        filter_json: &str,
+        limit: Option<u64>,
+    ) -> Result<Option<mongodb::Cursor<Document>>> {
+        if matches!(limit, Some(0)) {
+            return Ok(None);
+        }
+        let filter = parse_filter(filter_json)?;
+        let mut opts = FindOptions::default();
+        opts.batch_size = Some(EXPORT_BATCH_SIZE);
+        if let Some(n) = limit {
+            opts.limit = Some(
+                i64::try_from(n).map_err(|_| anyhow!("MongoDB 导出行数上限 {n} 超过 i64 范围"))?,
+            );
+        }
+        let cursor = self
+            .client
+            .database(db)
+            .collection::<Document>(coll)
+            .find(filter.unwrap_or_default())
+            .with_options(opts)
+            .await
+            .map_err(|e| anyhow!("MongoDB 导出查询失败: {e}"))?;
+        Ok(Some(cursor))
     }
 
     /// 统计文档数。

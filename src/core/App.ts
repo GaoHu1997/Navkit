@@ -43,7 +43,7 @@ import { ColumnSidebar } from "../ui/ColumnSidebar";
 import { filterJoinControl, filterValueControl } from "../ui/TableFilterControls";
 import "../ui/data-grid-controls.css";
 import { openDriverManager } from "../dialogs/DriverManagerDialog";
-import { openSyncDialog } from "../dialogs/SyncDialog";
+import { openSyncDialog, taskFeedback } from "../dialogs/SyncDialog";
 import { DB_KINDS, kindMeta } from "./dbcatalog";
 import type {
   AppSettings,
@@ -1446,9 +1446,9 @@ export class App {
     showDraftText(`定义 · ${descriptor.display_name}`, definition.definition, `只读定义；完整性：${definition.completeness}。未验证的启停 / 删除 / 修改不发送SQL。`);
   }
 
-  /** 打开（或聚焦）某连接的对象标签页。
-   *  对象页每个连接共用一个：固定在标签条左侧（其它页签之前），
-   *  单击树上不同分组 / 不同库只就地切换内容，不再新开页签。
+  /** 打开（或聚焦）唯一的对象标签页。
+   *  所有连接 / 数据库全局共用一个对象页：它永远是标签条的第一个页签（其它页签之前），
+   *  单击树上不同连接 / 分组 / 数据库只就地切换内容，不再新开页签，也绝不出现第二个对象页。
    *  filter：对象来源（树上选中「表」分组只展示表、「视图」分组只展示视图、库节点展示全部）。 */
   openObjectsTab(connId: string, schema: string, filter: ObjectType = "folder", markOpened = true, browserKind: "objects" | "backup" = "objects"): void {
     const cfg = this.connections.find((c) => c.id === connId);
@@ -1460,20 +1460,34 @@ export class App {
     this.openConnections.add(connId);
     this.syncConnIcons();
     const title = "对象";
-    const existing = this.tabs.find(
-      (t) => (t.kind === "objects" || t.kind === "backup") && t.connectionId === connId,
-    );
+    // 全局唯一对象页：不按连接区分，找到任意一个对象 / 备份页即复用。
+    const existing = this.tabs.find((t) => t.kind === "objects" || t.kind === "backup");
     if (existing) {
-      // 共用对象页：切换内容（库 + 过滤）并聚焦，不新开页签。
+      // 共用对象页：切换连接 + 库 + 过滤并聚焦，不新开页签。
       if (existing.kind !== browserKind) {
         this.views.get(existing.id)?.destroy();
         this.views.delete(existing.id);
         existing.kind = browserKind;
       }
+      // 复用的对象页若曾因连接断开/变更被标记为数据源失效，切换目标即视为重新验证：
+      // 清除失效态并丢弃旧视图（含其中的失效提示），随后重建。
+      if (existing.datasourceStale) {
+        this.views.get(existing.id)?.destroy();
+        this.views.delete(existing.id);
+        delete existing.datasourceStale;
+      }
       existing.selectedRows.clear();
+      existing.connectionId = connId;
+      existing.connectionName = cfg.name;
       existing.schema = schema;
       existing.objectType = filter;
       existing.title = title;
+      // 对象页必须永远是第一个页签。
+      const index = this.tabs.indexOf(existing);
+      if (index > 0) {
+        this.tabs.splice(index, 1);
+        this.tabs.unshift(existing);
+      }
       this.activeTabId = existing.id;
       this.renderTabs();
       return;
@@ -1501,9 +1515,8 @@ export class App {
       selectedRows: new Set(),
       editing: null,
     };
-    // 固定左侧：插到已有对象页之后、其余页签之前
-    const insertAt = this.tabs.filter((t) => t.kind === "objects" || t.kind === "backup").length;
-    this.tabs.splice(insertAt, 0, tab);
+    // 唯一对象页永远固定在标签条最左侧。
+    this.tabs.unshift(tab);
     this.activeTabId = tab.id;
     this.renderTabs();
   }
@@ -2156,7 +2169,6 @@ export class App {
           { id: "add-field", label: "添加字段", icon: "dbn_insert", disabled: busy },
           { id: "insert-field", label: "插入字段", icon: "insert_field", disabled: busy },
           { id: "delete-field", label: "删除字段", icon: "dbn_delete", disabled: busy },
-          { id: "primary-key", label: "主键", icon: "dbn_edit", disabled: busy },
           { id: "move-up", label: "上移", icon: "dbn_prior", disabled: !!upReason, disabledReason: upReason ?? undefined },
           { id: "move-down", label: "下移", icon: "dbn_next", disabled: !!downReason, disabledReason: downReason ?? undefined },
         ];
@@ -2371,7 +2383,9 @@ export class App {
       const info = c ? mapTableStatus(c.status).filter((field) => cfg?.kind !== "sqlite" || field.label !== "排序规则")
         : [{ label: "加载中", value: "..." }];
       if (cfg?.kind === "sqlite") {
-        for (const field of info) if (field.label === "数据长度") field.label = "数据库页大小（非单表）";
+        for (const field of info) if (field.label === "数据长度") field.label = "数据库文件大小";
+        // 整库指标不是单表大小：说明写在备注行，不塞进字段名的括号里。
+        info.push({ label: "统计说明", value: "数据库文件大小是整个数据库文件的大小（单位：字节），不是单表大小。" });
       }
       if (c?.schema) {
         info.unshift(
@@ -2409,6 +2423,8 @@ export class App {
       });
     };
     build();
+    // 当前页先返回：目录、DDL 等次要请求不与首屏争抢串行数据库连接。
+    if (!tab.page) return;
     if (!this.tableMetaCache.has(key)) {
       void (async () => {
         const entry = {
@@ -2427,7 +2443,7 @@ export class App {
           entry.ddl = `-- 获取定义失败：${String(e)}`;
         }
         try {
-          entry.schema = await api.getTableSchema(tab.connectionId, tab.schema, tab.object);
+          entry.schema = await api.getTableSchema(tab.connectionId, tab.schema, tab.object, false);
         } catch {
           /* 结构获取失败留空 */
         }
@@ -2643,9 +2659,39 @@ export class App {
     this.renderTabs();
   }
 
-  /** 打开备份 / 自动任务的空列表页（与参考程序空态一致）。 */
+  /** 打开备份 / 自动任务的空列表页（与参考程序空态一致）。
+   *  备份属于对象页的一个类别，复用唯一的对象页，绝不新开第二个对象页。 */
   openEmptyListTab(kind: "backup" | "schedule"): void {
     const title = kind === "backup" ? "备份" : "自动任务";
+    if (kind === "backup") {
+      const objectTab = this.tabs.find((t) => t.kind === "objects" || t.kind === "backup");
+      if (objectTab) {
+        if (objectTab.kind !== "backup") {
+          this.views.get(objectTab.id)?.destroy();
+          this.views.delete(objectTab.id);
+          objectTab.kind = "backup";
+        }
+        if (objectTab.datasourceStale) {
+          this.views.get(objectTab.id)?.destroy();
+          this.views.delete(objectTab.id);
+          delete objectTab.datasourceStale;
+        }
+        objectTab.selectedRows.clear();
+        objectTab.connectionId = "";
+        objectTab.connectionName = "";
+        objectTab.schema = "";
+        objectTab.objectType = "folder";
+        objectTab.title = title;
+        const index = this.tabs.indexOf(objectTab);
+        if (index > 0) {
+          this.tabs.splice(index, 1);
+          this.tabs.unshift(objectTab);
+        }
+        this.activeTabId = objectTab.id;
+        this.renderTabs();
+        return;
+      }
+    }
     const existing = this.tabs.find((t) => t.kind === kind);
     if (existing) {
       this.activeTabId = existing.id;
@@ -2675,7 +2721,9 @@ export class App {
       selectedRows: new Set(),
       editing: null,
     };
-    this.tabs.push(tab);
+    // 备份页属于对象页类别，固定在标签条最左；自动任务为独立页，追加到末尾。
+    if (kind === "backup") this.tabs.unshift(tab);
+    else this.tabs.push(tab);
     this.activeTabId = tab.id;
     this.renderTabs();
   }
@@ -2746,6 +2794,13 @@ export class App {
 
   // ------------------------------------------------------------ 状态栏
 
+  /** 实时计时只更新当前数据页的文字，不重建状态栏以免打断按钮焦点。 */
+  updateTableQueryElapsed(tabId: string, text: string): void {
+    if (this.activeTab?.id !== tabId) return;
+    const cell = this.statusBar.querySelector<HTMLElement>(".statusbar-query-elapsed");
+    if (cell) cell.textContent = text;
+  }
+
   renderStatus(): void {
     this.statusBar.innerHTML = "";
     const tab = this.activeTab;
@@ -2782,9 +2837,11 @@ export class App {
         mkCell(cfg?.name ?? "", connIconOf(cfg));
         mkCell(tab.schema, "info_pane_database");
       } else if (view instanceof DataTabView) {
-        // 只显示分页位置；状态栏左侧不再重复 SQL 提示。
+        // 耗时位于右下记录统计之前；查询开始即可展示。
         const info = view.statusInfo();
         mkSpacer();
+        const elapsed = mkCell(info.elapsed);
+        elapsed.classList.add("statusbar-query-elapsed");
         mkCell(info.pageText);
       } else if (tab.kind === "backup" && view instanceof BackupTabView) {
         mkCell(`${view.grid.rows.length} 备份`);
@@ -3662,9 +3719,6 @@ export class App {
         case "delete-trigger":
           this.cmdDeleteTrigger();
           break;
-        case "primary-key":
-          this.cmdTogglePrimaryKey();
-          break;
         case "move-up":
         case "move-down": {
           const view = this.activeView();
@@ -4150,23 +4204,20 @@ export class App {
 
   /** 新建分组：弹窗输入分组名，持久化后显示在树中（空分组也保留）。 */
   private cmdNewGroup(): void {
-    const input = document.createElement("input");
-    input.type = "text";
-    input.style.width = "240px";
+    const input = textInput();
+    input.style.width = "100%";
     input.placeholder = "例如：开发环境";
+    input.setAttribute("aria-label", "分组名称");
     new Dialog({
       title: "新建组",
       width: 380,
       render: (body) => {
-        const row = document.createElement("div");
-        row.className = "field";
-        const lab = document.createElement("div");
-        lab.className = "field-label";
-        lab.textContent = "分组名:";
-        row.appendChild(lab);
-        row.appendChild(input);
+        const row = field("分组名:", input);
+        // 标签列自适应文字宽度：单字段弹窗左右留白都等于内容区 padding，
+        // 不再出现“左侧空隙大、输入框贴右”的不对称。
+        row.style.setProperty("--label-w", "auto");
+        row.style.marginBottom = "0";
         body.appendChild(row);
-        body.style.padding = "18px 14px";
       },
       buttons: [
         {
@@ -5164,11 +5215,6 @@ export class App {
     if (view instanceof StructureTabView) view.deleteField();
   }
 
-  /** 表设计器：切换选中字段的主键标记。 */
-  private cmdTogglePrimaryKey(): void {
-    const view = this.activeView();
-    if (view instanceof StructureTabView) view.togglePrimaryKey();
-  }
   private cmdAddIndex(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.addIndex(); }
   private cmdDeleteIndex(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.deleteIndex(); }
   private cmdAddForeignKey(): void { const view = this.activeView(); if (view instanceof StructureTabView) view.addForeignKey(); }
@@ -5642,7 +5688,7 @@ export class App {
             file_name: null,
             include_structure: options.include_structure !== false,
             include_data: options.include_data !== false,
-          });
+          }).then((backup) => [backup.rows, backup.bytes] as const);
           detail = `备份完成：${rows} 行数据，文件 ${(bytes / 1024).toFixed(1)} KB`;
           this.refreshBackupTabs(job.connection_id, schema);
           break;
@@ -6062,11 +6108,14 @@ export class App {
           label: "关闭",
           primary: true,
           onClick: () => {
-            // 执行中关闭 = 仅关闭窗口（后端语句已提交，无法中断）
+            // 关闭只停止显示，后台任务继续；另有“停止后续语句”按钮，等待当前操作回执。
             return true;
           },
         },
       ],
+    });
+    const restoreFeedback = taskFeedback(dlg, statusText, undefined, undefined, {
+      cancelOnClose: false, unit: "条语句", cancelLabel: "停止后续语句",
     });
     const copyBtn = dlg.footer.querySelector<HTMLButtonElement>(".dialog-footer-left .btn");
     if (copyBtn) {
@@ -6090,10 +6139,11 @@ export class App {
     const appendStep = (step: import("./types").RestoreStep) => {
       const row = document.createElement("div");
       row.className = `restore-step${step.ok ? "" : " failed"}${step.skipped ? " skipped" : ""}`;
+      const effectLabel = ({ acked: "已回执", committed: "已提交", rolled_back: "已回滚", skipped: "已跳过", failed: "失败", unknown: "结果未知" } as const)[step.effect];
       row.dataset.text =
-        `#${step.index} ${step.ok ? (step.skipped ? "SKIP" : "OK") : "FAIL"} ${step.sql}` +
+        `#${step.index} ${effectLabel} ${step.sql}` +
         (step.error ? `\n    → ${step.error}` : "") +
-        (step.affected != null ? `\n    → 影响 ${step.affected} 行` : "");
+        (step.affected != null ? `\n    → 已回执影响 ${step.affected} 行（${effectLabel}）` : "");
 
       const num = document.createElement("div");
       num.className = "restore-step-num";
@@ -6117,12 +6167,12 @@ export class App {
       } else if (step.affected != null) {
         const ok = document.createElement("div");
         ok.className = "restore-step-meta";
-        ok.textContent = `影响 ${step.affected} 行`;
+        ok.textContent = `已回执影响 ${step.affected} 行 · ${effectLabel}`;
         main.appendChild(ok);
       } else {
         const ok = document.createElement("div");
         ok.className = "restore-step-meta";
-        ok.textContent = "执行成功";
+        ok.textContent = effectLabel;
         main.appendChild(ok);
       }
       row.append(num, icon, main);
@@ -6131,28 +6181,44 @@ export class App {
     };
 
     try {
+      const restoreTaskId = restoreFeedback.begin();
       statusText.textContent = "正在打开连接…";
       await api.openConnection(connId);
-      statusText.textContent = "正在执行 SQL 语句…";
-      const report = await api.restoreBackupDetailed(connId, schema, file);
+      statusText.textContent = "正在完整预扫描；执行中可停止后续语句，等待当前操作回执与清理…";
+      const report = await api.restoreBackupDetailed(connId, schema, file, restoreTaskId);
+      restoreFeedback.finish();
       for (const step of report.steps) appendStep(step);
       finished = true;
       spinner.remove();
-      setProgress(report.total, report.total);
+      setProgress(report.attempted, report.total);
       // 执行结束后回到顶部：用户从第 1 条开始读，而非停在末尾
       list.scrollTop = 0;
-      const ok = report.failed === 0;
+      const ok = report.failed === 0 && !report.effects_unknown && !report.error && !report.cleanup_error;
+      const failureAt = report.first_failed_index != null ? `，第 ${report.first_failed_index} 条失败` : "";
+      const aggregate = `总计 ${report.total} 条 · 已回执 ${report.acked} · 已提交 ${report.committed} · 已回滚 ${report.rolled_back} · 跳过 ${report.skipped} · 未知 ${report.unknown} · 失败 ${report.failed}`;
+      const notices = [
+        report.omitted_steps > 0 ? `报告有界：仅展示 ${report.steps.length} 条，省略 ${report.omitted_steps} 条；上述汇总覆盖全部语句，语句编号保持原序。` : "",
+        report.error ?? "", report.cleanup_error ?? "", ...report.warnings,
+      ].filter(Boolean);
+      if (notices.length) {
+        const note = document.createElement("div");
+        note.className = "restore-step skipped";
+        note.textContent = notices.join("\n");
+        note.dataset.text = `${aggregate}\n${notices.join("\n")}`;
+        list.appendChild(note);
+      }
       statusRow.classList.add(ok ? "ok" : "error");
       statusText.textContent = ok
-        ? `还原完成：共执行 ${report.succeeded} 条语句`
-        : `还原中断：成功 ${report.succeeded} 条，第 ${report.steps.length} 条失败`;
-      summary.textContent = `总计 ${report.total} 条 · 成功 ${report.succeeded} · 失败 ${report.failed}`;
+        ? `还原完成：已确认提交 ${report.committed} 条语句`
+        : `还原未完整完成：已提交 ${report.committed} 条${failureAt}${report.effects_unknown ? "，存在未知结果，禁止自动重放" : ""}`;
+      summary.textContent = aggregate;
       summary.classList.add(ok ? "ok" : "error");
       if (copyBtn) copyBtn.disabled = false;
-      if (ok) this.toast("success", `还原完成，共执行 ${report.succeeded} 条语句`);
-      else this.toast("error", `还原在第 ${report.steps.length} 条语句处失败`);
+      if (ok) this.toast("success", `还原完成，已确认提交 ${report.committed} 条语句`);
+      else this.toast("error", `还原未完整完成${failureAt}${report.effects_unknown ? "；请核对目标，不要自动重放" : ""}`);
       this.refreshBackupTabs(connId, schema);
     } catch (e) {
+      restoreFeedback.finish();
       finished = true;
       spinner.remove();
       statusRow.classList.add("error");
@@ -6861,6 +6927,20 @@ class DataTabView extends TabView {
   /** 拖拽排序时记录的源行下标（null 表示不在拖拽中）。 */
   private dragSortFrom: number | null = null;
   private requestVersion = 0;
+  private queryAction: "reload" | "filter" | "sort" | "page" = "reload";
+  private loadedPageRequest: import("./types").PageRequest | null = null;
+  private currentRecord: number | null = null;
+  private queryStartedAt: number | null = null;
+  private queryElapsedMs: number | null = null;
+  private queryTimer: ReturnType<typeof setInterval> | null = null;
+  private countingTotal = false;
+  /** 计数与页请求分别编号：普通翻页可复用，刷新、筛选和已提交写入必须失效。 */
+  private totalVersion = 0;
+  private totalSnapshot: { key: string; total: number; at: number } | null = null;
+  private totalError = "";
+  private totalCountFrame: number | null = null;
+  private disposed = false;
+  private loadStatus!: HTMLElement;
   private filterBarEl!: HTMLElement;
   private filterRowsEl!: HTMLElement;
   private filterPlaceholderEl!: HTMLElement;
@@ -6935,13 +7015,22 @@ class DataTabView extends TabView {
           { id: "grid-sort", label: "排序..." },
         ], x, y);
       },
-      onCellFocus: () => {
+      onCellFocus: (row) => {
+        if (this.loading) return;
+        this.currentRecord = row;
         this.updateCellPreview();
+        this.app.renderStatus();
       },
       onContextMenu: (x, y) => {
         this.app.showContextMenu(GRID_CONTEXT_MENU, x, y);
       },
     });
+    this.loadStatus = document.createElement("div");
+    this.loadStatus.className = "data-load-status";
+    this.loadStatus.setAttribute("role", "status");
+    this.loadStatus.setAttribute("aria-live", "polite");
+    this.loadStatus.hidden = true;
+    this.el.appendChild(this.loadStatus);
     const body = document.createElement("div"); body.className = "data-grid-body";
     this.columnSidebar = new ColumnSidebar(`data-columns-${crypto.randomUUID()}`, () => this.allColumns().map(name => ({ id: name, name })), () => this.hiddenColumns(), ids => this.setHiddenColumns(ids));
     this.formHost = document.createElement("div");
@@ -6961,6 +7050,10 @@ class DataTabView extends TabView {
     this.footer = document.createElement("div");
     this.footer.className = "grid-footer";
     this.el.appendChild(this.footer);
+    if (tab.page) {
+      this.loadedPageRequest = this.pageRequest();
+      this.rememberTotal(tab.page, this.loadedPageRequest);
+    }
   }
 
   get total(): number {
@@ -7131,7 +7224,12 @@ class DataTabView extends TabView {
     b.textContent = label;
     b.title = title;
     b.setAttribute("aria-label", title);
-    b.addEventListener("click", action);
+    if (/^(应用筛选|应用排序|清除筛选|清除排序)$/.test(title)) {
+      b.classList.add("fb-query-action");
+      b.dataset.label = label;
+      b.dataset.action = /筛选/.test(title) ? "filter" : "sort";
+    }
+    b.addEventListener("click", () => { if (!b.disabled) action(); });
     return b;
   }
 
@@ -7153,6 +7251,7 @@ class DataTabView extends TabView {
     this.filterCountEl.textContent = "0";
     const filterHead = this.buildPanelHead("data_filter", "筛选", this.filterCountEl, "组内 AND · 组间 OR（可切换）", [
       this.panelButton("清除", () => {
+        if (!this.allowQueryChange()) return;
         if (this.hasPending()) {
           this.app.toast("info", "存在未提交的修改，请先提交或回滚");
           return;
@@ -7180,6 +7279,7 @@ class DataTabView extends TabView {
     this.sortCountEl.textContent = "0";
     const sortHead = this.buildPanelHead("tab_sort", "排序", this.sortCountEl, "按从上到下的优先级依次生效", [
       this.panelButton("清除", () => {
+        if (!this.allowQueryChange()) return;
         if (this.hasPending()) {
           this.app.toast("info", "存在未提交的修改，请先提交或回滚");
           return;
@@ -7629,7 +7729,7 @@ class DataTabView extends TabView {
       })),
     }));
     this.tab.pageOffset = 0;
-    void this.reload();
+    void this.reload("filter");
     this.app.renderStatus();
   }
 
@@ -7644,7 +7744,7 @@ class DataTabView extends TabView {
     this.tab.orderBy = this.sortRows[0]?.column ?? null;
     this.tab.ascending = this.sortRows[0]?.ascending ?? true;
     this.tab.pageOffset = 0;
-    void this.reload();
+    void this.reload("sort");
     this.app.renderStatus();
   }
 
@@ -7702,29 +7802,217 @@ class DataTabView extends TabView {
     this.app.renderPreviewPanel(this.cellPreviewEl, value, this.tab.id);
   }
 
+  private totalIsExact(page = this.tab.page): boolean {
+    return !!page && page.total_exact !== false;
+  }
+
+  private hasNextPage(page = this.tab.page): boolean {
+    if (!page) return false;
+    // 当前页的多取一行证据优先于计数快照，外部新插入不能被旧总数挡住。
+    return page.has_more ?? (this.totalIsExact(page)
+      ? this.tab.pageOffset + this.tab.pageLimit < page.total
+      : page.rows.length >= this.tab.pageLimit);
+  }
+
+  private pageRequest(includeTotal = false): import("./types").PageRequest {
+    return {
+      connection_id: this.tab.connectionId,
+      schema: this.tab.schema,
+      table: this.tab.object,
+      offset: this.tab.pageOffset,
+      limit: this.tab.pageLimit,
+      order_by: this.tab.orderBy,
+      ascending: this.tab.ascending,
+      filters: this.tab.filters.map(line => ({ ...line, conds: line.conds.map(condition => ({ ...condition, case_sensitive: true })) })),
+      filter_logic: this.tab.filter_logic ?? "AND",
+      order_rules: this.appliedSortRules(),
+      include_total: includeTotal,
+    };
+  }
+
+  /** 总数只取决于表和已应用筛选，不取决于页码、页大小或排序。 */
+  private totalKey(request = this.loadedPageRequest ?? this.pageRequest()): string {
+    return JSON.stringify([request.connection_id, request.schema, request.table, request.filters, request.filter_logic ?? "AND"]);
+  }
+
+  private rememberTotal(page: import("./types").PageResult, request: import("./types").PageRequest): void {
+    if (!this.totalIsExact(page)) return;
+    ++this.totalVersion; // 新的精确页证据优先于更早启动、尚未返回的 COUNT。
+    this.totalSnapshot = { key: this.totalKey(request), total: page.total, at: Date.now() };
+    this.totalError = "";
+  }
+
+  /** 数据库已变更时失效，不通过草稿数加减伪造过滤后总数。也用于部分成功和未知回执。 */
+  invalidateTotal(): void {
+    ++this.totalVersion;
+    this.totalSnapshot = null;
+    this.totalError = "";
+    if (this.totalCountFrame !== null) cancelAnimationFrame(this.totalCountFrame);
+    this.totalCountFrame = null;
+    if (this.tab.page) this.tab.page.total_exact = false;
+  }
+
+  private totalBlocked(): boolean {
+    return this.disposed || !!this.tab.datasourceStale || this.loading || this.committing || !!this.mutationEffectsUnknown
+      || !!this.app.manualTransactionFor?.(this.tab.connectionId)?.active || !!this.app.manualTransactionIsBusy?.(this.tab.connectionId);
+  }
+
+  /** 先让首屏绘制；没有计数轮询，每个视图最多一笔真实统计请求。 */
+  private scheduleTotalCount(): void {
+    if (!this.tab.page || this.totalIsExact() || this.totalBlocked() || this.countingTotal || this.totalError || this.totalCountFrame !== null) return;
+    this.totalCountFrame = requestAnimationFrame(() => {
+      // rAF 在绘制前执行；再等一帧，确保网格先有一次实际绘制机会。
+      this.totalCountFrame = requestAnimationFrame(() => {
+        this.totalCountFrame = null;
+        void this.countTotal(true);
+      });
+    });
+  }
+
+  private totalText(): string {
+    if (this.totalIsExact()) return `共 ${this.tab.page!.total} 条`;
+    if (this.mutationEffectsUnknown) return "总数待核对";
+    if (this.app.manualTransactionFor?.(this.tab.connectionId)?.active) return "总数待事务结束后统计";
+    if (this.totalError) return "总数统计失败，可重试";
+    return this.countingTotal || this.totalCountFrame !== null ? "总数统计中…" : "总数未统计";
+  }
+
+  /** 独立后台统计：可翻页、可编辑；只更新数字，不重置网格、焦点或草稿。 */
+  private async countTotal(automatic = false): Promise<void> {
+    if (!this.tab.page || this.totalBlocked() || this.countingTotal || (automatic && this.totalIsExact())) return;
+    if (this.totalCountFrame !== null) cancelAnimationFrame(this.totalCountFrame);
+    this.totalCountFrame = null;
+    const request = { ...(this.loadedPageRequest ?? this.pageRequest()), include_total: true, offset: 0, limit: 0 };
+    const key = this.totalKey(request), version = this.totalVersion;
+    const current = () => !this.disposed && !this.tab.datasourceStale && version === this.totalVersion
+      && key === this.totalKey() && key === this.totalKey(this.pageRequest()) && !this.mutationEffectsUnknown && !this.committing
+      && !this.app.manualTransactionFor?.(this.tab.connectionId)?.active && !this.app.manualTransactionIsBusy?.(this.tab.connectionId);
+    this.totalError = "";
+    this.countingTotal = true;
+    this.renderFooter(this.tab.page);
+    this.app.renderStatus();
+    try {
+      const result = await api.pageTable(request);
+      if (!current()) return;
+      if (this.totalIsExact(result)) {
+        const page = this.tab.page;
+        const minimum = page?.rows.length ? (this.loadedPageRequest?.offset ?? this.tab.pageOffset) + page.rows.length + (page.has_more ? 1 : 0) : 0;
+        if (result.total < minimum) {
+          this.totalSnapshot = null;
+          if (page) page.total_exact = false;
+          this.totalError = "统计快照已过期，请重新统计";
+          return;
+        }
+        this.rememberTotal(result, request);
+        if (this.tab.page) {
+          this.tab.page.total = result.total;
+          this.tab.page.total_exact = true;
+          // 保留当前页 has_more 的证据，不能用异步计数改写。
+        }
+      } else {
+        this.totalError = "当前数据源不支持精确总数统计";
+        if (!automatic) this.app.toast("info", this.totalError);
+      }
+    } catch (e) {
+      if (current()) {
+        this.totalError = `统计失败：${String(e)}`;
+        if (!automatic) this.app.toast("error", this.totalError);
+      }
+    } finally {
+      this.countingTotal = false;
+      if (!this.disposed && this.tab.page) {
+        // 旧请求结束后只补最新版本；错误不自动无限重试。
+        if (version !== this.totalVersion || key !== this.totalKey()) this.scheduleTotalCount();
+        this.renderFooter(this.tab.page);
+        this.app.renderStatus();
+      }
+    }
+  }
+
+  private queryElapsedText(): string {
+    const startedAt = this.queryStartedAt;
+    const elapsed = startedAt !== null ? performance.now() - startedAt : this.queryElapsedMs ?? this.tab.page?.elapsed_ms;
+    if (elapsed == null) return "";
+    return `查询耗时: ${(Math.max(0, elapsed) / 1000).toFixed(3)}s${startedAt !== null ? "（查询中）" : ""}`;
+  }
+
+  private clearQueryTimer(): void {
+    if (this.queryTimer !== null) clearInterval(this.queryTimer);
+    this.queryTimer = null;
+  }
+
+  private startQueryTiming(): void {
+    this.clearQueryTimer();
+    this.queryElapsedMs = 0;
+    this.queryStartedAt = performance.now();
+    this.queryTimer = setInterval(() => {
+      this.app.updateTableQueryElapsed(this.tab.id, this.queryElapsedText());
+    }, 100);
+  }
+
+  private stopQueryTiming(version: number): void {
+    if (version !== this.requestVersion || this.queryStartedAt === null) return;
+    // 保留从发起请求到返回的实际耗时，不能改用后端耗时而导致读数倒退。
+    this.queryElapsedMs = performance.now() - this.queryStartedAt;
+    this.queryStartedAt = null;
+    this.clearQueryTimer();
+    this.app.updateTableQueryElapsed(this.tab.id, this.queryElapsedText());
+  }
+
+  /** 发起后同步反馈并锁定旧数据与查询草稿；不依赖后端首次响应。 */
+  private updateQueryBusy(): void {
+    this.el.classList.toggle("data-query-busy", this.loading);
+    this.grid.el.inert = this.loading;
+    this.formHost.inert = this.loading;
+    this.filterBarEl.inert = this.loading;
+    this.filterRowsEl.inert = this.loading;
+    this.sortRowsEl.inert = this.loading;
+    this.filterBarEl.querySelectorAll<HTMLButtonElement>(".fb-query-action").forEach(button => {
+      button.disabled = this.loading;
+      const label = button.dataset.label ?? "";
+      button.textContent = this.loading && button.dataset.action === this.queryAction && label.startsWith("应用")
+        ? `${label}中…` : label;
+      button.setAttribute("aria-busy", String(this.loading && button.dataset.action === this.queryAction));
+    });
+  }
+
+  private queryLoadingMessage(): string {
+    const pageNo = Math.floor(this.tab.pageOffset / this.tab.pageLimit) + 1;
+    const action = this.queryAction === "filter" ? "正在应用筛选…" : this.queryAction === "sort" ? "正在应用排序…"
+      : this.queryAction === "page" ? `正在加载第 ${pageNo} 页…` : "正在加载当前页…";
+    return `${action} 返回后自动更新，请勿重复操作。${this.tab.page ? " 下方暂为上次结果。" : ""}`;
+  }
+
   /** 状态栏信息。 */
-  statusInfo(): { sql: string; pageText: string } {
+  statusInfo(): { sql: string; pageText: string; elapsed: string } {
     const page = this.tab.page;
     const full = this.tab.schema
       ? `${this.tab.schema}.${this.tab.object}`
       : this.tab.object;
+    const pageNo = Math.floor(this.tab.pageOffset / this.tab.pageLimit) + 1;
+    const totalText = this.totalText();
+    const index = this.viewMode() === "form" ? this.formIndex : this.currentRecord ?? 0;
+    const recordText = page?.rows.length ? `第 ${this.tab.pageOffset + Math.min(Math.max(0, index), page.rows.length - 1) + 1} 条记录` : "当前页无记录";
     return {
       sql: `SELECT * FROM ${full} LIMIT ${this.tab.pageOffset},${this.tab.pageLimit}`,
-      pageText: page
-        ? `第 ${Math.min(this.tab.pageOffset + 1, Math.max(page.total, 1))} 条记录（共 ${page.total} 条）于第 ${Math.floor(this.tab.pageOffset / this.tab.pageLimit) + 1} 页`
+      elapsed: this.queryElapsedText(),
+      pageText: this.loading ? this.queryLoadingMessage().split(" 返回后")[0] : page
+        ? `${recordText}（${totalText}），第 ${pageNo} 页`
         : "",
     };
   }
 
   activate(): void {
     if (!this.tab.page) {
-      void this.reload();
+      if (!this.loading) void this.reload();
     } else {
       this.applyData();
+      this.scheduleTotalCount();
     }
   }
 
-  async reload(): Promise<void> {
+  async reload(action: "reload" | "filter" | "sort" | "page" = "reload"): Promise<void> {
+    if (this.disposed) return;
     if (this.hasPending() && !this.reloadingAfterLeave) {
       this.app.toast("info", "存在未提交的修改，请先提交（✓）或回滚（✗）");
       return;
@@ -7735,38 +8023,69 @@ class DataTabView extends TabView {
       return;
     }
     const version = ++this.requestVersion;
+    const request = this.pageRequest();
+    if (action === "reload" || action === "filter" || (this.loadedPageRequest && this.totalKey(request) !== this.totalKey())) this.invalidateTotal();
+    let received = false;
+    this.queryAction = action;
     this.loading = true;
     this.el.setAttribute("aria-busy", "true");
+    this.startQueryTiming();
+    this.updateQueryBusy();
+    this.loadStatus.hidden = false;
+    this.loadStatus.textContent = this.queryLoadingMessage();
+    if (this.tab.page) this.renderFooter(this.tab.page);
+    this.app.notifyToolbar();
+    this.app.renderStatus();
     try {
-      const res = await api.pageTable({
-        connection_id: this.tab.connectionId,
-        schema: this.tab.schema,
-        table: this.tab.object,
-        offset: this.tab.pageOffset,
-        limit: this.tab.pageLimit,
-        order_by: this.tab.orderBy,
-        ascending: this.tab.ascending,
-        filters: this.tab.filters.map(line => ({ ...line, conds: line.conds.map(condition => ({ ...condition, case_sensitive: true })) })),
-        filter_logic: this.tab.filter_logic ?? "AND",
-        order_rules: this.appliedSortRules(),
-      });
+      const res = await api.pageTable(request);
+      this.stopQueryTiming(version);
       // 快速连续应用时旧响应不得覆盖新条件的数据，也不得覆盖编辑中的网格。
       if (version !== this.requestVersion || (this.hasPending() && !this.reloadingAfterLeave)) return;
       if (this.reloadingAfterLeave) {
         this.pendingUpdates.clear(); this.pendingDeletes.clear(); this.pendingInserts = []; this.pendingInsertEdits.clear();
       }
+      const snapshot = this.totalSnapshot;
+      if (this.totalIsExact(res)) {
+        // 短页已证明总数，无需额外 COUNT；也处理外部删除后的尾页。
+        this.rememberTotal(res, request);
+      } else if (snapshot?.key === this.totalKey(request)) {
+        // 当前页证据超出快照表示有外部新插入，不得沿用旧总页数。
+        if (res.rows.length && request.offset + res.rows.length + (res.has_more ? 1 : 0) > snapshot.total) this.invalidateTotal();
+        else { res.total = snapshot.total; res.total_exact = true; }
+      }
       this.tab.page = res;
+      this.loadedPageRequest = request;
+      received = true;
+      this.currentRecord = null;
+      if (action !== "reload") this.formIndex = 0;
       this.mutationEffectsUnknown = null;
       this.tab.selectedRows.clear();
       // 请求已完成，解除载入态后再渲染网格页脚操作。
       this.loading = false;
+      this.loadStatus.hidden = action === "reload";
+      this.loadStatus.textContent = action === "filter" ? `筛选已应用，当前页 ${res.rows.length} 条记录。` : action === "sort"
+        ? `排序已应用，当前页 ${res.rows.length} 条记录。` : `第 ${Math.floor(request.offset / request.limit) + 1} 页已加载，${res.rows.length} 条记录。`;
       this.applyData();
       this.renderFilterLines();
       this.renderSortRows();
+      this.app.updateInfoPanelPublic();
       this.app.notifyToolbar();
       this.app.renderStatus();
     } catch (e) {
+      this.stopQueryTiming(version);
       if (version === this.requestVersion) {
+        // 失败仍保留上次结果，必须同步恢复它的页码与已应用条件，草稿可修改后重试。
+        const previous = this.loadedPageRequest;
+        if (this.tab.page && previous && !this.reloadingAfterLeave) {
+          this.tab.pageOffset = previous.offset;
+          this.tab.orderBy = previous.order_by;
+          this.tab.ascending = previous.ascending;
+          this.tab.order_rules = previous.order_rules?.map(rule => ({ ...rule }));
+          this.tab.filters = previous.filters.map(line => ({ ...line, conds: line.conds.map(condition => ({ ...condition })) }));
+          this.tab.filter_logic = previous.filter_logic;
+        }
+        this.loadStatus.hidden = false;
+        this.loadStatus.textContent = `当前页加载失败，可再次应用或刷新重试${this.tab.page ? "（仍显示上次结果）" : ""}：${String(e)}`;
         if (!this.reloadingAfterLeave) this.app.toast("error", String(e));
       }
       if (this.reloadingAfterLeave) throw e;
@@ -7774,6 +8093,11 @@ class DataTabView extends TabView {
       if (version === this.requestVersion) {
         this.loading = false;
         this.el.setAttribute("aria-busy", "false");
+        this.updateQueryBusy();
+        if (received) this.scheduleTotalCount();
+        if (this.tab.page) this.renderFooter(this.tab.page);
+        this.app.notifyToolbar();
+        this.app.renderStatus();
       }
     }
   }
@@ -7837,6 +8161,7 @@ class DataTabView extends TabView {
   private renderFooter(page: import("../core/types").PageResult): void {
     this.footer.innerHTML = "";
     const total = page.total;
+    const exact = this.totalIsExact(page);
     const pages = Math.max(1, Math.ceil(total / this.tab.pageLimit));
     const pageNo = Math.floor(this.tab.pageOffset / this.tab.pageLimit) + 1;
     const hasPending = this.hasPending();
@@ -7881,9 +8206,9 @@ class DataTabView extends TabView {
 
     const mkPage = (icon: IconDef, title: string, disabled: boolean, onClick: () => void) => {
       const b = svgBtn(icon, title);
-      b.disabled = disabled;
+      b.disabled = disabled || this.loading || this.transactionOwnedByThisTab();
       b.addEventListener("click", () => {
-        if (b.disabled) return;
+        if (b.disabled || !this.allowQueryChange()) return;
         if (this.hasPending()) {
           this.app.toast("info", "存在未提交的修改，请先提交或回滚");
           return;
@@ -7895,11 +8220,11 @@ class DataTabView extends TabView {
 
     mkPage(ICON_PAGE_FIRST, "第一页", pageNo <= 1, () => {
       this.tab.pageOffset = 0;
-      void this.reload();
+      void this.reload("page");
     });
     mkPage(ICON_PAGE_PREV, "上一页", pageNo <= 1, () => {
       this.tab.pageOffset = Math.max(0, this.tab.pageOffset - this.tab.pageLimit);
-      void this.reload();
+      void this.reload("page");
     });
 
     const pagePosition = document.createElement("form");
@@ -7910,10 +8235,12 @@ class DataTabView extends TabView {
     pageBox.pattern = "[0-9]*";
     pageBox.value = String(pageNo);
     pageBox.setAttribute("aria-label", "当前页码");
-    pageBox.title = `输入页码跳转（共 ${pages} 页）`;
+    pageBox.disabled = this.loading || this.transactionOwnedByThisTab();
+    pageBox.title = exact ? `输入页码跳转（共 ${pages} 页）` : "输入页码跳转（总数未统计，深页可能较慢）";
     const goToPage = () => {
+      if (pageBox.disabled || this.loading || this.committing) return;
       const n = Number(pageBox.value);
-      if (!Number.isInteger(n) || n < 1) {
+      if (!Number.isSafeInteger(n) || n < 1 || !Number.isSafeInteger((n - 1) * this.tab.pageLimit)) {
         pageBox.value = String(pageNo);
         return;
       }
@@ -7922,11 +8249,11 @@ class DataTabView extends TabView {
         pageBox.value = String(pageNo);
         return;
       }
-      const nextPage = Math.min(n, pages);
+      const nextPage = exact ? Math.min(n, pages) : n;
       pageBox.value = String(nextPage);
-      if (nextPage === pageNo) return;
+      if (nextPage === pageNo || !this.allowQueryChange()) return;
       this.tab.pageOffset = (nextPage - 1) * this.tab.pageLimit;
-      void this.reload();
+      void this.reload("page");
     };
     pageBox.addEventListener("change", goToPage);
     pagePosition.addEventListener("submit", (e) => {
@@ -7935,39 +8262,25 @@ class DataTabView extends TabView {
     });
     const pageCount = document.createElement("span");
     pageCount.className = "grid-page-count";
-    pageCount.textContent = `/ ${pages} 页`;
+    pageCount.textContent = exact ? `/ ${pages} 页` : `页 · ${this.totalText()}`;
     pagePosition.append(pageBox, pageCount);
     pager.appendChild(pagePosition);
 
-    mkPage(ICON_PAGE_NEXT, "下一页", pageNo >= pages, () => {
-      this.tab.pageOffset = Math.min(
-        (pages - 1) * this.tab.pageLimit,
-        this.tab.pageOffset + this.tab.pageLimit,
-      );
-      void this.reload();
+    mkPage(ICON_PAGE_NEXT, "下一页", !this.hasNextPage(page), () => {
+      this.tab.pageOffset += this.tab.pageLimit;
+      void this.reload("page");
     });
-    mkPage(ICON_PAGE_LAST, "最后一页", pageNo >= pages, () => {
+    mkPage(ICON_PAGE_LAST, exact ? "最后一页" : "最后一页（请先统计总数）", !exact || pageNo >= pages, () => {
       this.tab.pageOffset = (pages - 1) * this.tab.pageLimit;
-      void this.reload();
+      void this.reload("page");
     });
 
     // 筛选 / 排序生效指示（点击可再次打开对应对话框）
     const activeFilters = this.tab.filters.length;
     if (activeFilters || this.tab.orderBy) {
-      const chip = document.createElement("div");
-      chip.style.display = "flex";
-      chip.style.alignItems = "center";
-      chip.style.gap = "4px";
-      chip.style.marginLeft = "8px";
-      chip.style.padding = "1px 8px";
-      chip.style.border = "1px solid var(--line-strong)";
-      chip.style.background = "var(--bg-surface)";
-      chip.style.fontSize = "10.5px";
-      chip.style.color = "var(--fg-muted)";
-      chip.style.whiteSpace = "nowrap";
-      chip.style.maxWidth = "320px";
-      chip.style.overflow = "hidden";
-      chip.style.textOverflow = "ellipsis";
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "grid-filter-summary";
       const parts: string[] = [];
       if (activeFilters) {
         // 按行显示括号组，形式与 SQL 一致：a=1 AND (b~x OR c IS NULL)
@@ -7993,8 +8306,9 @@ class DataTabView extends TabView {
         parts.push(`排序: ${rules.map((r, i) => `${i + 1}.${r.column} ${r.ascending ? "↑" : "↓"}`).join("，")}`);
       }
       chip.textContent = parts.join("  ");
-      chip.title = "点击修改筛选";
-      chip.addEventListener("click", () => void this.app.runCommand("filter"));
+      chip.title = chip.textContent;
+      chip.setAttribute("aria-label", `修改筛选或排序：${chip.textContent}`);
+      chip.addEventListener("click", () => void this.app.runCommand(activeFilters ? "filter" : "sort"));
       this.footer.appendChild(chip);
     }
 
@@ -8002,6 +8316,22 @@ class DataTabView extends TabView {
     spacer.className = "grid-footer-spacer";
     this.footer.appendChild(spacer);
 
+    const totalLabel = document.createElement("span");
+    totalLabel.className = "grid-total-count";
+    totalLabel.textContent = this.totalText();
+    totalLabel.setAttribute("role", "status");
+    totalLabel.title = this.totalError || (this.totalSnapshot
+      ? `统计快照：${new Date(this.totalSnapshot.at).toLocaleTimeString()}；外部写入请刷新，未提交草稿不计入总数`
+      : "先显示当前页，再后台统计；未提交草稿不计入总数");
+    this.footer.appendChild(totalLabel);
+    const countButton = document.createElement("button");
+    countButton.type = "button";
+    countButton.className = "grid-footer-btn grid-count-total";
+    countButton.textContent = this.countingTotal ? "统计中…" : this.totalError ? "重试统计" : "重新统计";
+    countButton.title = "独立刷新总行数和总页数；大表或复杂筛选可能耗时，不影响已显示的数据";
+    countButton.disabled = this.totalBlocked() || this.countingTotal;
+    countButton.addEventListener("click", () => { if (!countButton.disabled) void this.countTotal(); });
+    this.footer.appendChild(countButton);
     if (this.viewMode() === "form") {
       this.footer.appendChild(this.buildRecordNav(page));
     } else {
@@ -8021,6 +8351,7 @@ class DataTabView extends TabView {
   /** 切换网格 / 表单视图：复用当前页，不重新拉取数据。 */
   private setViewMode(mode: "grid" | "form"): void {
     if (this.viewMode() === mode) return;
+    if (mode === "grid") this.currentRecord = this.formIndex;
     this.tab.viewMode = mode;
     if (mode === "form") {
       const selected = [...(this.tab.selectedRows ?? [])];
@@ -8057,21 +8388,22 @@ class DataTabView extends TabView {
     nav.className = "grid-record-nav";
     nav.setAttribute("aria-label", "逐条切换记录");
     const total = page.total;
+    const exact = this.totalIsExact(page);
     const globalIndex = this.tab.pageOffset + this.formIndex;
-    const clampIndex = Math.max(0, Math.min(globalIndex, Math.max(0, total - 1)));
+    const clampIndex = Math.max(0, exact ? Math.min(globalIndex, Math.max(0, total - 1)) : globalIndex);
     const btn = (ico: IconDef, title: string, disabled: boolean, action: () => void): HTMLButtonElement => {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "grid-footer-btn";
       b.title = title;
       b.setAttribute("aria-label", title);
-      b.disabled = disabled;
+      b.disabled = disabled || this.loading || this.committing || this.transactionOwnedByThisTab();
       b.innerHTML = '<span class="rot90">' + svg(ico) + '</span>';
       b.addEventListener("click", () => { if (!b.disabled) action(); });
       return b;
     };
     const atFirst = clampIndex <= 0;
-    const atLast = total <= 0 || clampIndex >= total - 1;
+    const atLast = exact ? total <= 0 || clampIndex >= total - 1 : page.rows.length === 0 || (this.formIndex >= page.rows.length - 1 && !this.hasNextPage(page));
     nav.append(
       btn(ICON_PAGE_FIRST, "第一条", atFirst, () => this.gotoRecord(0)),
       btn(ICON_PAGE_PREV, "上一条", atFirst, () => this.gotoRecord(clampIndex - 1)),
@@ -8082,10 +8414,12 @@ class DataTabView extends TabView {
     input.className = "grid-record-input";
     input.value = String(total > 0 ? clampIndex + 1 : 0);
     input.setAttribute("aria-label", "当前条");
-    input.title = "输入条号跳转（共 " + total + " 条）";
+    input.disabled = this.loading || this.transactionOwnedByThisTab();
+    input.title = exact ? "输入条号跳转（共 " + total + " 条）" : "输入条号跳转（总数未统计，深页可能较慢）";
     const submit = () => {
+      if (input.disabled) return;
       const n = Number(input.value);
-      if (!Number.isInteger(n) || n < 1 || n > total) { input.value = String(total > 0 ? clampIndex + 1 : 0); return; }
+      if (!Number.isSafeInteger(n) || n < 1 || (exact && n > total)) { input.value = String(total > 0 ? clampIndex + 1 : 0); return; }
       if (this.hasPending()) { this.app.toast("info", "存在未提交的修改，请先提交或回滚"); input.value = String(total > 0 ? clampIndex + 1 : 0); return; }
       this.gotoRecord(n - 1);
     };
@@ -8094,7 +8428,7 @@ class DataTabView extends TabView {
     nav.append(input);
     nav.append(
       btn(ICON_PAGE_NEXT, "下一条", atLast, () => this.gotoRecord(clampIndex + 1)),
-      btn(ICON_PAGE_LAST, "最后一条", atLast, () => this.gotoRecord(total - 1)),
+      btn(ICON_PAGE_LAST, exact ? "最后一条" : "最后一条（请先统计总数）", !exact || atLast, () => this.gotoRecord(total - 1)),
     );
     return nav;
   }
@@ -8104,15 +8438,19 @@ class DataTabView extends TabView {
     const page = this.tab.page;
     if (!page) return;
     const total = page.total;
-    if (!Number.isInteger(n) || n < 0 || n >= total) return;
+    if (!Number.isSafeInteger(n) || n < 0 || (this.totalIsExact(page) && n >= total) || this.loading) return;
     if (this.hasPending()) { this.app.toast("info", "存在未提交的修改，请先提交或回滚"); return; }
+    if (!this.allowQueryChange()) return;
     if (this.transactionOwnedByThisTab()) { this.app.toast("info", "手动事务进行中：请先提交或回滚事务，再切换记录"); return; }
     const limit = this.tab.pageLimit;
     const offset = Math.floor(n / limit) * limit;
     const idx = n - offset;
-    if (offset === this.tab.pageOffset) { this.formIndex = idx; this.applyData(); return; }
+    if (offset === this.tab.pageOffset) { this.formIndex = idx; this.applyData(); this.app.renderStatus(); return; }
     this.tab.pageOffset = offset;
-    void this.reload().then(() => { this.formIndex = idx; this.applyData(); });
+    void this.reload("page").then(() => {
+      if (this.disposed || this.loading || this.loadedPageRequest?.offset !== offset) return;
+      this.formIndex = idx; this.applyData(); this.app.renderStatus();
+    });
   }
 
   /** 表单视图：单列、每行一个可编辑框，复用网格草稿机制。 */
@@ -8305,7 +8643,6 @@ class DataTabView extends TabView {
     this.committing = true;
     this.renderFooter(page);
     let done = 0;
-    let failed = false;
     let failMsg = "";
     /** 无主键表的整行旧值定位条件。 */
     const oldRow = (r: number): [string, string | null][] =>
@@ -8397,7 +8734,6 @@ class DataTabView extends TabView {
       this.app.toast("success", `已提交 ${done} 项修改`);
       await this.reload();
     } catch (e) {
-      failed = true;
       failMsg = String(e);
       // 已确认提交的项已出队；未知项保留证据但必须阻止任何重放。
       // 注意不能在此 reload：行基数据变化会让剩余 pending 的行号定位失效。
@@ -8421,8 +8757,9 @@ class DataTabView extends TabView {
       this.applyData();
     } finally {
       this.committing = false;
+      this.scheduleTotalCount();
       this.renderFooter(this.tab.page ?? page);
-      if (failed) this.app.renderStatus();
+      this.app.renderStatus();
     }
   }
 
@@ -8478,6 +8815,7 @@ class DataTabView extends TabView {
       return;
     }
     this.committing = true;
+    this.invalidateTotal();
     this.renderFooter(page);
     try {
       const result = await api.manualTransactionMutate(this.tab.connectionId, this.tab.id, this.tab.schema, ops);
@@ -8511,6 +8849,7 @@ class DataTabView extends TabView {
 
   /** 清除事务可视化状态（提交 / 回滚事务后由 App 调用，随后 reload）。 */
   clearTransactionState(): void {
+    this.invalidateTotal();
     this.txAppliedUpdates.clear();
     this.txAppliedDeletes.clear();
     this.txAppliedInserts = [];
@@ -8534,6 +8873,8 @@ class DataTabView extends TabView {
     if (this.tab.id !== owner || [this.tab.connectionId, this.tab.schema, this.tab.object].join("\0") !== context || this.tab.datasourceStale) {
       throw new Error("预览期间页面目标已变化，写入计划未执行；草稿保留");
     }
+    // 在真正发送写入前废弃计数，包含部分成功、明确失败和未知回执。
+    this.invalidateTotal();
     let receipt: MutationReceipt;
     try { receipt = await api.executeRowMutation(plan.plan_id, owner); }
     catch (error) {
@@ -8600,7 +8941,11 @@ class DataTabView extends TabView {
   }
 
   destroy(): void {
+    this.disposed = true;
     ++this.requestVersion;
+    this.invalidateTotal();
+    this.clearQueryTimer();
+    this.queryStartedAt = null;
     document.removeEventListener("selectionchange", this.selectionListener);
     this.grid.dispose();
   }
@@ -8656,6 +9001,13 @@ class QueryTabView extends TabView {
   private executionState: ExecutionState = "succeeded";
   private executionNeedsReview = false;
   private executionStatusEl: HTMLElement;
+  private executionLabelEl: HTMLElement;
+  private executionTimerEl: HTMLElement;
+  private executionMessageLabelEl: HTMLElement | null = null;
+  private executionMessageTimerEl: HTMLElement | null = null;
+  /** 本次执行的墙钟起点；null 表示没有正在进行的计时。 */
+  private executionClockStartedAt: number | null = null;
+  private executionClockTimer: ReturnType<typeof setInterval> | null = null;
   private lastMessages: { text: string; error: boolean }[] = [];
   private completionLoaded = false;
   private completionRequest = 0;
@@ -8785,6 +9137,17 @@ class QueryTabView extends TabView {
     this.executionStatusEl.setAttribute("role", "status");
     this.executionStatusEl.setAttribute("aria-live", "polite");
     this.executionStatusEl.setAttribute("aria-label", "查询执行状态");
+    this.executionStatusEl.setAttribute("data-state", "idle");
+    // 状态点与毫秒计时都是视觉辅助：状态文字本身已经完整表达含义。
+    const statusDot = document.createElement("span");
+    statusDot.className = "query-status-dot";
+    statusDot.setAttribute("aria-hidden", "true");
+    this.executionLabelEl = document.createElement("span");
+    this.executionLabelEl.className = "query-status-label";
+    this.executionTimerEl = document.createElement("span");
+    this.executionTimerEl.className = "query-status-timer";
+    this.executionTimerEl.setAttribute("aria-hidden", "true");
+    this.executionStatusEl.append(statusDot, this.executionLabelEl, this.executionTimerEl);
     this.runbar.appendChild(this.executionStatusEl);
     this.execution = new ExecutionController({ ...api,
       cancelExecution: context => api.cancelExecution(context),
@@ -8801,8 +9164,14 @@ class QueryTabView extends TabView {
       return outcome;
     } }, state => {
       this.executionState = state;
-      const labels: Record<ExecutionState, string> = { queued: "排队中…", running: "正在执行…", cancel_requested: "正在停止，等待数据库确认…", succeeded: "执行完成", failed: "执行失败", cancelled: "已确认停止（不保证回滚）", timed_out: "期限已到，已确认停止（不保证回滚）", unknown: "结果未知，请验证写入状态" };
-      this.executionStatusEl.textContent = labels[state];
+      // 前端提交即执行，后端没有可观察的排队阶段：queued 与 running 对用户是同一件事。
+      const labels: Record<ExecutionState, string> = { queued: "查询中", running: "查询中", cancel_requested: "停止中…", succeeded: "执行完成", failed: "执行失败", cancelled: "已停止（不保证回滚）", timed_out: "已超时（不保证回滚）", unknown: "结果未知，请验证写入状态" };
+      this.executionLabelEl.textContent = labels[state];
+      this.executionStatusEl.setAttribute("data-state", state);
+      if (state === "queued" || state === "running" || state === "cancel_requested") {
+        this.startExecutionClock();
+        this.tickExecutionClock();
+      } else this.freezeExecutionClock();
       const supported = this.executionCapabilities?.cancel.level !== "unsupported" && !!this.executionCapabilities;
       this.stopBtn.disabled = !this.running || !supported || state === "cancel_requested" || !["queued", "running"].includes(state);
       this.stopBtn.title = !supported ? this.executionCapabilities?.cancel.reason ?? "取消能力尚未读取" : state === "cancel_requested" ? "正在等待数据库停止确认，请勿重复提交" : "请求停止本次执行；不会自动提交或保证回滚";
@@ -9184,6 +9553,89 @@ class QueryTabView extends TabView {
     this.renderResults();
   }
 
+  /** 执行开始时作废旧结果：网格、消息与导出证据都不再代表当前 SQL 的输出。 */
+  private expireResultForNewExecution(): void {
+    ++this.executionRevision;
+    this.releaseSpool(this.resultPages.replace(null));
+    this.tab.results = null;
+    this.resultExecution = null;
+    this.resultEvidenceKey = "";
+    this.resultEvidenceReason = "";
+    this.activeResultTab = -1;
+    this.lastMessages = [];
+    this.tab.selectedRows.clear();
+    this.grid.setData({ columns: [], rows: [], readOnly: true });
+    this.cellPreviewEl.replaceChildren();
+    this.cellPreviewEl.style.display = "none";
+  }
+
+  /** 前端提交即进入「查询中」；后端状态回调可能仍在读取能力，不能等它才反馈。 */
+  private markExecutionRunning(): void {
+    this.executionState = "queued";
+    this.executionLabelEl.textContent = "查询中";
+    this.executionStatusEl.setAttribute("data-state", "running");
+  }
+
+  /** 运行条与消息页共用的状态文案；终态时带定格耗时。 */
+  private executionStatusText(): string {
+    const label = this.executionLabelEl.textContent ?? "";
+    const elapsed = this.executionTimerEl.textContent ?? "";
+    return elapsed ? `${label} · ${elapsed}` : label;
+  }
+
+  /** 消息页第一行；省略号只补一次。 */
+  private runningMessageText(elapsed: string): string {
+    const label = (this.executionLabelEl.textContent || "查询中").replace(/…+$/, "");
+    return `${label}… ${elapsed}`;
+  }
+
+  /** 毫秒计时：起点固定在本次提交，状态轮询不会重置它。 */
+  /** 高精度时钟；无计时能力的宿主退回墙钟。 */
+  private executionNow(): number {
+    return typeof performance === "object" && typeof performance.now === "function" ? performance.now() : Date.now();
+  }
+
+  /** 固定三位小数的秒；等宽数字排版不会随刷新跳动。 */
+  private formatExecutionElapsed(ms: number): string {
+    return `${(Math.max(0, ms) / 1000).toFixed(3)} s`;
+  }
+
+  private startExecutionClock(): void {
+    if (this.executionClockStartedAt !== null) return;
+    this.executionClockStartedAt = this.executionNow();
+    this.executionTimerEl.textContent = "0.000 s";
+    // 无定时器的宿主里只是不再续刷，起点与定格值仍然正确。
+    if (typeof setInterval === "function") this.executionClockTimer = setInterval(() => this.tickExecutionClock(), 50);
+  }
+
+  private tickExecutionClock(): void {
+    const startedAt = this.executionClockStartedAt;
+    if (startedAt === null) return;
+    const elapsed = this.formatExecutionElapsed(this.executionNow() - startedAt);
+    this.executionTimerEl.textContent = elapsed;
+    if (this.running && this.lastMessages[0] && !this.lastMessages[0].error) {
+      this.lastMessages[0].text = this.runningMessageText(elapsed);
+    }
+    if (this.executionMessageLabelEl) {
+      const label = this.runningMessageText("").trimEnd();
+      if (this.executionMessageLabelEl.textContent !== label) this.executionMessageLabelEl.textContent = label;
+    }
+    if (this.executionMessageTimerEl) this.executionMessageTimerEl.textContent = elapsed;
+  }
+
+  /** 终态定格最终耗时并停表；数值保留在运行条上，不归零。 */
+  private freezeExecutionClock(): void {
+    const startedAt = this.executionClockStartedAt;
+    if (startedAt !== null) this.executionTimerEl.textContent = this.formatExecutionElapsed(this.executionNow() - startedAt);
+    this.stopExecutionClock();
+  }
+
+  private stopExecutionClock(): void {
+    if (this.executionClockTimer !== null && typeof clearInterval === "function") clearInterval(this.executionClockTimer);
+    this.executionClockTimer = null;
+    this.executionClockStartedAt = null;
+  }
+
   captureResultExport() {
     return { result: this.tab.results, scope: this.resultPages.scope, index: this.activeResultTab,
       connectionId: this.tab.connectionId, namespace: this.tab.schema };
@@ -9457,7 +9909,6 @@ class QueryTabView extends TabView {
       return;
     }
     if (this.resultBusy() || this.disposed) return; // 执行、读取和导出互斥
-    const revision = ++this.executionRevision;
     const namespace = this.tab.schema;
     const transaction = this.app.manualTransactionFor?.(connId);
     if (this.app.manualTransactionIsBusy?.(connId) || (transaction && (transaction.owner !== this.tab.id || transaction.schema !== this.tab.schema)) || transaction?.failed) {
@@ -9465,13 +9916,19 @@ class QueryTabView extends TabView {
       return;
     }
     this.releaseResultEditing();
+    // 本次执行从提交这一刻开始：先整体作废上一次的结果，
+    // 否则等待返回期间旧结果仍然在屏，会被读成本次查询的输出。
+    this.expireResultForNewExecution();
+    const revision = this.executionRevision;
     this.running = true;
     this.runBtn.disabled = true;
     this.explainBtn.disabled = true;
     this.connSelect.disabled = true;
     this.dbSelect.disabled = true;
     this.runbar.setAttribute("aria-busy", "true");
-    this.lastMessages = [{ text: this.tab.results ? "排队中…当前结果是上次执行的只读快照。" : "排队中…", error: false }];
+    this.markExecutionRunning();
+    this.startExecutionClock();
+    this.lastMessages = [{ text: this.runningMessageText("0.000 s"), error: false }];
     this.renderResults();
     this.app.notifyToolbar?.();
     try {
@@ -9482,8 +9939,7 @@ class QueryTabView extends TabView {
       if (this.disposed || revision !== this.executionRevision || !outcome) return;
       if (outcome.state !== "succeeded" || !outcome.result) {
         this.executionNeedsReview = outcome.state === "unknown";
-        const snapshot = this.tab.results ? "当前结果区为上次执行的只读快照，不能据此推断本次执行结果。" : "本次执行没有可用结果。";
-        this.lastMessages = [{ text: `${this.executionStatusEl.textContent}。${outcome.error?.message ?? ""} ${snapshot}`, error: true }];
+        this.lastMessages = [{ text: `${this.executionStatusText()}。${outcome.error?.message ?? ""} 本次执行没有可用结果。`, error: true }];
         this.activeResultTab = -1;
         this.renderResults(); this.app.toast(outcome.state === "unknown" ? "error" : "info", this.lastMessages[0].text); return;
       }
@@ -9514,12 +9970,20 @@ class QueryTabView extends TabView {
       );
     } catch (e) {
       if (this.disposed || revision !== this.executionRevision) return;
-      this.lastMessages = [{ text: `${String(e)}${this.tab.results ? "。保留上次执行的只读快照。" : ""}`, error: true }];
+      // 能力读取失败发生在控制器启动之前，也必须解除“查询中”并停止计时。
+      if (this.executionClockStartedAt !== null) {
+        this.executionState = "failed";
+        this.executionLabelEl.textContent = "执行失败";
+        this.executionStatusEl.setAttribute("data-state", "failed");
+        this.freezeExecutionClock();
+      }
+      this.lastMessages = [{ text: `${String(e)}。本次执行没有可用结果。`, error: true }];
       this.executionNeedsReview = this.executionState === "unknown";
       this.activeResultTab = -1;
       this.renderResults();
       this.app.toast("error", String(e));
     } finally {
+      if (!this.disposed && revision === this.executionRevision) this.freezeExecutionClock();
       await this.app.refreshManualTransactionStatus?.(connId)?.catch(error => this.app.toast("error", `事务状态确认失败：${String(error)}`));
       this.running = false;
       this.stopBtn.disabled = true;
@@ -9631,17 +10095,30 @@ class QueryTabView extends TabView {
   /** 渲染消息页内容。 */
   private renderMessages(): void {
     this.messagesEl.innerHTML = "";
-    for (const m of this.lastMessages) {
+    this.executionMessageLabelEl = null;
+    this.executionMessageTimerEl = null;
+    this.lastMessages.forEach((m, index) => {
       const line = document.createElement("div");
       line.className = m.error ? "msg-error" : "msg-ok";
-      line.textContent = m.text;
+      // 活计时只属于尚未结束的执行；完成日志不能被轮询改写。
+      if (!m.error && this.executionClockStartedAt !== null && index === 0) {
+        line.classList.add("msg-running");
+        this.executionMessageLabelEl = document.createElement("span");
+        this.executionMessageLabelEl.textContent = this.runningMessageText("").trimEnd();
+        this.executionMessageTimerEl = document.createElement("span");
+        this.executionMessageTimerEl.className = "query-message-timer";
+        this.executionMessageTimerEl.setAttribute("aria-hidden", "true");
+        this.executionMessageTimerEl.textContent = this.executionTimerEl.textContent;
+        line.append(this.executionMessageLabelEl, this.executionMessageTimerEl);
+      } else line.textContent = m.text;
       this.messagesEl.appendChild(line);
-    }
+    });
   }
 
   destroy(): void {
     if (this.controlledResult?.busy) throw new Error("查询结果写入或未知证据仍未确认，禁止销毁页面");
     this.releaseResultEditing();
+    this.stopExecutionClock();
     this.disposed = true;
     ++this.executionRevision;
     this.releaseSpool(this.resultPages.replace(null));
@@ -9898,6 +10375,7 @@ const connName = (id: string) => this.app.connectionName(id);
       ]),
       rowIcons: this.jobs.map(() => "info_pane_query"),
       showRowNumbers: false,
+      fillWidth: true,
       readOnly: true,
     });
     this.tab.selectedRows = new Set();

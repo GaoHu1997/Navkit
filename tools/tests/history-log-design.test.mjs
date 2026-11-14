@@ -402,7 +402,14 @@ test('真实浏览器：固定样例、只读原文、软换行、确认焦点�
     assert.ok(metrics.width <= 1240); assert.ok(metrics.height <= 640); assert.equal(metrics.font, '13px'); assert.equal(metrics.lineHeight, '20px'); assert.ok(metrics.overflow <= 1); assert.equal(metrics.keyword, 'rgb(43, 98, 217)'); assert.equal(metrics.readOnly, 'false');
     const before = await page.evaluate(() => window.__view().state.doc.toString());
     await page.locator('.cm-content').focus(); await page.keyboard.type('禁止写入'); assert.equal(await page.evaluate(() => window.__view().state.doc.toString()), before);
-    await page.locator('.history-log-kind').selectOption('query'); await page.waitForFunction(() => /4 \/ 4/.test(document.querySelector('.history-log-count').textContent)); await page.locator('.history-log-kind').selectOption('all');
+    await page.locator('.history-log-kind').selectOption('query');
+    await page.waitForFunction(() => /3 \/ 4/.test(document.querySelector('.history-log-count').textContent));
+    const queryOnly = await page.evaluate(() => window.__view().state.doc.toString());
+    assert.ok(queryOnly.includes('SELECT missing_column'));
+    assert.ok(queryOnly.includes('SHOW CREATE TABLE'));
+    assert.ok(!queryOnly.includes('UPDATE navkit_accept.t_user'));
+    await page.locator('.history-log-kind').selectOption('all');
+    await page.waitForFunction(() => /4 \/ 4/.test(document.querySelector('.history-log-count').textContent));
     await page.locator('.history-log-more').click(); await page.locator('.history-log-clear').click();
     await page.getByRole('alertdialog', { name: '清空 SQL 日志', exact: true }).waitFor(); assert.equal(await page.evaluate(() => document.activeElement.textContent), '取消');
     await page.keyboard.press('Escape'); assert.equal(await page.getByRole('alertdialog').count(), 0); assert.ok(await page.locator('.history-log-more').evaluate(element => element === document.activeElement));

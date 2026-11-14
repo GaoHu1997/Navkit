@@ -1,4 +1,5 @@
-import { api, type TableDesignSnapshot, type TableDesignPayload, type TableDesignPreview, type TableDesignResponse, type ForeignKeyDesign } from "../core/api";
+import { api, type TableDesignSnapshot, type TableDesignPayload, type TableDesignPreview, type TableDesignResponse, type TableOptionChoices, type ForeignKeyDesign } from "../core/api";
+import { Dialog } from "./Dialog";
 import type { ConnectionConfig, TabState, TableOptionsDesign } from "../core/types";
 import type { DraftSnapshot } from "../core/editing-state";
 import { ExecutionController } from "../core/execution";
@@ -37,6 +38,27 @@ const DIALECT_TYPES: Record<string, string[]> = {
 /** 未知方言（ODBC / JDBC / 自定义驱动）兜底：SQL 标准常用类型。既有列的真实类型始终原样保留显示。 */
 const GENERIC_TYPES = ["integer", "bigint", "smallint", "decimal", "numeric", "float", "double", "real",
   "char", "varchar", "text", "blob", "boolean", "date", "time", "timestamp", "datetime", "json", "uuid"];
+/** 后端允许自增的类型集合（与 src-tauri/src/design.rs 的校验保持一致）。 */
+const AUTO_INCREMENT_TYPES = ["tinyint", "smallint", "mediumint", "int", "integer", "bigint", "float", "double", "real"];
+/** 可带 UNSIGNED / ZEROFILL 修饰的数值类型。 */
+const NUMERIC_TYPES = [...AUTO_INCREMENT_TYPES, "decimal", "numeric", "bit", "boolean", "bool", "money", "smallmoney", "number", "year"];
+/** 基础类型名：去掉长度/精度参数并转小写，用于判断默认值候选与修饰可用性。 */
+function baseType(dataType: string): string {
+  return (dataType || "").toLowerCase().replace(/\(.*$/, "").trim();
+}
+/** 按字段类型给出默认值候选（参考 Navicat：' ' / NULL / 0 / 1 / CURRENT_*），仍允许手动输入任意表达式。 */
+function defaultChoices(dataType: string): string[] {
+  const type = baseType(dataType);
+  const numeric = NUMERIC_TYPES.includes(type);
+  const temporal = ["date", "datetime", "datetime2", "datetimeoffset", "timestamp", "timestamptz", "time", "timetz", "smalldatetime"].includes(type);
+  const textual = ["char", "varchar", "tinytext", "text", "mediumtext", "longtext", "nchar", "nvarchar", "ntext", "varchar2", "nvarchar2", "clob", "nclob", "string", "xml", "json", "jsonb", "uuid", "enum", "set", "uniqueidentifier", "image"].includes(type);
+  const choices: string[] = [];
+  if (textual) choices.push("' '", "''");
+  if (numeric) choices.push("0", "1");
+  if (temporal) choices.push("CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME");
+  choices.push("NULL");
+  return choices;
+}
 let designerId = 0;
 export class TableDesigner {
   readonly el: HTMLElement;
@@ -61,6 +83,8 @@ export class TableDesigner {
   private previewSignature = "";
   private readonly references = new Map<string, { columns: string[] | null; error: string; loading: boolean }>();
   private namespaces: { values: string[] | null; error: string; loading: boolean } = { values: null, error: "", loading: false };
+  /** 「选项」页的真实候选项（引擎/字符集/排序规则/行格式），只在需要时读取一次。 */
+  private optionChoices: { values: TableOptionChoices | null; error: string; loading: boolean } = { values: null, error: "", loading: false };
   private readonly referenceTables = new Map<string, { values: string[] | null; error: string; loading: boolean }>();
   private metadataVersion = 0;
   private execution: ExecutionController | null = null;
@@ -109,7 +133,7 @@ export class TableDesigner {
   }
   private accept(snapshot: TableDesignSnapshot): void {
     const draft = draftFromSnapshot(snapshot);
-    this.metadataVersion++; this.namespaces = { values: null, error: "", loading: false }; this.referenceTables.clear(); this.references.clear();
+    this.metadataVersion++; this.namespaces = { values: null, error: "", loading: false }; this.optionChoices = { values: null, error: "", loading: false }; this.referenceTables.clear(); this.references.clear();
     this.snapshot = designClone(snapshot); this.draft = draft; this.baselineDraft = designClone(draft); this.baseline = draftSignature(draft);
     this.tab.schemaInfo = designClone(snapshot.schema); this.tab.dirty = false;
     this.preview = null; this.previewSignature = "";
@@ -247,10 +271,31 @@ export class TableDesigner {
     for (const choice of [...new Set([value, ...choices])]) { const option = document.createElement("option"); option.value = choice; option.textContent = choice || "（未设置）"; el.appendChild(option); }
     el.value = value; el.addEventListener("change", () => { set(el.value); this.changed(); }); return el;
   }
-  private check(value: boolean, label: string, set: (value: boolean) => void, disabled = false): HTMLLabelElement {
-    const wrapper = document.createElement("label"); wrapper.className = "designer-check";
-    const el = document.createElement("input"); el.type = "checkbox"; el.checked = value; el.setAttribute("aria-label", label); el.disabled = disabled || !!this.editReason();
-    el.addEventListener("change", () => { set(el.checked); this.changed(); }); wrapper.appendChild(el); const text = document.createElement("span"); text.textContent = label; wrapper.appendChild(text); return wrapper;
+  /** 默认值单元格：下拉给出该类型可用的候选（NULL / 0 / 1 / CURRENT_* 等），同时保留手动输入任意表达式的能力。
+   *  组合框 = 可搜索的原生 select（候选项可点选）+ 文本输入（手输）。 */
+  private defaultCell(column: DesignerColumn, label: string): HTMLElement {
+    const disabled = column.deleted || !!this.editReason();
+    const wrap = document.createElement("div"); wrap.className = "designer-default-cell";
+    const choices = defaultChoices(column.data_type);
+    const picker = document.createElement("select"); picker.className = "designer-default-pick";
+    picker.setAttribute("aria-label", label + " 默认值选择");
+    const placeholder = document.createElement("option");
+    placeholder.value = ""; placeholder.textContent = "选择…"; picker.appendChild(placeholder);
+    for (const choice of choices) {
+      const option = document.createElement("option"); option.value = choice;
+      option.textContent = choice === "NULL" ? "NULL（空）" : choice === "' '" ? "' '（空格）" : choice;
+      picker.appendChild(option);
+    }
+    picker.disabled = disabled;
+    const field = this.input(column.default_value ?? "", label + " 默认值", value => { column.default_value = value; }, column.deleted);
+    field.className = "designer-default-input"; field.title = "可直接输入任意默认值表达式，例如 CURRENT_TIMESTAMP、' ' 或 0。";
+    picker.addEventListener("change", () => {
+      if (!picker.value) return;
+      column.default_value = picker.value; field.value = picker.value;
+      picker.value = ""; this.changed();
+    });
+    wrap.append(picker, field);
+    return wrap;
   }
   /** 只有复选框、没有可见文字（表头已说明语义），用 aria-label 保留可访问名。 */
   private checkBare(value: boolean, ariaLabel: string, set: (value: boolean) => void, disabled = false): HTMLLabelElement {
@@ -301,61 +346,74 @@ export class TableDesigner {
     const status = document.createElement("div"); status.className = "designer-status"; status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite"); status.textContent = this.locked ? "执行结果需要核对；已禁止重放。" : this.tab.dirty ? "有未保存的表结构草稿。" : "表结构与读取基线一致。"; this.el.appendChild(status);
   }
   private showTab(name: string): void { this.flushDraft(); this.currentTab = name; this.render(); this.host.changed(); this.el.querySelector<HTMLElement>(`#${this.id}-tab-${TABS.indexOf(name)}`)?.focus(); }
+  /** 字段表格的列定义：类型与默认值都在列内编辑，不再有底部「字段属性」面板。
+   *  自增 / 无符号 / 填充零只有 MySQL 家族支持，非 MySQL 连接不显示这三列。
+   *  固定列宽：表格是 table-layout: fixed，列宽由 colgroup 决定，输入框才有稳定宽度。 */
+  private fieldColumnDefs(): Array<{ title: string; width: string }> {
+    const mysql = ["mysql", "mariadb"].includes(this.host.connection()?.kind ?? "");
+    const columns = [
+      { title: "名称", width: "150px" },
+      { title: "类型", width: "160px" },
+      { title: "长度", width: "70px" },
+      { title: "小数位", width: "70px" },
+      { title: "默认值", width: "300px" },
+      { title: "主键", width: "56px" },
+    ];
+    if (mysql) columns.push({ title: "自增", width: "56px" }, { title: "无符号", width: "64px" }, { title: "填充零", width: "64px" });
+    columns.push({ title: "允许 NULL", width: "80px" }, { title: "注释", width: "200px" });
+    return columns;
+  }
   private renderFields(body: HTMLElement): void {
     const draft = this.draft!;
-    const table = document.createElement("table"); table.className = "designer-grid wide mini-table";
+    const mysql = ["mysql", "mariadb"].includes(this.host.connection()?.kind ?? "");
+    const table = document.createElement("table"); table.className = "designer-grid designer-fields wide mini-table";
+    const defs = this.fieldColumnDefs();
+    const colgroup = document.createElement("colgroup");
+    for (const def of defs) { const col = document.createElement("col"); if (def.width !== "auto") col.style.width = def.width; colgroup.appendChild(col); }
+    table.appendChild(colgroup);
     const head = document.createElement("thead"); const row = document.createElement("tr");
-    for (const title of ["名称", "类型", "长度", "小数位", "允许 NULL", "主键", "注释"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; row.appendChild(th); } head.appendChild(row); table.appendChild(head);
+    for (const def of defs) { const th = document.createElement("th"); th.scope = "col"; th.textContent = def.title; row.appendChild(th); } head.appendChild(row); table.appendChild(head);
     const rows = document.createElement("tbody");
     const dialectTypes = DIALECT_TYPES[this.host.connection()?.kind ?? ""] ?? GENERIC_TYPES;
     const tableTypes = [...new Set(this.snapshot?.design.columns.map(c => c.data_type).filter(t => t && !dialectTypes.includes(t)) ?? [])];
     const typeChoices = [...dialectTypes, ...tableTypes];
-    let propsHost: HTMLElement | null = null;
     for (const column of draft.columns) {
       const tr = document.createElement("tr"); tr.dataset.fieldKey = column.key; tr.className = (column.key === this.selected ? "selected " : "") + (column.deleted ? "designer-deleted" : "");
-      tr.addEventListener("focusin", () => { this.selected = column.key; for (const other of rows.querySelectorAll("tr")) other.classList.toggle("selected", other === tr); if (propsHost) this.renderFieldProperties(propsHost); this.host.changed(); });
+      tr.addEventListener("focusin", () => { this.selected = column.key; for (const other of rows.querySelectorAll("tr")) other.classList.toggle("selected", other === tr); this.host.changed(); });
       const cell = (el: HTMLElement) => { const td = document.createElement("td"); td.appendChild(el); tr.appendChild(td); };
       const label = () => "字段 " + (column.name || "未命名");
       cell(this.input(column.name, label() + " 名称", value => { const at = draft.primary_key.indexOf(column.name); if (at >= 0) draft.primary_key[at] = value; column.name = value; }, column.deleted));
-      cell(this.select(column.data_type, typeChoices, label() + " 类型", value => { column.data_type = value; }, column.deleted));
+      cell(this.select(column.data_type, typeChoices, label() + " 类型", value => { column.data_type = value; this.render(); }, column.deleted));
       cell(this.input(column.length, label() + " 长度", value => { column.length = value || null; }, column.deleted));
       cell(this.input(column.scale, label() + " 小数位", value => { column.scale = value || null; }, column.deleted));
-      cell(this.checkBare(column.nullable, label() + " 允许 NULL", value => { column.nullable = value; }, column.deleted));
-      cell(this.keyToggle(draft.primary_key.includes(column.name), label() + " 主键", () => { const at = draft.primary_key.indexOf(column.name); if (at >= 0) draft.primary_key.splice(at, 1); else draft.primary_key.push(column.name); this.changed(); this.render(); }, column.deleted));
+      cell(this.defaultCell(column, label()));
+      // 主键列只对已设主键的字段显示钥匙图标（不再每行都画一个）；取消主键仍可在索引页清除。
+      const inPrimary = draft.primary_key.includes(column.name);
+      cell(inPrimary
+        ? this.keyToggle(true, label() + " 主键", () => { const at = draft.primary_key.indexOf(column.name); if (at >= 0) draft.primary_key.splice(at, 1); this.changed(); this.render(); }, column.deleted)
+        : document.createElement("span"));
+      // 自增只在 MySQL 家族显示；只有整数与浮点类型可自增，勾选时同步「非空 + 无默认值」（后端规则）。
+      if (mysql) {
+        const autoIncrement = this.checkBare(!!column.auto_increment, label() + " 自增", value => {
+          column.auto_increment = value;
+          if (value) { column.nullable = false; column.default_value = null; }
+          this.changed(); if (value) this.render();
+        }, column.deleted || !AUTO_INCREMENT_TYPES.includes(baseType(column.data_type)));
+        if (!AUTO_INCREMENT_TYPES.includes(baseType(column.data_type))) autoIncrement.title = "只有整数与浮点类型可以自增（后端会拒绝其它类型）。";
+        cell(autoIncrement);
+        const numeric = NUMERIC_TYPES.includes(baseType(column.data_type));
+        const unsigned = this.checkBare(!!column.unsigned, label() + " 无符号", value => { column.unsigned = value; }, column.deleted || !numeric);
+        if (!numeric) unsigned.title = "只有数值类型可以设为无符号。";
+        cell(unsigned);
+        const zerofill = this.checkBare(!!column.zerofill, label() + " 填充零", value => { column.zerofill = value; }, column.deleted || !numeric);
+        if (!numeric) zerofill.title = "只有数值类型可以填充零。";
+        cell(zerofill);
+      }
+      cell(this.checkBare(column.nullable, label() + " 允许 NULL", value => { column.nullable = value; }, column.deleted || (mysql && !!column.auto_increment)));
       const comment = this.input(column.comment, label() + " 注释", value => { column.comment = value; }, column.deleted || this.host.connection()?.kind === "sqlite"); if (this.host.connection()?.kind === "sqlite") comment.title = "SQLite 不支持列注释 DDL。"; cell(comment);
       rows.appendChild(tr);
     }
     table.appendChild(rows); body.appendChild(table);
-    propsHost = document.createElement("div"); propsHost.className = "designer-field-props"; body.appendChild(propsHost);
-    this.renderFieldProperties(propsHost);
-  }
-  /** 字段页底部：编辑当前选中字段的默认值与 MySQL 专有属性（自增/无符号/填充零）。 */
-  private renderFieldProperties(host: HTMLElement): void {
-    if (this.disposed) return;
-    host.innerHTML = "";
-    const column = this.draft?.columns.find(c => c.key === this.selected);
-    if (!column) return;
-    const label = "字段 " + (column.name || "未命名");
-    const title = document.createElement("div"); title.className = "designer-props-title"; title.textContent = "字段属性：" + (column.name || "未命名"); host.appendChild(title);
-    const hasDefault = column.default_value != null;
-    const defaultInput = this.input(column.default_value ?? "", label + " 默认值 SQL 表达式", value => { column.default_value = value; }, column.deleted);
-    const mode = this.select(hasDefault ? "SQL 表达式" : "无默认值", ["无默认值", "SQL 表达式"], label + " 默认值类型", value => {
-      column.default_value = value === "无默认值" ? null : defaultInput.value;
-      defaultInput.style.display = value === "无默认值" ? "none" : "";
-    }, column.deleted);
-    defaultInput.style.display = hasDefault ? "" : "none";
-    const defWrap = document.createElement("div"); defWrap.className = "designer-default"; defWrap.append(mode, defaultInput);
-    host.appendChild(this.labeled("默认值", defWrap));
-    const mysql = ["mysql", "mariadb"].includes(this.host.connection()?.kind ?? "");
-    if (mysql) {
-      const flags = document.createElement("div"); flags.className = "designer-props-flags";
-      flags.append(
-        this.check(!!column.auto_increment, label + " 自动递增", value => { column.auto_increment = value; }, column.deleted),
-        this.check(!!column.unsigned, label + " 无符号", value => { column.unsigned = value; }, column.deleted),
-        this.check(!!column.zerofill, label + " 填充零", value => { column.zerofill = value; }, column.deleted),
-      );
-      host.appendChild(flags);
-    }
   }
   private indexMethodChoices(): string[] {
     const kind = this.host.connection()?.kind ?? "";
@@ -375,10 +433,12 @@ export class TableDesigner {
           const di = descending.indexOf(old); if (di >= 0) { descending = [...descending]; descending[di] = value; }
           onChange(columns, descending); render();
         });
+        colSel.classList.add("designer-index-field");
         const dirSel = this.select(descending.includes(name) ? "DESC" : "ASC", ["ASC", "DESC"], pos + " 排序", value => {
           const set = new Set(descending); if (value === "DESC") set.add(name); else set.delete(name); descending = [...set];
           onChange(columns, descending); render();
         });
+        dirSel.classList.add("designer-index-order");
         const up = this.button("↑", () => { if (i > 0) { const tmp = columns[i - 1]; columns[i - 1] = columns[i]; columns[i] = tmp; onChange(columns, descending); render(); } }, this.editReason());
         up.className = "btn designer-mini"; up.setAttribute("aria-label", "上移" + pos);
         const del = this.button("×", () => { const removed = columns.splice(i, 1)[0]; descending = descending.filter(n => n !== removed); onChange(columns, descending); render(); }, this.editReason());
@@ -392,6 +452,35 @@ export class TableDesigner {
     render();
     return box;
   }
+  /** 单元格内的索引字段摘要按钮：点开浮层选择字段与排序，不再把多行编辑器硬塞进单元格。 */
+  private indexColumnsCell(columns: string[], descending: string[], columnNames: string[], label: string, apply: (columns: string[], descending: string[]) => void): HTMLElement {
+    const summary = columns.length ? columns.map(name => `${name} ${descending.includes(name) ? "DESC" : "ASC"}`).join("，") : "选择字段…";
+    const btn = document.createElement("button"); btn.type = "button"; btn.className = "btn designer-picker"; btn.setAttribute("aria-label", label + " 字段选择");
+    const text = document.createElement("span"); text.className = "designer-picker-text"; text.textContent = summary; btn.appendChild(text);
+    btn.disabled = !!this.editReason(); if (btn.disabled) btn.title = this.editReason() ?? "";
+    btn.addEventListener("click", () => this.openIndexColumnsDialog(columns, descending, columnNames, label, apply));
+    return btn;
+  }
+  /** 索引/主键字段选择浮层：与参考程序一致，按顺序选字段、逐字段设升降序。 */
+  private openIndexColumnsDialog(columns: string[], descending: string[], columnNames: string[], label: string, apply: (columns: string[], descending: string[]) => void): void {
+    const reason = this.editReason(); if (reason) { this.host.toast("info", reason); return; }
+    let nextColumns = [...columns];
+    let nextDescending = [...descending];
+    new Dialog({
+      title: `选择${label}字段`,
+      width: 560,
+      height: 360,
+      render: body => {
+        const hint = document.createElement("p"); hint.className = "designer-notice"; hint.textContent = "按顺序选择参与索引的字段；每个字段可单独设置升序或降序。"; body.appendChild(hint);
+        const host = document.createElement("div"); host.className = "designer-index-dialog-cols"; body.appendChild(host);
+        host.appendChild(this.indexColumnsEditor(nextColumns, nextDescending, columnNames, label, (cols, desc) => { nextColumns = cols; nextDescending = desc; }));
+      },
+      buttons: [
+        { label: "确定", primary: true, onClick: () => { apply([...nextColumns], [...nextDescending]); this.changed(); this.render(); return true; } },
+        { label: "取消" },
+      ],
+    });
+  }
   /** 页签顶部的动作行（新增按钮等），替代旧的“列表 + 下方成堆表单”布局。 */
   private actionsRow(body: HTMLElement, ...buttons: HTMLButtonElement[]): void {
     const row = document.createElement("div"); row.className = "designer-actions"; row.append(...buttons); body.appendChild(row);
@@ -400,15 +489,9 @@ export class TableDesigner {
   private columnsInput(value: string[], label: string, set: (next: string[]) => void, datalistId?: string, disabled = false): HTMLInputElement {
     const el = document.createElement("input"); el.type = "text"; el.value = value.join(", "); el.setAttribute("aria-label", label); el.disabled = disabled || !!this.editReason();
     if (datalistId) el.setAttribute("list", datalistId);
+    el.setAttribute("data-search-token", ",");
     el.addEventListener("input", () => { set(el.value.split(",").map(name => name.trim()).filter(Boolean)); this.changed(); });
     return el;
-  }
-  /** 列表行的删除单元格。 */
-  private opCell(tr: HTMLElement, label: string, action: () => void, disabled = false): void {
-    const td = document.createElement("td"); td.className = "designer-op";
-    const remove = this.button("删除", action, disabled ? "当前后端能力不支持修改。" : this.editReason());
-    remove.setAttribute("aria-label", `删除${label}`);
-    td.appendChild(remove); tr.appendChild(td);
   }
   /** 真实列名的共享 datalist。 */
   private columnsDatalist(body: HTMLElement): string {
@@ -420,23 +503,24 @@ export class TableDesigner {
   private renderIndexes(body: HTMLElement): void {
     const indexes = this.draft!.indexes; if (indexes === undefined) { this.unknown(body, "索引"); return; }
     if (!indexes.some(item => (item as unknown) === this.selectedIndex)) this.selectedIndex = indexes[0] ?? null;
-    this.actionsRow(body, this.button("新增索引", () => this.addIndex()));
     const columnNames = this.draft!.columns.filter(c => !c.deleted).map(c => c.name);
     const methods = this.indexMethodChoices();
     const table = document.createElement("table"); table.className = "designer-grid index-grid mini-table"; table.style.minWidth = "0"; table.style.width = "100%";
     const head = document.createElement("thead"); const hr = document.createElement("tr");
-    for (const title of ["名", "字段（可多选，可排序）", "索引类型", "索引方法", ""]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
+    for (const title of ["名", "字段（可多选，可排序）", "索引类型", "索引方法"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
     head.appendChild(hr); table.appendChild(head);
     const tbody = document.createElement("tbody");
     // 主键行：可编辑主键字段顺序，也可清除主键（不再禁止操作）。
     const pkRow = document.createElement("tr"); pkRow.className = "designer-pk";
-    const pkName = document.createElement("td"); const strong = document.createElement("strong"); strong.textContent = "PRIMARY"; pkName.append(strong, document.createTextNode("（主键）")); pkRow.appendChild(pkName);
-    const pkCols = document.createElement("td"); pkCols.appendChild(this.indexColumnsEditor(this.draft!.primary_key, [], columnNames, "主键", cols => { this.draft!.primary_key = cols; })); pkRow.appendChild(pkCols);
+    const pkName = document.createElement("td"); const strong = document.createElement("strong"); strong.textContent = "PRIMARY"; pkName.append(strong, document.createTextNode("（主键）"));
+    if (this.draft!.primary_key.length) {
+      const clearPk = this.button("清除", () => { this.draft!.primary_key = []; this.changed(); this.render(); }, this.editReason());
+      clearPk.className = "btn designer-mini designer-pk-clear"; clearPk.setAttribute("aria-label", "清除主键"); pkName.appendChild(clearPk);
+    }
+    pkRow.appendChild(pkName);
+    const pkCols = document.createElement("td"); pkCols.appendChild(this.indexColumnsCell(this.draft!.primary_key, [], columnNames, "主键", cols => { this.draft!.primary_key = cols; })); pkRow.appendChild(pkCols);
     const pkType = document.createElement("td"); pkType.textContent = "PRIMARY"; pkRow.appendChild(pkType);
     const pkMethod = document.createElement("td"); pkMethod.textContent = "BTREE"; pkMethod.title = "主键索引方法由后端按方言选择。"; pkRow.appendChild(pkMethod);
-    const pkOp = document.createElement("td"); pkOp.className = "designer-op";
-    const clearPk = this.button("清除", () => { this.draft!.primary_key = []; this.changed(); this.render(); }, this.editReason());
-    clearPk.setAttribute("aria-label", "清除主键"); pkOp.appendChild(clearPk); pkRow.appendChild(pkOp);
     tbody.appendChild(pkRow);
     indexes.forEach((index, i) => {
       const rowLabel = "索引 " + (i + 1);
@@ -444,10 +528,9 @@ export class TableDesigner {
       tr.addEventListener("focusin", () => { this.selectedIndex = index; for (const other of tbody.querySelectorAll("tr")) other.classList.toggle("selected", other === tr); this.host.changed(); });
       const td = (el: HTMLElement) => { const cell = document.createElement("td"); cell.appendChild(el); tr.appendChild(cell); };
       td(this.input(index.name, rowLabel + " 名称", value => { index.name = value; }));
-      td(this.indexColumnsEditor(index.columns, index.descending ?? [], columnNames, rowLabel, (cols, desc) => { index.columns = cols; index.descending = desc; }));
+      td(this.indexColumnsCell(index.columns, index.descending ?? [], columnNames, rowLabel, (cols, desc) => { index.columns = cols; index.descending = desc; }));
       td(this.select(index.unique ? "UNIQUE" : "NORMAL", ["NORMAL", "UNIQUE"], rowLabel + " 索引类型", value => { index.unique = value === "UNIQUE"; }));
       td(this.select(index.method ?? "BTREE", methods, rowLabel + " 索引方法", value => { index.method = value; }));
-      this.opCell(tr, rowLabel, () => { const at = indexes.indexOf(index); if (at >= 0) indexes.splice(at, 1); if (this.selectedIndex === index) this.selectedIndex = indexes[0] ?? null; this.changed(); this.render(); });
       tbody.appendChild(tr);
     });
     table.appendChild(tbody); body.appendChild(table);
@@ -470,6 +553,14 @@ export class TableDesigner {
     catch (error) { if (version !== this.metadataVersion || this.disposed) return; this.namespaces = { values: null, error: `引用命名空间元数据未知：${String(error)}`, loading: false }; }
     if (this.currentTab === "外键") this.restoreReferenceFocus(this.referenceFocus());
   }
+  /** 读取「选项」页候选（引擎/字符集/排序规则/行格式）；非 MySQL 后端返回空候选。 */
+  private async loadOptionChoices(): Promise<void> {
+    if (this.optionChoices.loading) return;
+    const version = this.metadataVersion; this.optionChoices = { values: null, error: "", loading: true };
+    try { const values = await api.tableOptionChoices(this.tab.connectionId); if (version !== this.metadataVersion || this.disposed) return; this.optionChoices = { values, error: "", loading: false }; }
+    catch (error) { if (version !== this.metadataVersion || this.disposed) return; this.optionChoices = { values: null, error: `表选项候选项读取失败：${String(error)}`, loading: false }; }
+    if (this.currentTab === "选项") this.render();
+  }
   private async loadReferenceTables(namespace: string): Promise<void> {
     if (!namespace || this.referenceTables.get(namespace)?.loading) return;
     const version = this.metadataVersion; this.referenceTables.set(namespace, { values: null, error: "", loading: true });
@@ -490,12 +581,11 @@ export class TableDesigner {
     const namespaces = this.namespaces;
     if (!namespaces.values && !namespaces.loading && !namespaces.error) void this.loadNamespaces();
     this.actionsRow(body,
-      this.button("新增外键", () => this.addForeignKey()),
       this.button("读取引用元数据", () => { this.namespaces = { values: null, error: "", loading: false }; this.referenceTables.clear(); this.references.clear(); void this.loadNamespaces(); this.render(); }, namespaces.loading ? "正在读取" : this.editReason()));
     const colsId = this.columnsDatalist(body);
     const fkTable = document.createElement("table"); fkTable.className = "designer-grid mini-table"; fkTable.style.minWidth = "0"; fkTable.style.width = "100%";
     const fkHead = document.createElement("thead"); const fkHr = document.createElement("tr");
-    for (const title of ["名", "本表字段（逗号分隔）", "引用库", "引用表（父）", "引用字段（按顺序对应）", "删除时", "更新时", ""]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; fkHr.appendChild(th); }
+    for (const title of ["名", "本表字段（逗号分隔）", "引用库", "引用表（父）", "引用字段（按顺序对应）", "删除时", "更新时"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; fkHr.appendChild(th); }
     fkHead.appendChild(fkHr); fkTable.appendChild(fkHead);
     const fkTbody = document.createElement("tbody");
     const hints: string[] = [];
@@ -523,7 +613,6 @@ export class TableDesigner {
       td(this.columnsInput(fk.ref_columns, `${rowLabel} 引用字段`, next => { fk.ref_columns = next; }, metadata?.columns ? refList.id : undefined));
       td(this.select(fk.on_delete ?? "", ["", "NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"], `${rowLabel} 删除时`, value => { fk.on_delete = value || null; }));
       td(this.select(fk.on_update ?? "", ["", "NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"], `${rowLabel} 更新时`, value => { fk.on_update = value || null; }));
-      this.opCell(tr, rowLabel, () => { const at = fks.indexOf(fk); if (at >= 0) fks.splice(at, 1); if (this.selectedForeignKey === fk) this.selectedForeignKey = fks[0] ?? null; this.changed(); this.render(); });
       fkTbody.appendChild(tr);
     });
     fkTable.appendChild(fkTbody); body.appendChild(fkTable);
@@ -534,10 +623,9 @@ export class TableDesigner {
     const checks = this.draft!.checks; if (checks === undefined) { this.unknown(body, "检查约束"); return; }
     const capability = this.snapshot!.capabilities.checks; if (!capability.supported) { const note = document.createElement("p"); note.textContent = capability.reason || "后端不支持修改检查约束。"; body.appendChild(note); }
     if (!checks.some(item => (item as unknown) === this.selectedCheck)) this.selectedCheck = checks[0] ?? null;
-    this.actionsRow(body, this.button("新增检查约束", () => this.addCheck(), !capability.supported ? capability.reason || "不支持检查约束" : this.editReason()));
     const table = document.createElement("table"); table.className = "designer-grid mini-table"; table.style.minWidth = "0"; table.style.width = "100%";
     const head = document.createElement("thead"); const hr = document.createElement("tr");
-    for (const title of ["名", "CHECK 表达式", ""]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
+    for (const title of ["名", "CHECK 表达式"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
     head.appendChild(hr); table.appendChild(head);
     const tbody = document.createElement("tbody");
     checks.forEach((check, i) => {
@@ -549,7 +637,6 @@ export class TableDesigner {
       if (check.generated_name) name.title = "此名称是匿名 CHECK 的展示身份；后端决定真实 DDL 可支持范围。";
       td(name);
       td(this.input(check.expression, `${rowLabel} CHECK 表达式`, value => { check.expression = value; }, !capability.supported));
-      this.opCell(tr, rowLabel, () => { const at = checks.indexOf(check); if (at >= 0) checks.splice(at, 1); if (this.selectedCheck === check) this.selectedCheck = checks[0] ?? null; this.changed(); this.render(); }, !capability.supported);
       tbody.appendChild(tr);
     });
     table.appendChild(tbody); body.appendChild(table);
@@ -558,10 +645,9 @@ export class TableDesigner {
     const triggers = this.draft!.triggers; if (triggers === undefined) { this.unknown(body, "触发器"); return; }
     const capability = this.snapshot!.capabilities.triggers; if (!capability.supported) { const note = document.createElement("p"); note.textContent = capability.reason || "后端不支持修改触发器。"; body.appendChild(note); }
     if (!triggers.some(item => (item as unknown) === this.selectedTrigger)) this.selectedTrigger = triggers[0] ?? null;
-    this.actionsRow(body, this.button("新增触发器", () => this.addTrigger(), !capability.supported ? capability.reason || "不支持触发器" : this.editReason()));
     const table = document.createElement("table"); table.className = "designer-grid mini-table"; table.style.minWidth = "0"; table.style.width = "100%";
     const head = document.createElement("thead"); const hr = document.createElement("tr");
-    for (const title of ["名", "时机", "事件", "触发语句 / 函数调用", ""]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
+    for (const title of ["名", "时机", "事件", "触发语句 / 函数调用"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
     head.appendChild(hr); table.appendChild(head);
     const tbody = document.createElement("tbody");
     triggers.forEach((trigger, i) => {
@@ -575,7 +661,6 @@ export class TableDesigner {
       const statement = this.input(trigger.statement, `${rowLabel} 触发语句`, value => { trigger.statement = value; }, !capability.supported);
       if (trigger.definition) statement.title = `原始完整定义（只读）：\n${trigger.definition}`;
       td(statement);
-      this.opCell(tr, rowLabel, () => { const at = triggers.indexOf(trigger); if (at >= 0) triggers.splice(at, 1); if (this.selectedTrigger === trigger) this.selectedTrigger = triggers[0] ?? null; this.changed(); this.render(); }, !capability.supported);
       tbody.appendChild(tr);
     });
     table.appendChild(tbody); body.appendChild(table);
@@ -585,12 +670,21 @@ export class TableDesigner {
     const draft = this.draft!; const capability = this.snapshot!.capabilities; const options = draft.options;
     if (options === undefined) { this.unknown(body, "表选项"); return; }
     const labels: [keyof TableOptionsDesign, string][] = [["engine", "存储引擎"], ["charset", "字符集"], ["collation", "排序规则"], ["row_format", "行格式"], ["strict", "STRICT"], ["without_rowid", "WITHOUT ROWID"], ["fillfactor", "填充因子"]];
+    // engine/charset/collation/row_format 用可搜索下拉：候选来自当前数据库的真实信息模式。
+    const choiceKeys: (keyof TableOptionsDesign)[] = ["engine", "charset", "collation", "row_format"];
+    if (labels.some(([key]) => choiceKeys.includes(key) && capability.options.supported && capability.supported_options.includes(key)) && !this.optionChoices.values && !this.optionChoices.loading && !this.optionChoices.error) void this.loadOptionChoices();
+    const choices = this.optionChoices.values;
+    const choiceMap: Record<string, string[]> = { engine: choices?.engines ?? [], charset: choices?.charsets ?? [], collation: choices?.collations ?? [], row_format: choices?.row_formats ?? [] };
     for (const [key, label] of labels) {
       const supported = capability.options.supported && capability.supported_options.includes(key);
-      const reason = supported ? undefined : this.host.connection()?.kind === "sqlite" && ["engine", "charset", "collation"].includes(key) ? "SQLite 没有此表级选项。" : capability.options.reason || `后端未声明支持 ${key}。`;
+      let reason = supported ? undefined : this.host.connection()?.kind === "sqlite" && ["engine", "charset", "collation"].includes(key) ? "SQLite 没有此表级选项。" : capability.options.reason || `后端未声明支持 ${key}。`;
       let control: HTMLElement;
       if (key === "strict" || key === "without_rowid") control = this.select(options[key] == null ? "未设置" : options[key] ? "是" : "否", ["未设置", "是", "否"], label, value => { options[key] = value === "未设置" ? null : value === "是"; }, !supported);
       else if (key === "fillfactor") { const input = this.input(options[key] == null ? "" : String(options[key]), label, value => { options[key] = value === "" ? null : /^\d+$/.test(value) ? Number(value) : value; }, !supported); input.inputMode = "numeric"; input.setAttribute("aria-description", "10 到 100 之间的整数；未完成的输入会保留并在保存前报错。"); control = input; }
+      else if (choiceKeys.includes(key)) {
+        control = this.select((options[key] as string | null) ?? "", choiceMap[key as string] ?? [], label, value => { options[key] = value || null; }, !supported || !choices);
+        if (supported && !choices) reason = this.optionChoices.error || "正在读取该数据库的真实候选项…";
+      }
       else control = this.input(options[key], label, value => { options[key] = value || null; }, !supported);
       body.appendChild(this.labeled(label, control, reason));
     }

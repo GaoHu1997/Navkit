@@ -7,13 +7,13 @@
 | [`completed/`](completed/) | **只有结果**：[产品状态](completed/PRODUCT-STATE.md)，含能力矩阵、25 项实现归档、验收状态 | 与当前工作树一致（2026-11-11 核对） |
 | [`active/`](active/) | 当前轮次：进行中的过程文档与证据日志 | 当前为空（上一轮已归档） |
 | [`planned/`](planned/) | 尚未开工的计划，含范围、非目标、进入条件 | 当前无待开工计划，仅留候选备忘 |
-| [`design/`](design/) | 常驻设计输入：设计系统、界面规格、UI 原型 | 被 `src/` 源码注释按路径引用，**不搬动** |
+| [`design/`](design/) | 常驻设计输入：[设计规范 DESIGN.md](design/DESIGN.md)（唯一权威）、UI 原型与设计资产索引 | 被 `src/` 源码注释按路径引用，**不搬动** |
 
 ## 从哪开始
 
 - **想知道产品现在能做什么、做不到什么** → [`completed/PRODUCT-STATE.md`](completed/PRODUCT-STATE.md)
 - **想接着干活** → [`completed/PRODUCT-STATE.md`](completed/PRODUCT-STATE.md) 的实现归档表与 §六 已知限制；新计划写进 [`planned/`](planned/)
-- **想改界面** → [`design/DESIGN.md`](design/DESIGN.md) 与 [`design/界面规格表.md`](design/界面规格表.md)
+- **想改界面** → [`design/DESIGN.md`](design/DESIGN.md)（唯一权威设计规范；已合并原界面规格表与画廊说明）
 - **想开工一件没开始的事** → [`planned/`](planned/)，开工后移到 `active/`
 
 ## 维护规则

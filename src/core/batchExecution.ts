@@ -172,7 +172,7 @@ export class BatchExecutionService {
     const captured = structuredClone(request);
     const record: BatchExecutionRecord = {
       id: crypto.randomUUID(), kind: request.task.kind, connectionName: plainText(connectionName), driver: plainText(driver, 24), namespace: request.namespace, createdAt: Date.now(),
-      context: null, summary: request.task.kind === "generated_rows" ? "生成数据写入" : "运行 SQL 文件", state: "queued",
+      context: null, summary: request.task.kind !== "sql_file" ? "生成数据写入" : "运行 SQL 文件", state: "queued",
       registering: true, busy: true, unknown: false, cancelRequested: false, notice: "正在登记真实任务，尚未发送执行…",
       snapshot: null, logs: [], droppedBeforeSequence: 0, locallyDropped: 0, totalRows: null, sourceBytes: null,
     };

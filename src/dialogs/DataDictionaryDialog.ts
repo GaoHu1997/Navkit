@@ -122,19 +122,25 @@ export function openDataDictionaryDialog(
 
   const connById = (id: string): ConnectionConfig | undefined => usable.find((c) => c.id === id);
 
+  let databasesVersion = 0;
   async function reloadDatabases(prefer?: string): Promise<void> {
+    const version = ++databasesVersion;
     const cfg = connById(connSelect.value);
+    dbSelect.disabled = true;
+    dbSelect.setAttribute("aria-busy", "true");
     dbSelect.replaceChildren();
     infoRow.replaceChildren();
     metadata = null;
     metaLoaded = false;
     if (!cfg) {
       dbHint.textContent = "请先创建连接";
+      dbSelect.removeAttribute("aria-busy");
       return;
     }
     dbHint.textContent = "正在读取数据库列表...";
     try {
       const dbs = await api.listDatabases(cfg.id);
+      if (version !== databasesVersion) return;
       for (const [name] of dbs) {
         const opt = document.createElement("option");
         opt.value = name;
@@ -142,9 +148,12 @@ export function openDataDictionaryDialog(
         dbSelect.appendChild(opt);
       }
       if (prefer && dbs.some(([name]) => name === prefer)) dbSelect.value = prefer;
+      dbSelect.disabled = dbs.length === 0;
       dbHint.textContent = dbs.length ? "" : "该连接没有可用的数据库";
     } catch (e) {
-      dbHint.textContent = `数据库列表读取失败：${String(e)}`;
+      if (version === databasesVersion) dbHint.textContent = `数据库列表读取失败：${String(e)}`;
+    } finally {
+      if (version === databasesVersion) dbSelect.removeAttribute("aria-busy");
     }
   }
   connSelect.addEventListener("change", () => void reloadDatabases());
@@ -437,7 +446,15 @@ export function openDataDictionaryDialog(
       const { save } = await import("@tauri-apps/plugin-dialog");
       const res = await save({ title: "保存数据字典", filters: [format.filter], defaultPath: defaultFileName() });
       if (res) {
-        pathInput.value = res;
+        // save() 返回的是完整文件路径：拆成「目录 + 文档名」，否则目录里会再拼一次文件名。
+        const cut = Math.max(res.lastIndexOf("\\"), res.lastIndexOf("/"));
+        if (cut > 0) {
+          pathInput.value = res.slice(0, cut);
+          const stem = res.slice(cut + 1).replace(/\.[^.\\/]+$/, "");
+          if (stem.trim()) nameInput.value = stem.trim();
+        } else {
+          pathInput.value = res;
+        }
         refreshGeneratedName();
       }
     } catch (e) {
@@ -457,10 +474,21 @@ export function openDataDictionaryDialog(
     return `${db}数据库设计文档${stamp}`;
   }
   function refreshGeneratedName(): void {
+    generated.textContent = targetFilePath();
+  }
+  /** 输出目录：去掉尾部斜杠。 */
+  function outputDirectory(): string {
+    return pathInput.value.trim().replace(/[\\/]+$/, "");
+  }
+  /** 目标文件的完整路径：目录 + 文档名 + 扩展名。全流程唯一的拼接点。 */
+  function targetFilePath(): string {
     const name = nameInput.value.trim() || defaultFileName();
-    const dir = pathInput.value.trim();
     const format = FORMATS.find((f) => f.id === selectedFormat)!;
-    generated.textContent = dir ? `${dir}\\${name}${format.ext}` : `${name}${format.ext}`;
+    const dir = outputDirectory();
+    const file = `${name}${format.ext}`;
+    if (!dir) return file;
+    // 沿用目录里已有的分隔符，避免 Windows 路径混用 / 与 \
+    return `${dir}${dir.includes("\\") ? "\\" : "/"}${file}`;
   }
   nameInput.addEventListener("input", refreshGeneratedName);
   pathInput.addEventListener("input", refreshGeneratedName);
@@ -499,12 +527,16 @@ export function openDataDictionaryDialog(
   function filesProblem(): string | null {
     const name = nameInput.value.trim() || defaultFileName();
     if (FILE_NAME_INVALID.test(name)) return "文档名称不能包含 \\ / : * ? \" < > | 字符";
-    if (!pathInput.value.trim()) return "请填写输出路径（或点击浏览选择位置）";
+    if (!outputDirectory()) return "请填写输出路径（或点击浏览选择位置）";
+    // 输出路径是目录：用户误把完整文件名填进来时（浏览/手输），这里直接拦住，避免生成 x.pdf\x.pdf。
+    if (/\.(pdf|md|markdown|docx|xlsx|html?)$/i.test(outputDirectory())) {
+      return "「输出路径」请填写目录；文件名由「文档名称」决定。";
+    }
     return null;
   }
 
-  /** 执行导出（注册后台任务；「后台执行」只关对话框不中断任务）。 */
-  async function runExport(background: boolean): Promise<void> {
+  /** 执行导出（注册后台任务；关闭窗口不中断任务，会转入任务中心）。 */
+  async function runExport(): Promise<void> {
     if (running) return;
     const problem = filesProblem();
     if (problem) {
@@ -534,7 +566,7 @@ export function openDataDictionaryDialog(
     }
     const name = nameInput.value.trim() || defaultFileName();
     const format = FORMATS.find((f) => f.id === selectedFormat)!;
-    const filePath = joinPath(pathInput.value.trim(), `${name}${format.ext}`);
+    const filePath = targetFilePath();
     const opts: DictionaryExportOptions = {
       format: selectedFormat,
       excel_sheet_mode: perTableRadio.checked ? "per_table" : "single",
@@ -562,16 +594,14 @@ export function openDataDictionaryDialog(
         handle.fail(String(e));
         throw e;
       });
-    if (background) {
-      // 后台执行：立即关闭对话框，任务在任务面板可见
-      dlg.close();
-      onDone(filePath);
-      void exportPromise.catch(() => {});
-      return;
-    }
     try {
       const bytes = await exportPromise;
       progress.finish(`导出完成：${name}${format.ext}（${(bytes / 1024).toFixed(1)} KB）`);
+      exportedPath = filePath;
+      // 已导出后，完成按钮改成「已导出」并禁用：避免重复点击又生成一份同名文档。
+      wizard.nextBtn.textContent = "已导出";
+      wizard.nextBtn.classList.remove("primary");
+      wizard.refreshControls();
       onDone(filePath);
     } catch (e) {
       progress.fail(`导出失败：${String(e)}`);
@@ -582,21 +612,18 @@ export function openDataDictionaryDialog(
     }
   }
 
-  function joinPath(dir: string, file: string): string {
-    if (!dir) return file;
-    return dir.endsWith("\\") || dir.endsWith("/") ? `${dir}${file}` : `${dir}\\${file}`;
-  }
-
-  /** 后台执行按钮（导出步可见）。 */
-  const backgroundBtn = document.createElement("button");
-  backgroundBtn.type = "button";
-  backgroundBtn.className = "btn";
-  backgroundBtn.textContent = "后台执行";
-  backgroundBtn.addEventListener("click", () => void runExport(true));
-
   // ---------------------------------------------------------------- 组装向导
   // 固定窗口尺寸：各步内容多少不同，尺寸随内容跳动会让「下一步」在指针下移位。
   const dlg = new Dialog({ title: "数据字典", width: 820, height: 640, render: () => {}, buttons: [{ label: "关闭" }] });
+  /** 已成功导出的目标路径：非空时禁用「开始导出」，改配置后恢复。 */
+  let exportedPath: string | null = null;
+  const resetExportState = () => {
+    if (!exportedPath) return;
+    exportedPath = null;
+    wizard.nextBtn.textContent = "开始导出";
+    wizard.nextBtn.classList.add("primary");
+    wizard.refreshControls();
+  };
   wizard = new Wizard({
     steps: [
       { label: "数据源", hint: "数据字典按库生成：先选连接，再选库。", render: (host) => host.appendChild(p1) },
@@ -619,7 +646,7 @@ export function openDataDictionaryDialog(
       },
       {
         label: "导出",
-        hint: "核对配置后开始导出；选择「后台执行」可关闭对话框继续。",
+        hint: "核对配置后开始导出。导出期间关闭窗口不会中断任务：它会转入后台，可在顶部任务中心查看进度与结果。",
         render: (host) => host.appendChild(p5),
       },
     ],
@@ -633,11 +660,12 @@ export function openDataDictionaryDialog(
         }
         refreshGeneratedName();
       }
-      // 「后台执行」只在导出步出现
-      backgroundBtn.hidden = index !== 4;
+      // 已导出后回到本步，按钮保持「已导出」而不是又变成可点的「开始导出」。
+      if (index === 4) wizard.nextBtn.textContent = exportedPath ? "已导出" : "开始导出";
     },
     finishLabel: "开始导出",
-    onFinish: () => runExport(false),
+    finishEligible: () => exportedPath === null,
+    onFinish: () => runExport(),
   });
   dlg.el.classList.add("form-stacked");
   dlg.body.style.padding = "0";
@@ -646,8 +674,17 @@ export function openDataDictionaryDialog(
   dlg.body.style.overflow = "hidden";
   dlg.body.append(wizard.stepsEl, wizard.bodyEl);
   dlg.footer.prepend(...wizard.buttons());
-  dlg.footer.appendChild(backgroundBtn);
-  backgroundBtn.hidden = true;
+  // 任何配置改动都让上一份导出结果失效，「开始导出」重新可用。
+  dlg.body.addEventListener("input", resetExportState);
+  dlg.body.addEventListener("change", resetExportState);
+  // 关闭即转后台：导出已在任务中心运行，不取消，但要让用户明确知道。
+  const closeDialog = dlg.close.bind(dlg);
+  dlg.close = () => {
+    if (running) {
+      if (!window.confirm("数据字典仍在导出。关闭窗口不会中断任务，它会在后台继续，可在顶部任务中心查看进度与结果。确定关闭？")) return;
+    }
+    closeDialog();
+  };
   accessibleDialog(dlg, "数据字典");
   fmtCards.get("markdown")?.classList.add("on");
   syncSectionsVisibility();

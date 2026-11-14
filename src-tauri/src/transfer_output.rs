@@ -190,6 +190,20 @@ impl StagedOutput {
         EncodedWriter::new(BufWriter::with_capacity(BUFFER_BYTES,file),label)
     }
     fn stage_is_owned(&self)->bool { File::open(&self.stage).ok().and_then(|f|identity(&f).ok())==Some(self.file_id) }
+    /// Explicit disposal of a private, unpublished snapshot. Callers must first close
+    /// their cloned readers/writers; cleanup failures are observable, unlike Drop.
+    pub(super) fn cleanup(mut self) -> Result<()> {
+        if self.published { bail!("已发布的导出不能作为私有快照清理"); }
+        let parent = self.stage.parent().ok_or_else(|| anyhow!("快照目录缺失"))?;
+        let directory = open_directory(parent)?;
+        if identity(&directory)? != self.directory_id || !self.stage_is_owned() {
+            bail!("快照身份或目录已变化，拒绝清理其他文件");
+        }
+        self.file.take();
+        if !self.stage_is_owned() { bail!("关闭后快照身份已变化，清理未确认"); }
+        std::fs::remove_file(&self.stage).context("私有 SQL 快照清理未确认")?;
+        Ok(())
+    }
     pub(super) fn publish(mut self, check: impl FnOnce()->Result<()>) -> Result<()> {
         self.file.as_ref().ok_or_else(||anyhow!("导出 stage 已关闭"))?.sync_all()?;
         let parent=self.target.parent().unwrap(); let current=open_directory(parent)?;

@@ -6,14 +6,23 @@ use futures::TryStreamExt;
 use sqlx::{Column, Executor, Row, TypeInfo, ValueRef};
 use anyhow::{anyhow, bail, Context, Result};
 #[path = "transfer_mysql_export.rs"] mod mysql;
+#[path = "transfer_mongo_export.rs"] mod mongo;
+#[path = "transfer_http_export.rs"] mod http_export;
 
 fn select_sql(kind: &DbKind, options: &ExportOptions) -> Result<String> {
-    if options.limit.is_some_and(|limit| limit > i64::MAX as u64) { bail!("导出行数上限超过当前原生游标可表示的范围"); }
+    select_sql_projection(kind, options, "*")
+}
+
+fn select_sql_projection(kind: &DbKind, options: &ExportOptions, projection: &str) -> Result<String> {
+    if kind.protocol() != Protocol::Odbc && options.limit.is_some_and(|limit| limit > i64::MAX as u64) { bail!("导出行数上限超过当前原生游标可表示的范围"); }
     if kind.protocol() == Protocol::Mssql { crate::object_identity::SqlServerObject::parse(&options.schema, &options.table)?; }
     let top = if kind.protocol() == Protocol::Mssql { options.limit.map(|limit| format!("TOP ({limit}) ")).unwrap_or_default() } else { String::new() };
-    let mut sql = format!("SELECT {top}* FROM {}", crate::db::qualified(kind, &options.schema, &options.table));
+    let mut sql = format!("SELECT {top}{projection} FROM {}", crate::db::qualified(kind, &options.schema, &options.table));
     if let Some(clause) = options.where_clause.as_deref().filter(|clause| !clause.trim().is_empty()) { sql.push_str(&format!(" WHERE ({clause})")); }
-    if kind.protocol() != Protocol::Mssql { if let Some(limit) = options.limit { sql.push_str(&format!(" LIMIT {limit}")); } }
+    // ODBC 驱动覆盖多个版本和方言；不假定 LIMIT/FETCH FIRST，统一在接收游标时控制行数。
+    if !matches!(kind.protocol(), Protocol::Mssql | Protocol::Odbc) {
+        if let Some(limit) = options.limit { sql.push_str(&format!(" LIMIT {limit}")); }
+    }
     Ok(sql)
 }
 
@@ -71,6 +80,7 @@ pub(super) async fn view_definition(db:&Db, kind:&DbKind, schema:&str, name:&str
             let rows=tds_metadata(&mut client,&identity.view_query(kind)).await?;
             Ok(Some(rows.first().and_then(|row|row.first()).cloned().flatten().filter(|ddl|!ddl.trim().is_empty()).ok_or_else(||anyhow!("视图定义不可见或已加密，需要 VIEW DEFINITION 权限"))?))
         },
+        Db::Odbc(odb) if kind.protocol()==Protocol::Odbc && kind.id()=="oracle" => oracle_view_definition(odb.as_ref(), kind, schema, name).await,
         _=>Ok(None),
     }
 
@@ -93,7 +103,7 @@ pub(super) async fn append_dump_data(db: &Db, kind: &DbKind, schema: &str, table
 pub(super) async fn export_cursor(db: &Db, kind: &DbKind, options: &ExportOptions, task: &TaskControl, stage: &StagedOutput) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
-    let sql = select_sql(kind, options)?;
+    let sql = if matches!(db, Db::Mongo(_) | Db::Http(_) | Db::Redis(_)) { String::new() } else { select_sql(kind, options)? };
     let limits = crate::transfer_stream::TransferLimits::default();
     macro_rules! read {
         ($session:expr, $convert:path) => {{
@@ -109,18 +119,39 @@ pub(super) async fn export_cursor(db: &Db, kind: &DbKind, options: &ExportOption
                 let names = description.columns().iter().map(|column| column.name().to_owned()).collect::<Vec<_>>();
                 let types = description.columns().iter().map(|column| column.type_info().name().to_owned()).collect::<Vec<_>>();
                 let upper_types = types.iter().map(|ty| ty.to_ascii_uppercase()).collect::<Vec<_>>();
+                // MONEY's wire integer carries no lc_monetary scale. The server
+                // resolves its numeric text in this physical session. Logical types
+                // remain MONEY for the sink; wire types are checked separately.
+                let execution_sql = if kind.protocol() == Protocol::Postgres && upper_types.iter().any(|ty| ty == "MONEY") {
+                    let projection = names.iter().zip(&upper_types).map(|(name, ty)| {
+                        let name = crate::db::quote_ident(kind, name);
+                        if ty == "MONEY" { format!("({name}::numeric)::text AS {name}") } else { name }
+                    }).collect::<Vec<_>>().join(", ");
+                    select_sql_projection(kind, options, &projection)?
+                } else { sql.clone() };
+                let wire_types = if execution_sql != sql {
+                    let actual = crate::sql_history::describe((&mut *connection), &execution_sql).await?;
+                    if actual.columns().len() != names.len() || actual.columns().iter().zip(&names).any(|(column, name)| column.name() != name) { bail!("MONEY 文本投影与原始对象列元数据不一致"); }
+                    actual.columns().iter().map(|column| column.type_info().name().to_owned()).collect::<Vec<_>>()
+                } else { types.clone() };
                 let mut sink = ExportSink::create(stage, &options.format.to_ascii_lowercase(), kind, &options.schema, &options.table, &names, &types, &options.delimiter, options.has_header, &options.encoding)?;
                 // 一个 SELECT 对应一个 statement snapshot，空结果仍有 describe 的完整列元数据。
-                let mut stream = crate::sql_history::query(&sql).fetch(&mut *connection);
+                let mut stream = crate::sql_history::query(&execution_sql).fetch(&mut *connection);
                 let mut count = 0u64;
                 loop {
                     task.check()?;
                     let Some(row) = stream.try_next().await? else { break };
                     let mut values = $convert(&row, row.len());
                     if values.len() != names.len() || row.len() != names.len() { bail!("导出游标返回的列数与准备时元数据不一致"); }
+                    // values.rs 用显式标记表示“非 NULL 但无法无损解码”，不能当作真实文本写盘。
+                    for (index, value) in values.iter().enumerate() {
+                        if value.as_deref().is_some_and(crate::values::is_unsupported_value) {
+                            bail!(super::UnsupportedExportValue { column: names[index].clone(), data_type: upper_types[index].clone() });
+                        }
+                    }
                     let mut record_bytes = 0u64;
                     for (index, column) in row.columns().iter().enumerate() {
-                        if column.name() != names[index] || column.type_info().name() != types[index] { bail!("导出游标列元数据发生变化，目标未发布"); }
+                        if column.name() != names[index] || column.type_info().name() != wire_types[index] { bail!("导出游标列元数据发生变化，目标未发布"); }
                         let raw = row.try_get_raw(index)?;
                         if raw.is_null() { values[index] = None; continue; }
                         let ty = &upper_types[index];
@@ -133,7 +164,9 @@ pub(super) async fn export_cursor(db: &Db, kind: &DbKind, options: &ExportOption
                             for byte in bytes { value.push(HEX[(byte >> 4) as usize] as char); value.push(HEX[(byte & 15) as usize] as char); }
                             values[index] = Some(value);
                         }
-                        let value = values[index].as_ref().ok_or_else(|| anyhow!("导出列 {}（{}）尚不能无损解码，未将非 NULL 值伪造为 NULL", names[index], ty))?;
+                        let value = values[index].as_ref().ok_or_else(|| anyhow::Error::new(super::UnsupportedExportValue {
+                            column: names[index].clone(), data_type: ty.clone(),
+                        }))?;
                         record_bytes = record_bytes.checked_add(u64::try_from(value.len())?).ok_or_else(|| anyhow!("导出记录长度溢出"))?;
                         if record_bytes > limits.max_record_bytes { bail!("导出单条记录超过上限"); }
                     }
@@ -171,6 +204,11 @@ pub(super) async fn export_cursor(db: &Db, kind: &DbKind, options: &ExportOption
         Db::Mysql(pool) if kind.protocol() == Protocol::Mysql => read!(mysql::session(pool, kind, options, task), crate::values::my_row_values),
         Db::Postgres(pool) if kind.protocol() == Protocol::Postgres => read!(pg_session(pool, kind, options), crate::values::pg_row_values),
         Db::Mssql(client) if kind.protocol() == Protocol::Mssql => mssql_cursor(client, kind, options, task, stage, &sql).await,
+        Db::ClickHouse(client) if kind.protocol() == Protocol::Clickhouse => clickhouse_cursor(client, kind, options, task, stage, &sql).await,
+        Db::Odbc(odb) if kind.protocol() == Protocol::Odbc => odbc_cursor(odb, kind, options, task, stage, &sql).await,
+        Db::Mongo(mongo) if kind.protocol() == Protocol::Mongo => mongo::export(mongo, kind, options, task, stage).await,
+        Db::Http(http) if matches!(kind.protocol(), Protocol::Http | Protocol::Native | Protocol::Odbc) => http_export::export(http, kind, options, task, stage).await,
+        Db::Redis(_) if kind.protocol() == Protocol::Redis => bail!("Redis 是键值存储，没有表结构，无法按表导出；请使用键浏览或命令行导出"),
         _ => bail!("当前通道尚未验证单物理连接的流式导出游标，没有发送导出 SELECT；未退回全量读取或 OFFSET 分页"),
     }
 
@@ -256,11 +294,219 @@ async fn mssql_cursor(database: &crate::mssql::MssqlDb, kind: &DbKind, options: 
     }
 }
 
+fn is_binary_odbc_type(ty: &str) -> bool {
+    let ty = ty.to_ascii_uppercase();
+    ty.contains("BLOB") || ty.contains("BINARY")
+}
+
+/// Oracle 视图真实定义（LONG 文本）：只在 SQL 格式导出时调用；找不到视图即视为表。
+async fn oracle_view_definition(odb: &crate::odbc_db::OdbcDb, kind: &DbKind, schema: &str, table: &str) -> Result<Option<String>> {
+    let needle = table.to_ascii_uppercase().replace('\'', "''");
+    let sql = if schema.trim().is_empty() {
+        format!("SELECT TEXT FROM USER_VIEWS WHERE VIEW_NAME = '{}'", needle)
+    } else {
+        let owner = schema.to_ascii_uppercase().replace('\'', "''");
+        format!("SELECT TEXT FROM ALL_VIEWS WHERE OWNER = '{}' AND VIEW_NAME = '{}'", owner, needle)
+    };
+    let result = odb.query_rows(&sql).await?;
+    let Some(text) = result.rows.first().and_then(|row| row.first().cloned().flatten()) else { return Ok(None) };
+    let text = text.trim();
+    if text.is_empty() { bail!("Oracle 视图定义为空，未生成伪造 DDL"); }
+    Ok(Some(format!("CREATE OR REPLACE VIEW {} AS {}", crate::db::qualified(kind, schema, table), text.trim_end_matches(';'))))
+}
+
+/// ODBC（Oracle/达梦/Oscar/DB2/GBase 等）导出：先 describe 建 sink，再在单一 blocking 游标上逐行转换写盘；不 fetch_all。
+async fn odbc_cursor(odb: &std::sync::Arc<crate::odbc_db::OdbcDb>, kind: &DbKind, options: &ExportOptions, task: &TaskControl, stage: &StagedOutput, sql: &str) -> Result<u64> {
+    task.check()?;
+    if options.format.eq_ignore_ascii_case("sql") && kind.id() == "oracle" {
+        if let Some(definition) = oracle_view_definition(odb.as_ref(), kind, &options.schema, &options.table).await? {
+            task.check()?;
+            ExportSink::view(stage, kind, &options.schema, &definition, &options.encoding)?;
+            return Ok(0);
+        }
+    }
+    if options.format.eq_ignore_ascii_case("sql") && kind.id() != "oracle" {
+        let object_type = odb.export_object_type(&options.schema, &options.table).await?;
+        task.check()?;
+        if object_type != "TABLE" { bail!("当前 ODBC 驱动尚不能读取该视图的真实 DDL；请使用 CSV/JSON 导出视图数据，未生成不可恢复的 INSERT"); }
+    }
+    // 空结果集只做 describe 取回列名与真实类型，据此建立有界 sink；不读取任何数据行。
+    let describe_sql = format!("SELECT * FROM {} WHERE 1=0", crate::db::qualified(kind, &options.schema, &options.table));
+    let meta = odb.query_rows(&describe_sql).await?;
+    if meta.columns.is_empty() { bail!("ODBC 对象列目录不可见；未将其伪造为空表"); }
+    let names = meta.columns.clone();
+    let types: Vec<String> = meta.column_info.iter().map(|column| column.data_type.clone()).collect();
+    if types.len() != names.len() { bail!("ODBC 列类型元数据与列数不一致"); }
+    let binary: Vec<bool> = types.iter().map(|ty| is_binary_odbc_type(ty)).collect();
+    let mut sink = ExportSink::create(stage, &options.format.to_ascii_lowercase(), kind, &options.schema, &options.table, &names, &types, &options.delimiter, options.has_header, &options.encoding)?;
+    if options.limit == Some(0) { sink.finish()?; return Ok(0); }
+    let max_record_bytes = crate::transfer_stream::TransferLimits::default().max_record_bytes;
+    let names_owned = names.clone();
+    let stream_sql = sql.to_owned();
+    // 有界通道（64 行）解耦阻塞的 ODBC 游标与异步 sink，绝不无界缓存整表。
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<Option<String>>>(64);
+    let handle = odb.spawn_row_stream(stream_sql, names_owned, binary, max_record_bytes, tx);
+    let mut count = 0u64;
+    let mut write_error: Option<anyhow::Error> = None;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            maybe = rx.recv() => match maybe {
+                Some(values) => match sink.write_rows(std::slice::from_ref(&values)) {
+                    Ok(written) => {
+                        count = match count.checked_add(written) { Some(total) => total, None => { write_error = Some(anyhow!("ODBC 导出行数溢出")); break; } };
+                        if count % 100 == 0 { task.update("export", count, options.limit.unwrap_or(0), "正在流式读取 ODBC 游标并生成目标编码文件"); }
+                        if options.limit.is_some_and(|max| count >= max) { break; }
+                    }
+                    Err(error) => { write_error = Some(error); break; }
+                },
+                None => break,
+            },
+            _ = ticker.tick() => {
+                if let Err(error) = task.check() { write_error = Some(error); break; }
+            }
+        }
+    }
+    drop(rx);
+    let produced = handle.await.map_err(|e| anyhow!("ODBC 任务失败: {e}"))?;
+    if let Some(error) = write_error { return Err(error); }
+    let produced = produced?;
+    if !options.limit.is_some_and(|max| count >= max) && produced != count { bail!("ODBC 导出返回行数与写入行数不一致，目标未发布"); }
+    task.check()?;
+    sink.finish()?;
+    Ok(count)
+}
+
+/// 只解析定义开头的关键字，不把列注释/字符串里的 VIEW 错判成视图。
+fn clickhouse_is_view(definition: &str) -> Result<bool> {
+    let mut words = definition.split_whitespace();
+    if !words.next().is_some_and(|word| word.eq_ignore_ascii_case("CREATE")) { bail!("ClickHouse 返回的定义不是 CREATE 语句"); }
+    let mut object = words.next().ok_or_else(|| anyhow!("ClickHouse 对象定义不完整"))?;
+    if object.eq_ignore_ascii_case("OR") {
+        if !words.next().is_some_and(|word| word.eq_ignore_ascii_case("REPLACE")) { bail!("ClickHouse 对象定义前缀不可识别"); }
+        object = words.next().ok_or_else(|| anyhow!("ClickHouse 对象定义不完整"))?;
+    }
+    if ["MATERIALIZED", "LIVE", "WINDOW"].iter().any(|prefix| object.eq_ignore_ascii_case(prefix)) {
+        object = words.next().ok_or_else(|| anyhow!("ClickHouse 视图定义不完整"))?;
+        if !object.eq_ignore_ascii_case("VIEW") { bail!("ClickHouse 视图定义前缀不可识别"); }
+        return Ok(true);
+    }
+    if object.eq_ignore_ascii_case("VIEW") { return Ok(true); }
+    if object.eq_ignore_ascii_case("TABLE") { return Ok(false); }
+    bail!("ClickHouse 对象定义类型不可识别，未退回 INSERT 导出")
+}
+
+/// ClickHouse 导出：SQL 格式对视图输出真实定义；否则 describe 建 sink，再流式逐行写盘。
+async fn clickhouse_cursor(ch: &crate::clickhouse::ClickHouseClient, kind: &DbKind, options: &ExportOptions, task: &TaskControl, stage: &StagedOutput, sql: &str) -> Result<u64> {
+    task.check()?;
+    let qualified = crate::db::qualified(kind, &options.schema, &options.table);
+    if options.format.eq_ignore_ascii_case("sql") {
+        let ddl = ch.export_definition(&format!("SHOW CREATE TABLE {}", qualified)).await?;
+        if clickhouse_is_view(&ddl)? {
+            task.check()?;
+            ExportSink::view(stage, kind, &options.schema, &ddl, &options.encoding)?;
+            return Ok(0);
+        }
+    }
+    let (names, types) = ch.describe(&format!("SELECT * FROM {} LIMIT 0", qualified)).await?;
+    if names.is_empty() { bail!("ClickHouse 对象列目录不可见；未将其伪造为空表"); }
+    if types.len() != names.len() { bail!("ClickHouse 列类型元数据与列数不一致"); }
+    let mut sink = ExportSink::create(stage, &options.format.to_ascii_lowercase(), kind, &options.schema, &options.table, &names, &types, &options.delimiter, options.has_header, &options.encoding)?;
+    if options.limit == Some(0) { sink.finish()?; return Ok(0); }
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<Option<String>>>(64);
+    let max_record_bytes = crate::transfer_stream::TransferLimits::default().max_record_bytes;
+    let handle = ch.spawn_row_stream(sql.to_owned(), names.clone(), types.clone(), max_record_bytes, tx);
+    let mut count = 0u64;
+    let mut write_error: Option<anyhow::Error> = None;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            maybe = rx.recv() => match maybe {
+                Some(values) => match sink.write_rows(std::slice::from_ref(&values)) {
+                    Ok(written) => {
+                        count = match count.checked_add(written) { Some(total) => total, None => { write_error = Some(anyhow!("ClickHouse 导出行数溢出")); break; } };
+                        if count % 100 == 0 { task.update("export", count, options.limit.unwrap_or(0), "正在流式读取 ClickHouse 结果并生成目标编码文件"); }
+                    }
+                    Err(error) => { write_error = Some(error); break; }
+                },
+                None => break,
+            },
+            _ = ticker.tick() => {
+                if let Err(error) = task.check() { write_error = Some(error); break; }
+            }
+        }
+    }
+    drop(rx);
+    let produced = handle.await.map_err(|error| anyhow!("ClickHouse 任务失败: {error}"))?;
+    if let Some(error) = write_error { return Err(error); }
+    let produced = produced?;
+    if produced != count { bail!("ClickHouse 导出返回行数与写入行数不一致，目标未发布"); }
+    task.check()?;
+    sink.finish()?;
+    Ok(count)
+}
+
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn sqlserver_export_uses_segmented_identity_top_and_zero_limit() {
         let options = ExportOptions { connection_id:"fixture".into(), schema:"catalog.with.dot".into(), table:"[sales].[order]]detail]".into(), file:String::new(), format:"csv".into(), delimiter:",".into(), encoding:"utf8".into(), has_header:true, where_clause:Some("id > 0".into()), limit:Some(0) };
         assert_eq!(select_sql(&DbKind::of("sqlserver"), &options).unwrap(), "SELECT TOP (0) * FROM [catalog.with.dot].[sales].[order]]detail] WHERE (id > 0)");
+    }
+    #[test] fn oracle_export_uses_receiver_limit() {
+        let base = |limit: Option<u64>| ExportOptions { connection_id:"fixture".into(), schema:"app".into(), table:"orders".into(), file:String::new(), format:"csv".into(), delimiter:",".into(), encoding:"utf8".into(), has_header:true, where_clause:None, limit };
+        // ODBC 驱动覆盖多个版本和方言，不假定 LIMIT/FETCH FIRST；行数上限由接收游标控制。
+        assert_eq!(select_sql(&DbKind::of("oracle"), &base(Some(10))).unwrap(), "SELECT * FROM \"APP\".\"ORDERS\"");
+        // 无上限时不得残留任何 LIMIT/FETCH 子句。
+        assert_eq!(select_sql(&DbKind::of("oracle"), &base(None)).unwrap(), "SELECT * FROM \"APP\".\"ORDERS\"");
+        let sql = select_sql(&DbKind::of("oracle"), &base(Some(10))).unwrap().to_ascii_uppercase();
+        assert!(!sql.contains("LIMIT") && !sql.contains("FETCH"));
+    }
+    #[test] fn clickhouse_and_odbc_export_limits_use_dialect_syntax() {
+        let base = |limit: Option<u64>| ExportOptions { connection_id:"fixture".into(), schema:"app".into(), table:"orders".into(), file:String::new(), format:"csv".into(), delimiter:",".into(), encoding:"utf8".into(), has_header:true, where_clause:None, limit };
+        // ClickHouse 用反引号标识符 + LIMIT。
+        assert_eq!(select_sql(&DbKind::of("clickhouse"), &base(Some(5))).unwrap(), "SELECT * FROM `app`.`orders` LIMIT 5");
+        // DB2/Informix 等 ODBC 族不追加任何行数后缀。
+        assert_eq!(select_sql(&DbKind::of("db2"), &base(Some(5))).unwrap(), "SELECT * FROM \"APP\".\"ORDERS\"");
+        assert_eq!(select_sql(&DbKind::of("informix"), &base(Some(5))).unwrap(), "SELECT * FROM \"APP\".\"ORDERS\"");
+        // Hive 属 ODBC 族，同样不追加 LIMIT/FETCH FIRST，行数由接收游标控制。
+        assert_eq!(select_sql(&DbKind::of("hive"), &base(Some(5))).unwrap(), "SELECT * FROM `app`.`orders`");
+    }
+    #[test] fn clickhouse_is_view_does_not_misread_view_literal_in_create_table() {
+        // CREATE TABLE 的列名、默认值或注释里出现 VIEW 字面量，不能被误判成视图。
+        assert!(!clickhouse_is_view("CREATE TABLE `app`.`t` (`view` String, note String DEFAULT 'CREATE VIEW') ENGINE = MergeTree ORDER BY tuple()").unwrap());
+        assert!(!clickhouse_is_view("CREATE TABLE app.t AS SELECT 'CREATE VIEW v AS SELECT 1' AS s").unwrap());
+        assert!(!clickhouse_is_view("create table app.t (id UInt64) engine=Memory").unwrap());
+    }
+    #[test] fn clickhouse_is_view_accepts_materialized_live_window_and_or_replace() {
+        for ddl in [
+            "CREATE VIEW app.v AS SELECT 1",
+            "CREATE OR REPLACE VIEW app.v AS SELECT 1",
+            "CREATE MATERIALIZED VIEW app.mv ENGINE = MergeTree ORDER BY tuple() AS SELECT 1",
+            "CREATE OR REPLACE MATERIALIZED VIEW app.mv ENGINE = MergeTree ORDER BY tuple() AS SELECT 1",
+            "CREATE LIVE VIEW app.lv AS SELECT 1",
+            "CREATE WINDOW VIEW app.wv AS SELECT 1",
+        ] {
+            assert!(clickhouse_is_view(ddl).unwrap(), "应识别为视图: {ddl}");
+        }
+    }
+    #[test] fn clickhouse_is_view_rejects_unknown_definition() {
+        for ddl in [
+            "SELECT 1",
+            "CREATE DICTIONARY app.d (id UInt64) PRIMARY KEY id SOURCE(CLICKHOUSE(TABLE 't')) LAYOUT(FLAT()) LIFETIME(0)",
+            "CREATE OR REPLACE DICTIONARY app.d (id UInt64) PRIMARY KEY id SOURCE(CLICKHOUSE(TABLE 't')) LAYOUT(FLAT()) LIFETIME(0)",
+            "CREATE FUNCTION f AS (x) -> x + 1",
+        ] {
+            assert!(clickhouse_is_view(ddl).is_err(), "未知定义必须拒绝: {ddl}");
+        }
+    }
+    #[test] fn odbc_binary_type_detection() {
+        assert!(is_binary_odbc_type("BLOB"));
+        assert!(is_binary_odbc_type("VARBINARY"));
+        assert!(is_binary_odbc_type("BINARY(16)"));
+        assert!(!is_binary_odbc_type("VARCHAR"));
+        assert!(!is_binary_odbc_type("NUMBER(10,2)"));
     }
     #[test] fn export_paths_refuse_empty_or_relative_directory_before_creating_anything() {
         let relative=format!("navkit-export-relative-{}",uuid::Uuid::new_v4());
@@ -272,3 +518,4 @@ async fn mssql_cursor(database: &crate::mssql::MssqlDb, kind: &DbKind, options: 
     }
 }
 #[cfg(test)] #[path = "transfer_export_protocol_tests.rs"] mod protocol_tests;
+#[cfg(test)] #[path = "transfer_clickhouse_export_tests.rs"] mod clickhouse_protocol_tests;

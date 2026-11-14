@@ -17,7 +17,7 @@ fn request(kind: &str, port: u16) -> ConnectionRequest {
         database: "fixture".into(), file: String::new(), params: String::new(), timeout_secs: 5 }
 }
 fn page(id: &str, object: &str, offset: u64, limit: u64) -> PageRequest {
-    PageRequest { connection_id: id.into(), schema: "fixture".into(), table: object.into(), offset, limit,
+    PageRequest { connection_id: id.into(), schema: "fixture".into(), table: object.into(), offset, limit, include_total: true,
         order_by: None, ascending: true, filters: Vec::new(), filter_logic: FilterLogic::And, order_rules: None }
 }
 fn record<T: Serialize>(steps: &mut Vec<Value>, name: &str, result: Result<T>) {

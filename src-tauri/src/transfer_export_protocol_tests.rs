@@ -26,7 +26,7 @@ impl Fixture {
 }
 impl Drop for Fixture {fn drop(&mut self){let _=self.child.kill();let _=self.child.wait();let _=std::fs::remove_dir_all(&self.directory);}}
 fn options(fixture:&Fixture,namespace:&str,table:&str,name:&str,format:&str,limit:Option<u64>)->crate::transfer::ExportTaskOptions {
-    crate::transfer::ExportTaskOptions { task_id:uuid::Uuid::new_v4().to_string(),options:ExportOptions {connection_id:"isolated-protocol-simulation".into(),schema:namespace.into(),table:table.into(),file:fixture.file(name),format:format.into(),delimiter:",".into(),encoding:"utf8".into(),has_header:true,where_clause:None,limit} }
+    crate::transfer::ExportTaskOptions { sql_batch_rows:0,sql_batch_bytes:0,task_id:uuid::Uuid::new_v4().to_string(),options:ExportOptions {connection_id:"isolated-protocol-simulation".into(),schema:namespace.into(),table:table.into(),file:fixture.file(name),format:format.into(),delimiter:",".into(),encoding:"utf8".into(),has_header:true,where_clause:None,limit} }
 }
 fn data_select(row:&serde_json::Value)->bool {let sql=row["sql"].as_str().unwrap_or("").to_ascii_lowercase();(row["event"]=="EXECUTE"||row["event"]=="QUERY"||row["event"]=="SQL")&&(sql.starts_with("select * from ")||sql.starts_with("select top ("))}
 fn dump_options(fixture:&Fixture,namespace:&str,table:&str)->crate::models::DumpOptions {
@@ -82,7 +82,10 @@ async fn mysql_wire_simulation_exports_views_without_weakening_innodb_and_keeps_
     // 事务控制语句不在 MySQL 预处理白名单：必须以 COM_QUERY 发送，否则服务端返回 1295。
     let wire=fixture.wire();
     assert!(!wire.iter().any(|row|row["event"]=="PREPARE_REJECTED"),"事务/表锁控制语句不得走预处理协议");
-    assert!(wire.iter().any(|row|row["event"]=="QUERY"&&row["sql"].as_str().is_some_and(|sql|sql.starts_with("START TRANSACTION"))),"START TRANSACTION 必须以 COM_QUERY 发送");
+    let begin:Vec<_>=wire.iter().filter(|row|row["event"]=="QUERY"&&row["sql"].as_str().is_some_and(|sql|sql.starts_with("START TRANSACTION"))).collect();
+    assert!(!begin.is_empty(),"START TRANSACTION 必须以 COM_QUERY 发送");
+    // 回归防护：TiDB 不支持 `WITH CONSISTENT SNAPSHOT, READ ONLY`（1064 语法错误），导出事务必须用 `START TRANSACTION READ ONLY`。
+    assert!(begin.iter().all(|row|{let sql=row["sql"].as_str().unwrap_or("").to_ascii_uppercase();!sql.contains("CONSISTENT SNAPSHOT")&&sql.contains("READ ONLY")}),"导出事务不得使用 WITH CONSISTENT SNAPSHOT（TiDB 1064）且必须为 READ ONLY");
     fixture.clean_stages();pool.close().await;
     eprintln!("MySQL wire simulation 已验证真实 SQLx describe/stream、VIEW ENGINE=NULL、InnoDB 门禁、事务控制走文本协议；厂商 MySQL NOT_RUN，无默认 3306 连接");
 }

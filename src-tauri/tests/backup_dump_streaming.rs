@@ -46,7 +46,7 @@ async fn sqlite_backup_export_cursor_cancellation_never_publishes_partial_file()
     let dir=Directory::new();let source=pool().await;
     sqlx::raw_sql("CREATE TABLE items(id INTEGER,note TEXT);WITH RECURSIVE n(x) AS(VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) INSERT INTO items SELECT x,'cancel boundary' FROM n").execute(&source).await?;
     let db=Db::Sqlite(source.clone());let kind=DbKind::of("sqlite");let file=dir.file("cancel.sql");let id=format!("backup_cancel_{}",uuid::Uuid::new_v4().simple());
-    let options=transfer::ExportTaskOptions {task_id:id.clone(),options:navkit_lib::models::ExportOptions {connection_id:"fixture".into(),schema:"main".into(),table:"items".into(),file:file.clone(),format:"sql".into(),encoding:"utf8".into(),delimiter:",".into(),has_header:true,where_clause:None,limit:None}};
+    let options=transfer::ExportTaskOptions {sql_batch_rows:0,sql_batch_bytes:0,task_id:id.clone(),options:navkit_lib::models::ExportOptions {connection_id:"fixture".into(),schema:"main".into(),table:"items".into(),file:file.clone(),format:"sql".into(),encoding:"utf8".into(),delimiter:",".into(),has_header:true,where_clause:None,limit:None}};
     let cancel=async {
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
         loop {

@@ -20,13 +20,13 @@ import { esc, chip, note, screen } from "./assets/ui.js";
 
 function dimApp() {
   return `<div style="flex:1;display:flex;flex-direction:column;min-height:0">
-    <div style="height:38px;border-bottom:1px solid var(--border-subtle);background:var(--bg-surface);display:flex;align-items:center;padding:0 12px;gap:8px">
+    <div style="height:36px;border-bottom:1px solid var(--border-subtle);background:var(--bg-surface);display:flex;align-items:center;padding:0 12px;gap:8px">
       <span style="display:grid;place-items:center">${navkitLogo(20)}</span>
       <span style="font-size:13px;font-weight:600">NavKit</span>
       <span style="width:1px;height:14px;background:var(--border)"></span>
       <span style="font-size:12px;color:var(--text-tertiary)">dbswitch — localhost</span>
     </div>
-    <div style="height:46px;border-bottom:1px solid var(--border);background:var(--bg-surface)"></div>
+    <div style="height:44px;border-bottom:1px solid var(--border);background:var(--bg-surface)"></div>
     <div style="flex:1;display:flex;min-height:0;background:var(--bg-surface)">
       <div style="width:264px;border-right:1px solid var(--border)"></div>
       <div style="flex:1"></div>
@@ -89,7 +89,7 @@ function listRow(r) {
     ? '<span style="position:absolute;left:0;top:4px;bottom:4px;width:2px;border-radius:0 2px 2px 0;background:var(--accent-500)"></span>'
     : "";
   const nameColor = r.active ? "color:var(--accent-600);font-weight:600;" : "color:var(--text);";
-  return `<div style="position:relative;display:flex;align-items:center;gap:8px;height:34px;padding:0 12px 0 14px;border-radius:0;${bg}">
+  return `<div style="position:relative;display:flex;align-items:center;gap:8px;height:32px;padding:0 12px 0 14px;border-radius:0;${bg}">
       ${bar}
       <span style="width:18px;height:18px;display:grid;place-items:center;flex:0 0 auto">${
         logo || `<span style="color:var(--text-tertiary)">${icon("database", { size: 15 })}</span>`
@@ -469,7 +469,7 @@ export function driverStatesScreen() {
     <div style="border:1px solid var(--border);border-radius:6px;padding:14px 16px">
       <div style="font-size:12px;font-weight:600;margin-bottom:8px">布局规则</div>
       <ul style="margin:0;padding-left:16px;font-size:11px;line-height:1.9;color:var(--text-secondary)">
-        <li>左清单固定 296px，右详情自适应；清单项 34px 一行，一屏可见 14 个数据源。</li>
+        <li>左清单固定 288px，右详情自适应；清单项 30px 一行，一屏可见 14 个数据源。</li>
         <li>徽标永远在行尾同一列，扫读时成一条竖线。</li>
         <li>主操作（下载）用强调色，删除用幽灵按钮，危险操作才用红色。</li>
         <li>反馈就近：下载进度在该行，失败也在该行，不做全局 toast 了事。</li>

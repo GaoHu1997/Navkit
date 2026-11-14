@@ -84,7 +84,7 @@ async fn run_batch(db: &Db, kind: &DbKind, request: &BatchExportRequest, paths: 
             if abort || cancelled { abort = true; item.status = "skipped".into(); item.error = Some(if cancelled { "已在对象边界停止；当前对象之前完成的独立文件保留，不再读取剩余对象" } else { "合并 SQL 前一对象失败，未发布目标文件" }.into()); items.push(item); continue; }
             let internal = combined.as_ref().map(|_| InternalFile(Path::new(&file).parent().unwrap().join(format!(".navkit-batch-{}.sql", uuid::Uuid::new_v4()))));
             let target = internal.as_ref().map(|file| file.0.to_string_lossy().into_owned()).unwrap_or_else(|| file.clone());
-            let child = ExportTaskOptions { task_id: format!("batch_{}_{}", uuid::Uuid::new_v4().simple(), index), options: ExportOptions {
+            let child = ExportTaskOptions { sql_batch_rows: 0, sql_batch_bytes: 0, task_id: format!("batch_{}_{}", uuid::Uuid::new_v4().simple(), index), options: ExportOptions {
                 connection_id: request.connection_id.clone(), schema: request.namespace.clone(), table: object.name.clone(), file: target,
                 format: request.format.clone(), has_header: request.has_header, delimiter: request.delimiter.clone(), encoding: request.encoding.clone(), where_clause: None, limit: None,
             }};

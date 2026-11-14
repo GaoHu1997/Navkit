@@ -1002,6 +1002,7 @@ export function openJobHistoryDialog(history: JobHistoryEntry[], jobId?: string)
         rows,
         rowIcons: rows.map(() => "info_pane_query"),
         showRowNumbers: false,
+        fillWidth: true,
       });
     },
     buttons: [{ label: "关闭" }],

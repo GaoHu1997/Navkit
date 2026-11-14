@@ -169,7 +169,7 @@ export function menusGroup() {
       "菜单栏 · 表（上下文菜单项）",
       "仅在当前标签为表 / 设计器 / 对象时插入「表」菜单，位置固定在「查看」之后",
       `${menu(MENU_TABLE, { width: 208 })}`,
-      { content: blank, menu: ["文件", "编辑", "查看", "表", "收藏夹", "工具", "窗口", "帮助"], openMenu: "表" },
+      { content: blank, menu: ["文件", "编辑", "查看", "工具", "表", "设置"], openMenu: "表" },
     )}
   </div>`;
 }
@@ -292,7 +292,7 @@ export function contextMenusGroup() {
 /* =============================================================== 状态矩阵 */
 
 export function statesGroup() {
-  const miniBar = (opts = {}) => `<div class="commandbar" style="height:46px;overflow:hidden;padding:0 4px">
+  const miniBar = (opts = {}) => `<div class="commandbar" style="height:44px;overflow:hidden;padding:0 4px">
     ${cmdBtn("连接", "connection", { dropdown: true, disabled: opts.noConn })}
     ${cmdBtn("新建查询", "query")}
     ${cmdSep()}
@@ -304,7 +304,7 @@ export function statesGroup() {
     <div class="state-card"><div class="state-name">默认</div>${miniBar()}</div>
     <div class="state-card"><div class="state-name">激活（表）</div>${miniBar({ active: "表" })}</div>
     <div class="state-card"><div class="state-name">无连接时禁用</div>${miniBar({ noConn: true })}</div>
-    <div class="state-card"><div class="state-name">悬停（表）</div><div class="commandbar" style="height:46px;overflow:hidden;padding:0 4px">
+    <div class="state-card"><div class="state-name">悬停（表）</div><div class="commandbar" style="height:44px;overflow:hidden;padding:0 4px">
       ${cmdBtn("连接", "connection", { dropdown: true })}
       ${cmdBtn("新建查询", "query")}
       <div class="cmd-sep"></div>
@@ -391,7 +391,7 @@ export function statesGroup() {
 }
 
 function hoverCmd(label) {
-  return `<div class="commandbar" style="height:46px">
+  return `<div class="commandbar" style="height:44px">
     <button class="cmd-btn" style="background:var(--bg-hover)">${pictIcon("表", 24)}<span class="cmd-label" style="color:var(--text)">${label}</span></button>
   </div>`;
 }

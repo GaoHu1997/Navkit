@@ -116,6 +116,8 @@ struct Writer {
     max_bytes: u64,
     finished: bool,
     stopped: Option<String>,
+    /// 行序列化复用缓冲，避免每行新分配 Vec。
+    scratch: Vec<u8>,
 }
 
 /// 单个结果集；最后一个 Arc 释放后关闭并删除文件。
@@ -133,17 +135,56 @@ fn row_bytes(row: &[Option<String>]) -> usize {
     row.iter().fold(row.len().saturating_mul(std::mem::size_of::<Option<String>>()), |n, v| n.saturating_add(v.as_ref().map_or(0, String::len)))
 }
 
-/// serde_json 不得先为超大单行分配无界的 Vec。
-struct BoundedLine(Vec<u8>);
-impl Write for BoundedLine {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.0.len().saturating_add(bytes.len()) > MAX_ROW_BYTES {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "单行超过 32 MiB 缓存内存上限"));
+/// 把一行 `Vec<Option<String>>` 直接写成 JSON 数组到 `buf`，末尾带 `\n`。
+/// 返回 false 表示整行超过 32 MiB 上限。手写转义比 serde_json 泛型路径快数倍，
+/// 干净（无控制字符）的字符串只做一次 `extend_from_slice` 拷贝。
+fn write_json_row(buf: &mut Vec<u8>, values: &[Option<String>]) -> bool {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    buf.push(b'[');
+    let mut first = true;
+    for value in values {
+        if !first { buf.push(b','); }
+        first = false;
+        match value {
+            None => buf.extend_from_slice(b"null"),
+            Some(s) => {
+                buf.push(b'"');
+                let bytes = s.as_bytes();
+                let mut start = 0usize;
+                let mut i = 0usize;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    let esc: &[u8] = match b {
+                        b'"' => b"\\\"",
+                        b'\\' => b"\\\\",
+                        b'\n' => b"\\n",
+                        b'\r' => b"\\r",
+                        b'\t' => b"\\t",
+                        0x08 => b"\\b",
+                        0x0c => b"\\f",
+                        0x00..=0x1f => {
+                            if start < i { buf.extend_from_slice(&bytes[start..i]); }
+                            buf.extend_from_slice(&[b'\\', b'u', b'0', b'0', HEX[(b >> 4) as usize], HEX[(b & 0xf) as usize]]);
+                            start = i + 1;
+                            i += 1;
+                            continue;
+                        }
+                        _ => { i += 1; continue; }
+                    };
+                    if start < i { buf.extend_from_slice(&bytes[start..i]); }
+                    buf.extend_from_slice(esc);
+                    start = i + 1;
+                    i += 1;
+                }
+                if start < bytes.len() { buf.extend_from_slice(&bytes[start..]); }
+                buf.push(b'"');
+            }
         }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
+        if buf.len() > MAX_ROW_BYTES { return false; }
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    buf.push(b']');
+    buf.push(b'\n');
+    buf.len() <= MAX_ROW_BYTES
 }
 
 impl SpoolSet {
@@ -153,7 +194,7 @@ impl SpoolSet {
         let out = private_file(&file)?;
         Ok(Self {
             names: names.to_vec(), types: types.to_vec(), file,
-            writer: parking_lot::Mutex::new(Writer { out: Some(BufWriter::new(out)), offsets: Vec::new(), bytes: 0, reserved: 0, rows: 0, max_bytes: MAX_SET_BYTES, finished: false, stopped: None }),
+            writer: parking_lot::Mutex::new(Writer { out: Some(BufWriter::new(out)), offsets: Vec::new(), bytes: 0, reserved: 0, rows: 0, max_bytes: MAX_SET_BYTES, finished: false, stopped: None, scratch: Vec::new() }),
             total: AtomicU64::new(0), truncated: AtomicBool::new(false), execution_verified: AtomicBool::new(true),
         })
     }
@@ -161,7 +202,7 @@ impl SpoolSet {
     fn unavailable(names: &[String], types: &[String], error: anyhow::Error) -> Self {
         Self {
             names: names.to_vec(), types: types.to_vec(), file: PathBuf::new(),
-            writer: parking_lot::Mutex::new(Writer { out: None, offsets: Vec::new(), bytes: 0, reserved: 0, rows: 0, max_bytes: MAX_SET_BYTES, finished: false, stopped: Some(format!("结果缓存无法创建：{error:#}")) }),
+            writer: parking_lot::Mutex::new(Writer { out: None, offsets: Vec::new(), bytes: 0, reserved: 0, rows: 0, max_bytes: MAX_SET_BYTES, finished: false, stopped: Some(format!("结果缓存无法创建：{error:#}")), scratch: Vec::new() }),
             total: AtomicU64::new(0), truncated: AtomicBool::new(true), execution_verified: AtomicBool::new(true),
         }
     }
@@ -187,22 +228,28 @@ impl SpoolSet {
             self.stop(&mut writer, "单行超过 32 MiB 缓存内存上限".into());
             return;
         }
-        let mut line = BoundedLine(Vec::new());
-        if let Err(error) = serde_json::to_writer(&mut line, values).and_then(|_| line.write_all(b"\n").map_err(serde_json::Error::io)) {
-            self.stop(&mut writer, format!("结果行序列化失败：{error}"));
+        // 复用缓冲：避免每行新建 Vec，也跳过 serde_json 的泛型分派。
+        let mut buf = std::mem::take(&mut writer.scratch);
+        buf.clear();
+        if !write_json_row(&mut buf, values) {
+            writer.scratch = buf;
+            self.stop(&mut writer, "单行超过 32 MiB 缓存内存上限".into());
             return;
         }
-        let len = line.0.len() as u64;
+        let len = buf.len() as u64;
         if writer.bytes.saturating_add(len) > writer.max_bytes {
+            writer.scratch = buf;
             self.stop(&mut writer, "单个结果集超过 512 MiB 缓存上限".into());
             return;
         }
         if CACHE_BYTES.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(len).filter(|n| *n <= MAX_CACHE_BYTES)).is_err() {
+            writer.scratch = buf;
             self.stop(&mut writer, "本机查询缓存超过 2 GiB 总配额，请释放旧结果".into());
             return;
         }
         writer.reserved += len;
-        let result = writer.out.as_mut().context("结果缓存写入器不可用").and_then(|out| out.write_all(&line.0).map_err(Into::into));
+        let result = writer.out.as_mut().context("结果缓存写入器不可用").and_then(|out| out.write_all(&buf).map_err(Into::into));
+        writer.scratch = buf;
         if let Err(error) = result {
             self.stop(&mut writer, format!("写入结果缓存失败：{error:#}"));
             return;

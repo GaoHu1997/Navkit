@@ -336,7 +336,7 @@ test('namespace, table and column responses from an earlier baseline cannot over
     return { namespaces: designer.namespaces.values, tables: designer.referenceTables.get('db').values, columns: designer.references.get(JSON.stringify(['db', 'parents'])).columns };
   });
   assert.deepEqual(state, { namespaces: ['db'], tables: ['parents'], columns: ['fresh_column'] });
-  await tab(page, '外键'); await page.getByRole('button', { name: '新增外键', exact: true }).click();
+  await tab(page, '外键'); await page.evaluate(() => designer.addForeignKey());
   const namespace = page.getByRole('combobox', { name: '外键 1 引用库', exact: true });
   assert.equal(await namespace.locator('option[value="stale_schema"]').count(), 0);
   assert.equal(await page.getByRole('combobox', { name: '外键 1 引用表', exact: true }).locator('option[value="stale_table"]').count(), 0);

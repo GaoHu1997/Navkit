@@ -91,11 +91,11 @@ foreach ($relative in @("data", "data\logs", "data\cache")) {
 }
 Write-Host "  原地更新，已有连接、密钥、收藏和备份保持不变" -ForegroundColor DarkGray
 
-# WebView2 离线引导程序：无网络、无预装 WebView2 时也能双击运行。
+# WebView2 在线引导程序：缺少运行时时可联网安装，不是离线运行时。
 $webview2 = Join-Path $outDir "MicrosoftEdgeWebview2Setup.exe"
 $wvUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 try {
-    Write-Host "  下载 WebView2 离线引导程序 ..." -ForegroundColor DarkGray
+    Write-Host "  下载 WebView2 在线引导程序 ..." -ForegroundColor DarkGray
     Invoke-WebRequest -Uri $wvUrl -OutFile $webview2 -UseBasicParsing -TimeoutSec 180
     Write-Host "  WebView2 引导程序已就绪" -ForegroundColor DarkGray
 } catch {

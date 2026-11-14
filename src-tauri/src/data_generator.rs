@@ -98,9 +98,16 @@ pub async fn insert_batch(db: &Db, kind: &DbKind, req: &GeneratedRowsRequest) ->
             }
             let primary_count = info.columns.iter().filter(|c| c.primary_key).count();
             if primary_count == 1 && !definition.to_ascii_uppercase().contains("WITHOUT ROWID") {
-                for col in &mut info.columns {
-                    // 未指定单列 INTEGER PRIMARY KEY 时 SQLite 会生成 rowid；显式提供仍允许并受约束校验。
-                    if col.primary_key && col.data_type.eq_ignore_ascii_case("INTEGER") && !req.columns.contains(&col.name) { col.auto_increment = true; }
+                // Inline INTEGER PRIMARY KEY DESC has its own PK index: it is
+                // not a rowid alias and omission would silently insert NULL ids.
+                let indexes = crate::sql_history::query(&format!("PRAGMA main.index_list({})", db::quote_ident(kind, &req.table))).fetch_all(pool).await?;
+                let separate_primary = indexes.iter().try_fold(false, |found, row| -> std::result::Result<bool, sqlx::Error> { Ok(found || row.try_get::<String, _>("origin")? == "pk") })?;
+                if !separate_primary {
+                    for col in &mut info.columns {
+                        // True INTEGER rowid aliases may be generated when omitted;
+                        // explicitly supplied values still pass constraint validation.
+                        if col.primary_key && col.data_type.eq_ignore_ascii_case("INTEGER") && !req.columns.contains(&col.name) { col.auto_increment = true; }
+                    }
                 }
             }
             validate_columns(req, &info)?;
@@ -264,6 +271,24 @@ mod tests {
         assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM main.generated").fetch_one(pool).await.unwrap(), 0);
         assert_eq!(crate::sql_history::query_scalar::<_,i64>("SELECT COUNT(*) FROM temp.generated").fetch_one(pool).await.unwrap(), 0);
     }
+    #[tokio::test]
+    async fn sqlite_generated_desc_primary_key_requires_explicit_value() {
+        let (db,kind)=fixture().await;
+        let Db::Sqlite(pool)=&db else { unreachable!() };
+        sqlx::raw_sql("CREATE TABLE descending(id INTEGER PRIMARY KEY DESC,text TEXT); CREATE TABLE rowid_alias(id INTEGER PRIMARY KEY,text TEXT)").execute(pool).await.unwrap();
+        let mut req=GeneratedRowsRequest{connection_id:"test".into(),schema:"main".into(),table:"descending".into(),columns:vec!["text".into()],rows:vec![vec![Some("one".into())],vec![Some("two".into())]]};
+        let error=insert_batch(&db,&kind,&req).await.unwrap_err();
+        assert!(error.to_string().contains("缺少非空/主键字段 id"));
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM descending").fetch_one(pool).await.unwrap(),0);
+        req.table="rowid_alias".into();assert_eq!(insert_batch(&db,&kind,&req).await.unwrap(),2);
+        let ids:Vec<i64>=sqlx::query_scalar("SELECT id FROM rowid_alias ORDER BY id").fetch_all(pool).await.unwrap();assert_eq!(ids,vec![1,2]);
+        req.table="descending".into();req.columns=vec!["id".into(),"text".into()];
+        req.rows=vec![vec![Some("10".into()),Some("one".into())],vec![Some("11".into()),Some("two".into())]];
+        assert_eq!(insert_batch(&db,&kind,&req).await.unwrap(),2);
+        let ids:Vec<i64>=sqlx::query_scalar("SELECT id FROM descending ORDER BY id").fetch_all(pool).await.unwrap();assert_eq!(ids,vec![10,11]);
+        pool.close().await;
+    }
+
     #[tokio::test]
     async fn sqlite_rejects_missing_required_fields_null_and_excess_rows() {
         let (db,kind)=fixture().await; let mut req=request(); req.rows[0][0]=None; assert!(insert_batch(&db,&kind,&req).await.is_err());

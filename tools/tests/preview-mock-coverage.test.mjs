@@ -36,7 +36,7 @@ function frontendCommands() {
 }
 
 /** 在 VM 里加载 preview-bootstrap.js，读取 window.__PREVIEW_MOCK__ 的命令清单。 */
-function previewMockCommands() {
+function previewMock() {
   const sandbox = {
     console: { warn() {}, error() {}, log() {} },
     document: {
@@ -55,7 +55,11 @@ function previewMockCommands() {
   vm.runInNewContext(source, sandbox, { filename: "preview-bootstrap.js" });
   const mock = sandbox.window.__PREVIEW_MOCK__;
   assert.ok(mock, "preview-bootstrap.js 必须注册 window.__PREVIEW_MOCK__");
-  return Object.keys(mock).sort();
+  return mock;
+}
+
+function previewMockCommands() {
+  return Object.keys(previewMock()).sort();
 }
 
 /** 从 lib.rs 的 generate_handler![...] 提取桌面注册的命令清单。 */
@@ -83,6 +87,19 @@ test("前端调用的每个 IPC 命令都必须在预览 mock 中有响应（不
   );
 });
 
+test("通用预览不伪造原生recipe样本或授权指纹", () => {
+  const mock = previewMock();
+  assert.throws(() => mock.preview_generated_recipe({ recipe: { total: 1000000 } }), /RECIPE_PREVIEW_NATIVE_REQUIRED/);
+});
+
+test("内存预算预估命令明确要求原生采样，不伪造可用内存或授权额度", () => {
+  const mock = previewMock();
+  assert.equal(typeof mock.preview_diff_memory, "function");
+  for (const memory of [undefined, { mode: "speed" }, { mode: "auto" }, { mode: "manual", limit_bytes: 1048576 }]) {
+    assert.throws(() => mock.preview_diff_memory({ memory }), error => error.code === "DIFF_MEMORY_PREVIEW_NATIVE_REQUIRED" && /DIFF_MEMORY_PREVIEW_NATIVE_REQUIRED/.test(error.message));
+  }
+});
+
 test("前端调用的每个 IPC 命令都必须在桌面 generate_handler 中注册", () => {
   const used = frontendCommands();
   const registered = new Set(desktopCommands());
@@ -102,11 +119,25 @@ test("关键命令必须出现在两侧注册表中（显式点名，防止提�
     "query_result_snapshot",
     "scheduler_list_jobs",
     "register_batch_execution",
+    "get_diagram_metadata",
+    "preview_diff_memory",
   ];
   const mocked = new Set(previewMockCommands());
   const registered = new Set(desktopCommands());
   for (const command of critical) {
     assert.ok(mocked.has(command), `预览 mock 缺少关键命令 ${command}`);
     assert.ok(registered.has(command), `桌面注册表缺少关键命令 ${command}`);
+  }
+});
+
+test("关系图预览返回同目录的只读元数据，不包含视图或行数统计", () => {
+  const mock = previewMock();
+  for (const schemaName of ["dbswitch", "password_manager", "empty_database"]) {
+    const args = { id: "c1", schemaName };
+    const result = mock.get_diagram_metadata(args);
+    assert.deepEqual(Array.from(result.tables, table => table.table), Array.from(mock.list_tables(args).filter(([, type]) => type === "table"), ([name]) => name));
+    assert.ok(result.tables.every(table => table.database === schemaName && table.row_count === null));
+    assert.equal(result.failures.length, 0);
+    assert.equal(result.limitations.length, 0);
   }
 });

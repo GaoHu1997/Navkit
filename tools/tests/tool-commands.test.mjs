@@ -13,6 +13,8 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 class Element {
   constructor(tag = 'div') { this.tagName = tag; this.children = []; this.attributes = {}; this.dataset = {}; this.style = {}; this.listeners = {}; this.disabled = false; this._value = ''; this.classList = { add() {}, remove() {}, toggle() {} }; }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get textContent() { return (this._text ?? '') + this.children.map(child => child.textContent ?? '').join(''); }
   set value(v) { this._value = String(v); }
   get value() { return this._value || (this.tagName === 'select' ? this.children[0]?.value ?? '' : ''); }
   get options() { return this.children; }
@@ -186,8 +188,14 @@ test('generator connects before loading databases and supports empty connection-
 
 test('generator reports connection failure and performs no metadata/write calls for read-only target', async () => {
   let source = generatorApi(); source.ensureConnection = async () => ({ ok: false, message: 'real connection failure' });
-  let h = generatorHarness(source); await flush(); assert.match(h.wizards[0].error, /real connection failure/); assert.equal(source.calls.length, 0);
-  source = generatorApi(); h = generatorHarness(source, cfg('c', { read_only: true })); await flush(); assert.match(h.wizards[0].error, /只读/); assert.equal(source.calls.length, 0);
+  let h = generatorHarness(source);
+  const wizard = h.wizards[0];
+  await new Promise(resolve => {
+    const showError = wizard.showError.bind(wizard);
+    wizard.showError = message => { showError(message); resolve(); };
+  });
+  assert.match(wizard.error, /real connection failure/); assert.equal(wizard.errorEl.hidden, false); assert.equal(source.calls.length, 0);
+  source = generatorApi(); h = generatorHarness(source, cfg('c', { read_only: true })); assert.match(h.wizards[0].error, /只读/); assert.equal(h.wizards[0].errorEl.hidden, false); assert.equal(source.calls.length, 0);
 });
 
 test('generator requires preview and explicit confirmation; one submit path locks and invalidates stale preview', async () => {

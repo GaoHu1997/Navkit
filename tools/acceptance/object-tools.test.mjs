@@ -67,7 +67,7 @@ test('对象详情显示真实元数据与错误，SQLite整库大小不当作�
     getTableSchema: async () => structure([column('id', 'INTEGER', { primary_key: true })]),
     tableStatus: async () => [['Data_length', '40960'], ['Collation', 'UTF-8'], ['Create_options', '10 pages × 4096 bytes']],
   }));
-  assert(state.fields.some(f => f.label.includes('非单表') && f.value === '40960'));
+  assert(state.fields.some(f => f.label === '数据库文件大小' && f.value === '40960'));
   assert(!state.fields.some(f => f.label === '排序规则' || f.label.startsWith('行数')));
   const error = await loadObjectDetails(connection, 'main', 'missing', 'view', {}, source({ getViewDefinition: async () => { throw new Error('view missing'); } }));
   assert(error.fields.some(f => f.value === 'view missing'));
@@ -79,7 +79,7 @@ test('视图、例程和备份详情来自具体对应接口', async () => {
   const routine = await loadObjectDetails({ ...connection, kind: 'mysql' }, 'db', 'proc', 'procedure', {}, source({ getRoutineDefinition: async (id, db, name, type) => `${id}/${db}/${name}/${type}` }));
   assert(routine.fields.some(f => f.value === 'test/db/proc/procedure'));
   const backup = await loadObjectDetails(connection, 'main', 'backup.sql', 'query', { category: 'backup', backupName: 'backup.sql' }, source({ listBackups: async () => [{ name: 'backup.sql', modified: '2026-11-05', size: 321, comment: 'real' }] }));
-  assert(backup.fields.some(f => f.value === '321')); assert(backup.fields.some(f => f.value === 'real'));
+  assert(backup.fields.some(f => f.value === '321 B (321)')); assert(backup.fields.some(f => f.value === 'real'));
 });
 test('数据库详情包含连接配置、真实服务器信息和仅表的估计汇总', async () => {
   const cfg = { ...connection, kind: 'mysql', name: 'remote', file: '', host: 'db.example', port: 3307, user: 'reader', database: 'default_db' };
@@ -89,10 +89,10 @@ test('数据库详情包含连接配置、真实服务器信息和仅表的估�
     listObjects: async () => [object('a', 'table', 12, 4096), object('b', 'table', 30, 8192), object('v', 'view', 999, 999999)],
   }));
   const value = label => state.fields.find(f => f.label === label)?.value;
-  assert.equal(value('连接类型'), 'MySQL'); assert.equal(value('主机（配置）'), 'db.example'); assert.equal(value('端口（配置）'), '3307');
-  assert.equal(value('用户名（配置）'), 'reader'); assert.equal(value('默认数据库（配置）'), 'default_db');
+  assert.equal(value('连接类型'), 'MySQL'); assert.equal(value('主机'), 'db.example'); assert.equal(value('端口'), '3307');
+  assert.equal(value('用户名'), 'reader'); assert.equal(value('默认数据库'), 'default_db');
   assert.equal(value('服务器版本'), '8.4.real'); assert.equal(value('服务器字符集'), 'utf8mb4'); assert.equal(value('服务器排序规则'), 'utf8mb4_0900_ai_ci');
-  assert.equal(value('表总行数（服务器估计）'), '42'); assert.equal(value('表总数据大小（字节；服务器估计）'), '12288');
+  assert.equal(value('表总行数'), '42'); assert.equal(value('表总数据大小'), '12.0 KB (12,288)');
   assert.match(value('统计说明'), /不是 COUNT/);
 });
 test('数据库统计缺失和服务器错误不变成虚构零值，SQLite占位大小不汇总', async () => {
@@ -100,14 +100,14 @@ test('数据库统计缺失和服务器错误不变成虚构零值，SQLite占�
     serverInfo: async () => { throw new Error('server unavailable'); },
     listObjects: async () => [{ name: 'unknown', type: 'table', rows: -1, dataLength: NaN }],
   }));
-  assert(!state.fields.some(f => f.label === '表总行数（服务器估计）'));
+  assert(!state.fields.some(f => f.label === '表总行数'));
   assert(state.fields.some(f => f.label.endsWith('状态') && f.value.includes('未生成总计')));
   assert(state.fields.some(f => f.value === 'server unavailable'));
   const sqlite = await loadObjectDetails(connection, 'main', 'main', 'database', {}, source({
     serverInfo: async () => ({ product: 'SQLite', version: '3.real', charset: 'UTF-8', collation: '', uptime: null, extra: [] }),
     listObjects: async () => [{ name: 'a', type: 'table', rows: 5, dataLength: 0 }],
   }));
-  assert(sqlite.fields.some(f => f.label === '表总行数（对象列表统计）' && f.value === '5'));
+  assert(sqlite.fields.some(f => f.label === '表总行数' && f.value === '5'));
   assert(!sqlite.fields.some(f => f.label.includes('总') && f.label.includes('大小')));
   assert(!sqlite.fields.some(f => f.label === '服务器字符集'));
 });
@@ -119,17 +119,17 @@ test('函数详情有所属上下文及实测源码行数和字符长度，不�
   const pg = await loadObjectDetails({ ...connection, kind: 'postgresql' }, 'public', 'f', 'function', {}, source({ getRoutineDefinition: async () => definition }));
   assert.equal(pg.fields.find(field => field.label === '所属模式')?.value, 'public');
   assert(!pg.fields.some(field => field.label === '所属数据库'));
-  assert.equal(value('源码行数'), '3'); assert.equal(value('源码长度（字符）'), String(Array.from(definition).length)); assert.equal(value('定义'), definition);
+  assert.equal(value('源码行数'), '3'); assert.equal(value('源码字符数'), String(Array.from(definition).length)); assert.equal(value('定义'), definition);
   assert(!state.fields.some(f => /参数|返回类型/.test(f.label)));
   const failed = await loadObjectDetails(connection, 'main', 'f', 'function', {}, source({ getRoutineDefinition: async () => { throw new Error('not supported'); } }));
   assert(!failed.fields.some(f => /源码行数|源码长度/.test(f.label)));
 });
-test('备份组无backupName显示文件列表总大小和真实最新mtime，不用组名找文件', async () => {
+test('备份组无backupName显示总大小和真实最新mtime，不用组名找文件', async () => {
   const files = [{ name: 'z-old.sql', modified: '2026-01-01 12:00:00', size: 100, comment: 'old' }, { name: 'a-new.sql', modified: '2026-11-05 15:00:00', size: 250, comment: 'new' }];
   const state = await loadObjectDetails(connection, 'main', '备份', 'folder', { category: 'backup' }, source({ listBackups: async () => files }));
   const value = label => state.fields.find(f => f.label === label)?.value;
-  assert.equal(state.subtitle, '备份分组'); assert.equal(value('备份文件数量'), '2'); assert.equal(value('备份总大小（字节）'), '350');
-  assert.equal(value('最新修改时间'), '2026-11-05 15:00:00'); assert.equal(value('最新修改的备份'), 'a-new.sql'); assert.equal(state.list.length, 2);
+  assert.equal(state.subtitle, '备份分组'); assert.equal(value('备份文件数量'), '2'); assert.equal(value('备份总大小'), '350 B (350)');
+  assert.equal(value('最新修改时间'), '2026-11-05 15:00:00'); assert.equal(value('最新修改的备份'), 'a-new.sql');
   assert(!state.fields.some(f => f.value.includes('不存在')));
   const empty = await loadObjectDetails(connection, 'main', '备份', 'folder', { category: 'backup' }, source());
   assert(empty.fields.some(f => f.label === '备份文件数量' && f.value === '0')); assert(!empty.fields.some(f => f.label === '最新修改时间'));

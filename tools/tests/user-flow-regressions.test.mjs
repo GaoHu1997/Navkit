@@ -108,13 +108,14 @@ function gridView(hidden = []) {
 }
 function queryView() {
   const context = environment();
-  runTs(`${stripImports(fs.readFileSync(path.join(root, 'src/core/queryResultPages.ts'), 'utf8'))}\nglobalThis.QueryView = class { ${members('QueryTabView', ['resultPages', 'exporting', 'pageButtons', 'resultBusy', 'activeResultTab', 'currentSet', 'statusInfo', 'releaseSpool', 'renderResultPager', 'renderResults', 'renderMessages', 'requestControlledResult', 'disposeControlledResult', 'allowResultReplacement'])} };`, context);
+  runTs(`${stripImports(fs.readFileSync(path.join(root, 'src/core/queryResultPages.ts'), 'utf8'))}\nglobalThis.QueryView = class { ${members('QueryTabView', ['resultPages', 'exporting', 'pageButtons', 'resultBusy', 'activeResultTab', 'currentSet', 'statusInfo', 'releaseSpool', 'renderResultPager', 'renderResults', 'renderMessages', 'runningMessageText', 'requestControlledResult', 'disposeControlledResult', 'allowResultReplacement'])} };`, context);
   const view = new context.QueryView(); const make = () => context.document.createElement('div');
   let statuses = 0, toolbars = 0;
   const first = { columns: [{ name: 'first_marker' }], rows: [['FIRST']], total: 1, has_rows: true };
   const second = { columns: [{ name: 'second_marker' }], rows: [['SECOND_A'], ['SECOND_B']], total: 4, has_rows: true,
     message: '当前仅预览 2 / 4 行；复制、筛选和导出仅包含预览。' };
   Object.assign(view, { tab: { activeResult: 0, title: 'Query', results: { sets: [first, second], elapsed_ms: 25 } },
+    executionClockStartedAt: null, executionLabelEl: make(), executionTimerEl: make(),
     editor: { getSelection: () => '', getSql: () => 'SELECT' }, running: false, lastMessages: [{ text: 'OK', error: false }], resultRatio: 0.5,
     resultTabsEl: make(), resultSplitter: make(), resultBody: make(), messagesEl: make(), cellPreviewEl: make(), gridPreviewNoteEl: make(), resultPager: make(), pageNumberInput: make(), pageSizeSelect: make(), footerStatusEl: make(), pageErrorEl: make(),
     // 结果证据面板宿主（工作树新增）；fixture 提供空元素，证据请求走显式拒绝
@@ -127,11 +128,16 @@ function queryView() {
   return view;
 }
 function connection(existing, onSaved, runtimeProfiles) {
-  const context = environment(); runTs(stripImports(dialogText), context); runTs(stripImports(runtimeHelpers), context); runTs(stripImports(runtimeText), context); runTs(stripImports(connectionText), context);
+  const context = environment(); runTs(stripImports(dialogText), context); runTs(stripImports(runtimeHelpers), context); runTs(stripImports(runtimeText), context);
+  const createEditor = context.createRuntimeProfileEditor;
+  context.createRuntimeProfileEditor = (...args) => {
+    const editor = createEditor(...args); context.runtimeProfileReady = editor.ready; return editor;
+  };
+  runTs(stripImports(connectionText), context);
   const dialog = context.openConnectionDialog(existing, [], onSaved, 'sqlite', undefined, runtimeProfiles);
   const input = label => dialog.body.querySelectorAll('input').find(element => element.getAttribute('aria-label') === label);
   const button = label => dialog.footer.querySelectorAll('button').find(element => element.textContent === label);
-  return { dialog, context, input, button, save: () => button('保存').emit('click'), status: () => dialog.body.querySelector('[role="status"]').textContent };
+  return { dialog, context, input, button, ready: context.runtimeProfileReady ?? Promise.resolve(), save: () => button('保存').emit('click'), status: () => dialog.body.querySelector('[role="status"]').textContent };
 }
 const original = { id: 'original-id', name: 'Original', kind: 'sqlite', file: 'C:/isolated/qa.sqlite', port: 0, host: '', user: '', database: '', password: '', params: '', group: 'QA', read_only: false, keep_alive: false };
 
@@ -173,6 +179,8 @@ test('query: result 2 shares the same source for grid, export, and record count'
 test('query: message tab has no export/chart source and result 1 restores it', async () => {
   const view = queryView(); view.cellPreviewEl.style.display = ''; view.cellPreviewEl.textContent = '上个结果的单元格';
   await view.select('消息'); assert.equal(view.tab.activeResult, -1);
+  assert.equal(view.messagesEl.textContent, 'OK', '未运行时保留完成日志，不创建活计时消息');
+  assert.equal(view.messagesEl.querySelector('.msg-running'), null);
   assert.equal(view.gridPreviewNoteEl.style.display, 'none'); assert.equal(view.gridPreviewNoteEl.textContent, '');
   assert.equal(view.cellPreviewEl.style.display, 'none'); assert.equal(view.cellPreviewEl.innerHTML, '');
   assert.equal(view.currentSet(), null); assert.equal(view.chartSource, undefined); assert.equal(view.statusInfo().pageText, '');
@@ -211,10 +219,10 @@ test('connection: in-flight save is awaited and duplicate clicks cannot duplicat
 });
 test('connection: editing preserves original ID and saved ciphertext without resubmitting plaintext', async () => {
   const loaded = []; let saved;
-  const form = connection({ ...original, kind: 'mysql', password: 'encrypted-ciphertext' }, result => { saved = result; }, {
+  const form = connection({ ...original, kind: 'mysql', host: 'localhost', port: 3306, user: 'root', password: 'encrypted-ciphertext' }, result => { saved = result; }, {
     load: async id => { loaded.push(id); return null; }, test: async () => assert.fail('保存不应测试数据库连接'),
   });
-  for (let i = 0; i < 5; i++) await Promise.resolve();
+  await form.ready;
   assert.deepEqual(loaded, [original.id]);
   assert.equal(form.input('SSH 密码').value, '', '真实运行配置编辑器只显示空秘密输入框');
   assert.match(form.dialog.el.querySelector('.dialog-title-text').textContent, /^连接属性/); await form.save();

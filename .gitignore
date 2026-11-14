@@ -82,3 +82,7 @@ tmp/
 .tmp/
 .tmp-*
 dist-release/
+
+# 一次性本地调试脚本（不入库）
+scratch_*.py
+tmp-*.test.mjs

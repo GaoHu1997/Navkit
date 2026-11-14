@@ -13,7 +13,7 @@ import { ExecutionLogList, type LogFilter } from "./ExecutionLogList";
 
 export interface BatchExecutionPanelOptions { onDetach?: () => void; onConfigure?: () => void }
 const transactions = { none: "无整体事务", active: "事务进行中", committed: "提交已确认", rolled_back: "回滚已确认", unknown: "事务结果未知" };
-const kindLabels: Record<string, string> = { generated_rows: "生成写入", sql_file: "SQL 文件" };
+const kindLabels: Record<string, string> = { generated_rows: "生成写入", generated_recipe: "原生 recipe", sql_file: "SQL 文件" };
 
 export class BatchExecutionPanel {
   readonly el = document.createElement("section");
@@ -144,7 +144,7 @@ export class BatchExecutionPanel {
     else if (state === "failed" || state === "timed_out") phase = "failed";
     else if (state === "unknown") phase = "unknown";
     else phase = snapshot && !snapshot.scan_complete && knownTotal === null ? "indeterminate" : "running";
-    const unit = record?.kind === "generated_rows" ? "行" : "条语句";
+    const unit = record?.kind !== "sql_file" ? "行" : "条语句";
     return { phase, scanned, executed, total: knownTotal, elapsedMs, unit };
   }
 
@@ -175,9 +175,11 @@ export class BatchExecutionPanel {
     this.metrics[1].textContent = snapshot ? String(snapshot.metrics.executed) : "—";
     this.metrics[2].textContent = snapshot ? String(snapshot.metrics.errors) : "—";
     this.metrics[3].textContent = snapshot ? (snapshot.metrics.elapsed_ms / 1000).toFixed(1) + " s" : "—";
-    this.receipt.textContent = snapshot ? transactions[snapshot.transaction_state] + " · 后端累计影响 " + snapshot.affected_rows + " 行" + (record?.totalRows !== null && record?.totalRows !== undefined ? " · 批次 " + record.totalRows + " 行" : "") + (record?.sourceBytes !== null && record?.sourceBytes !== undefined ? " · 源文件 " + record.sourceBytes + " 字节" : "") : "尚未收到执行/事务回执。";
+    const committedPrefix = record?.kind === "generated_recipe" && (snapshot?.metrics.committed ?? 0) > 0 && record.state !== "succeeded";
+    const transactionLabel = snapshot ? committedPrefix && snapshot.transaction_state === "rolled_back" ? "当前段回滚已确认（已提交前缀保留）" : transactions[snapshot.transaction_state] : "";
+    this.receipt.textContent = snapshot ? transactionLabel + (record?.kind === "generated_recipe" ? " · 已生成 " + (snapshot.metrics.generated ?? snapshot.metrics.scanned) + " / 已发送 " + (snapshot.metrics.sent ?? "—") + " / 回执 " + (snapshot.metrics.acknowledged ?? snapshot.metrics.executed) + " / 确认提交 " + (snapshot.metrics.committed ?? "—") + " 行" : "") + " · 后端累计影响 " + snapshot.affected_rows + " 行" + (record?.totalRows !== null && record?.totalRows !== undefined ? " · 批次 " + record.totalRows + " 行" : "") + (record?.sourceBytes !== null && record?.sourceBytes !== undefined ? " · 源文件 " + record.sourceBytes + " 字节" : "") : "尚未收到执行/事务回执。";
     const scanNote = snapshot && !snapshot.scan_complete ? (isExecutionTerminal(snapshot.status.state) ? "扫描未完成；未扫描尾部没有执行，不计为成功。" : "扫描进行中；未扫描尾部尚未执行。") : "";
-    this.note.textContent = [record?.notice, snapshot?.parse_error && !record?.notice.includes(snapshot.parse_error) ? "SQL 文件解析失败：" + snapshot.parse_error : "", scanNote].filter(Boolean).join(" ");
+    this.note.textContent = [record?.notice, committedPrefix ? `已有 ${snapshot!.metrics.committed} 行确认提交前缀；失败/取消不能撤销，未知段禁止重放。` : "", snapshot?.parse_error && !record?.notice.includes(snapshot.parse_error) ? "SQL 文件解析失败：" + snapshot.parse_error : "", scanNote].filter(Boolean).join(" ");
     this.progress.el.hidden = !record;
     if (record) {
       this.progress.setInput(this.progressInput(record, snapshot));
@@ -249,26 +251,38 @@ export function openSqlFileExecutionDialog(
   const encoding = document.createElement("select"); encoding.setAttribute("aria-label", "文件编码");
   const encodings: [BatchFileEncoding, string][] = [["utf-8", "UTF-8"], ["gbk", "GBK"], ["gb18030", "GB18030"], ["big5", "BIG5"], ["latin1", "LATIN1"]];
   encoding.append(...encodings.map(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; return option; }));
+  const timeout = document.createElement("input"); timeout.type = "number"; timeout.min = "0"; timeout.step = "1"; timeout.required = true; timeout.value = "0";
+  timeout.setAttribute("aria-label", "文件总超时（秒）");
+  const timeoutHint = document.createElement("div"); timeoutHint.id = `sql-file-${ownerId}-timeout-hint`; timeoutHint.setAttribute("role", "status");
+  const timeoutHelp = "整个 SQL 文件的总执行时限；0 表示不限时。";
+  timeoutHint.textContent = timeoutHelp; timeout.setAttribute("aria-describedby", timeoutHint.id);
+  timeout.addEventListener("input", () => { timeout.removeAttribute("aria-invalid"); timeoutHint.textContent = timeoutHelp; });
   const stopLabel = document.createElement("label"); stopLabel.className = "checkbox";
   const stopOnError = document.createElement("input"); stopOnError.type = "checkbox"; stopOnError.checked = true;
   const stopText = document.createElement("span"); stopText.textContent = "遇到错误时停止"; stopLabel.append(stopOnError, stopText);
   const notice = document.createElement("div"); notice.setAttribute("role", "status");
-  options.append(field("文件编码", encoding), stopLabel, notice); general.append(options); selectTab(0);
+  options.append(field("文件编码", encoding), field("文件总超时（秒）", timeout), timeoutHint, stopLabel, notice); general.append(options); selectTab(0);
   let panel: BatchExecutionPanel;
   const refresh = () => {
     const record = taskId ? service.get(taskId) : null;
     const locked = starting || !!record?.busy || !!record?.unknown;
     start.disabled = locked || connection.read_only || !target.path.trim();
-    encoding.disabled = locked; stopOnError.disabled = locked;
+    encoding.disabled = locked; timeout.disabled = locked; stopOnError.disabled = locked;
     notice.textContent = connection.read_only ? "此连接只读，不能运行 SQL 文件。" : record?.unknown ? "结果未知；继续回看同一任务，不能重新运行。"
       : locked ? "任务仍在执行或等待资源排空，可在执行记录中停止或转入后台。" : "按完整语句边扫描边执行；已执行部分以真实回执为准。";
   };
   const start = toolButton("开始执行", true);
   start.addEventListener("click", () => {
     refresh(); if (start.disabled) return;
+    const timeoutMs = Number(timeout.value) * 1000;
+    if (!/^\d+$/.test(timeout.value) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
+      timeout.setAttribute("aria-invalid", "true");
+      timeoutHint.textContent = "文件总超时必须是非负整数秒，且换算为毫秒后不能超出安全整数范围；0 表示不限时。";
+      selectTab(0); timeout.focus(); return;
+    }
     starting = true; refresh(); selectTab(1);
     try {
-      const record = service.start({ connection_id: target.connection_id, namespace: target.namespace, owner_id: ownerId,
+      const record = service.start({ connection_id: target.connection_id, namespace: target.namespace, owner_id: ownerId, timeout_ms: timeoutMs,
         task: { kind: "sql_file", path: target.path, encoding: encoding.value as BatchFileEncoding, stop_on_error: stopOnError.checked } }, target.name, connection.kind);
       taskId = record.id; panel.setTask(record.id);
       // 后台任务中心登记：对话框关闭（转后台）后仍可在任务面板看到执行状态

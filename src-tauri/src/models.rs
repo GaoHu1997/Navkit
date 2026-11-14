@@ -378,6 +378,9 @@ pub struct PageRequest {
     pub table: String,
     pub offset: u64,
     pub limit: u64,
+    /// 缺省保持旧调用的精确总数；false 时只读取一页及一条探测行，不执行 COUNT。
+    #[serde(default = "default_true")]
+    pub include_total: bool,
     /// 排序列。
     #[serde(default)]
     pub order_by: Option<String>,
@@ -439,7 +442,12 @@ pub struct FilterLine {
 pub struct PageResult {
     pub columns: Vec<ResultColumn>,
     pub rows: Vec<Vec<Option<String>>>,
+    /// 精确总数，或 total_exact=false 时已证明的下界。
     pub total: u64,
+    #[serde(default = "default_true")]
+    pub total_exact: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
     pub primary_keys: Vec<String>,
     #[serde(default)]
     pub elapsed_ms: u64,
@@ -664,6 +672,16 @@ pub struct BackupInfo {
     pub comment: String,
 }
 
+/// 备份回执：行数、文件字节数、实际存储路径与显式跳过警告。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupResult {
+    pub rows: u64,
+    pub bytes: u64,
+    pub path: String,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
 /// 整库备份选项。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupOptions {
@@ -684,6 +702,12 @@ pub struct BackupOptions {
     pub include_structure: bool,
     #[serde(default = "default_true")]
     pub include_data: bool,
+    /// 显式允许跳过无法无损读取的整表；默认失败，绝不静默漏列。
+    #[serde(default)]
+    pub skip_incompatible_tables: bool,
+    /// 缺省/compat保留原逻辑转储；pg_snapshot/mysql_locked为拒绝降级的显式原生模式。
+    #[serde(default)]
+    pub source_consistency: Option<String>,
 }
 
 fn default_true() -> bool {

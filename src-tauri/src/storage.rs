@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -30,10 +30,174 @@ pub fn portable_root() -> PathBuf {
 }
 
 /// ./data 目录。
+///
+/// 便携模式（exe 同级已有 `data/`，或该位置可写）继续使用 `<exe>/data`；
+/// 安装在系统只读目录（如 `/usr/bin`）时回退到用户数据目录，避免把配置、
+/// 密钥和备份写进安装目录。整个进程只选择一次，保证连接、密钥、日志和备份同根。
 pub fn data_dir() -> PathBuf {
-    let dir = portable_root().join("data");
-    let _ = fs::create_dir_all(&dir);
-    dir
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(select_data_root).clone()
+}
+
+fn select_data_root() -> PathBuf {
+    let portable = portable_root().join("data");
+    let system_install = is_system_install_dir(&portable_root());
+    let user = user_data_root();
+    let chosen = choose_data_root(&portable, system_install, user.as_deref());
+    if chosen != portable {
+        migrate_legacy_data(&portable, &chosen);
+        let _ = fs::create_dir_all(&chosen);
+    }
+    chosen
+}
+
+/// 纯选择逻辑：系统安装目录下的 `data/` 不能作为可写数据根，便携目录优先。
+fn choose_data_root(portable: &Path, system_install: bool, user: Option<&Path>) -> PathBuf {
+    if system_install {
+        return user.map(Path::to_path_buf).unwrap_or_else(|| portable.to_path_buf());
+    }
+    if portable.is_dir() || writable_dir(portable) {
+        return portable.to_path_buf();
+    }
+    user.map(Path::to_path_buf).unwrap_or_else(|| portable.to_path_buf())
+}
+
+/// Unix 系统安装目录（deb/rpm 的 /usr/bin 等）。Windows 用可写探测判断。
+fn is_system_install_dir(exe_dir: &Path) -> bool {
+    if cfg!(windows) {
+        return false;
+    }
+    matches!(
+        exe_dir.to_str().unwrap_or_default(),
+        "/usr/bin" | "/usr/sbin" | "/bin" | "/sbin" | "/usr/local/bin" | "/usr/local/sbin"
+    )
+}
+
+fn writable_dir(dir: &Path) -> bool {
+    if fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(".navkit-write-{}", std::process::id()));
+    match fs::OpenOptions::new().create_new(true).write(true).open(&probe) {
+        Ok(_) => { let _ = fs::remove_file(&probe); true }
+        Err(_) => false,
+    }
+}
+
+/// 旧版 deb 把数据写在安装目录；首次切到用户目录时复制配置与密钥。
+/// 只复制、不移动也不删除旧目录：旧备份/驱动仍可由用户手动搬移，绝不创建替代密钥。
+/// 必须由 `select_data_root` 在 OnceLock 完成前调用；这里不读取 `data_dir()`。
+fn migrate_legacy_data(legacy: &Path, target: &Path) {
+    if !legacy.is_dir() || target.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(target);
+    for name in [
+        "config.json", "connections.json", "favorites.json", "recent.json",
+        "jobs.json", "job_history.json", "key.bin", "drivers.json",
+    ] {
+        let source = legacy.join(name);
+        let destination = target.join(name);
+        if source.is_file() && !destination.exists() {
+            let _ = fs::copy(&source, &destination);
+        }
+    }
+    for name in ["scheduler", "runtime-profiles", "models"] {
+        let source = legacy.join(name);
+        let destination = target.join(name);
+        if source.is_dir() && !destination.exists() {
+            let _ = copy_dir(&source, &destination);
+        }
+    }
+    // 此处不能调用 log_line：log_dir() 会再次进入 data_dir() 的 OnceLock 初始化。
+    eprintln!(
+        "NavKit: 已从旧安装目录 {} 复制配置与密钥到用户数据目录 {}；旧备份/驱动未移动，需要时请手动复制",
+        legacy.display(),
+        target.display()
+    );
+}
+
+/// 不复制备份与驱动：它们体积大，必须由用户明确选择是否搬移。
+fn copy_dir(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&from, &to)?;
+        } else if entry.file_type()?.is_file() {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// 用户数据目录：Linux 遵守 XDG，macOS 用 Application Support，Windows 用 LOCALAPPDATA。
+fn user_data_root() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("NavKit"))
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Library").join("Application Support").join("NavKit"))
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local").join("share")))
+            .map(|p| p.join("navkit"))
+    }
+}
+
+/// 备份列表只读取文件头有界前缀：前 12 行注释不应把数 GB 文件载入内存。
+pub fn read_backup_comment(path: &Path) -> Option<String> {
+    const HEADER_BYTES: u64 = 64 * 1024;
+    let mut file = fs::File::open(path).ok()?;
+    let mut prefix = Vec::new();
+    std::io::Read::by_ref(&mut file).take(HEADER_BYTES).read_to_end(&mut prefix).ok()?;
+    // 截断可能落在多字节 UTF-8 字符中间；只丢掉不完整的尾部。
+    let text = match std::str::from_utf8(&prefix) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&prefix[..error.valid_up_to()]).ok()?,
+    };
+    text.lines().take(12).find_map(|line| line.trim().strip_prefix("-- 注释")).map(|value| {
+        value.trim_start_matches(|c: char| c == ' ' || c == ':' || c == '：').trim().to_string()
+    })
+}
+
+#[cfg(test)]
+mod backup_header_tests {
+    use super::*;
+
+    #[test]
+    fn backup_comment_reads_only_bounded_prefix_of_huge_file() {
+        let dir = std::env::temp_dir().join(format!("navkit-backup-header-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("big.sql");
+        {
+            use std::io::Write;
+            let mut handle = fs::File::create(&file).unwrap();
+            handle.write_all("-- NavKit 备份文件\r\n-- 注释     : 巨量备份\r\n".as_bytes()).unwrap();
+            // 稀疏扩展文件，避免测试本身占用数 GB 内存/磁盘。
+            handle.set_len(3 * 1024 * 1024 * 1024).unwrap();
+        }
+        assert_eq!(read_backup_comment(&file).as_deref(), Some("巨量备份"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn backup_comment_tolerates_truncated_utf8_and_missing_header() {
+        let dir = std::env::temp_dir().join(format!("navkit-backup-header-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let truncated = dir.join("truncated.sql");
+        // 64 KiB 上限恰好切在 3 字节 UTF-8 字符中间，不能把整个文件读失败。
+        let mut bytes = vec![b'-'; 64 * 1024 - 1];
+        bytes.extend_from_slice("中".as_bytes());
+        fs::write(&truncated, &bytes).unwrap();
+        assert_eq!(read_backup_comment(&truncated), None);
+        let plain = dir.join("plain.sql");
+        fs::write(&plain, "SELECT 1;\n").unwrap();
+        assert_eq!(read_backup_comment(&plain), None);
+        let _ = fs::remove_dir_all(dir);
+    }
 }
 
 /// ./data/logs 目录。

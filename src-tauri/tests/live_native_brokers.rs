@@ -9,7 +9,7 @@ fn request(kind:&str,port:u16,database:&str)->ConnectionRequest {
     ConnectionRequest {kind:DbKind::of(kind),host:"127.0.0.1".into(),port,user:String::new(),password:String::new(),database:database.into(),file:String::new(),params:"ssl=false".into(),timeout_secs:15}
 }
 fn page(id:&str,container:&str,object:&str,offset:u64,limit:u64)->PageRequest {
-    PageRequest {connection_id:id.into(),schema:container.into(),table:object.into(),offset,limit,order_by:None,ascending:true,filters:vec![],filter_logic:Default::default(),order_rules:None}
+    PageRequest {connection_id:id.into(),schema:container.into(),table:object.into(),offset,limit,include_total:true,order_by:None,ascending:true,filters:vec![],filter_logic:Default::default(),order_rules:None}
 }
 fn has(rows:&[Vec<Option<String>>],text:&str)->bool {rows.iter().flatten().any(|v|v.as_deref()==Some(text))}
 async fn command(reg:&DbRegistry,id:&str,req:&ConnectionRequest,value:Value)->Result<MultiResult> { db::execute(reg,id,&value.to_string(),req.kind.clone()).await }

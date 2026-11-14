@@ -73,7 +73,7 @@ export const PICT_ICONS = {
 };
 
 /** label 别名（命令条文案 ≠ 图标 key 时使用） */
-const PICT_ALIAS = { 查询: "查询工具" };
+const PICT_ALIAS = { 查询: "查询工具", 自动任务: "自动运行", 关系图: "模型" };
 
 /** 具象图标：label 为命令条入口名 */
 export function pictIcon(label, size = 24) {

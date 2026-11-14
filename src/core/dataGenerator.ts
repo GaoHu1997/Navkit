@@ -128,3 +128,31 @@ export function generateDataPreview(schema: TableSchema, fields: GeneratorField[
   }
   return { columns: chosen.map(c => c.name), rows };
 }
+
+/** Native recipe: total is independent of the <=20 Rust sample; no rows are sent at registration. */
+export const MAX_RECIPE_ROWS = 10_000_000;
+export type RecipeTransactionMode = "atomic" | "segmented";
+export interface GeneratedRecipe {
+  version: 1; connection_id: string; schema: string; table: string; total: number;
+  seed: string; frozen_time: string; schema_fingerprint: string; transaction_mode: RecipeTransactionMode;
+  fields: GeneratorField[];
+}
+export interface GeneratedRecipePreview extends GeneratorPlan {
+  recipe: GeneratedRecipe; database_decided: string[]; plan_hash: string;
+}
+export function createGeneratedRecipe(connectionId: string, schema: string, table: string, fields: GeneratorField[], total: number, seed: string, frozenTime = new Date().toISOString(), transactionMode: RecipeTransactionMode = "atomic"): GeneratedRecipe {
+  if (!Number.isSafeInteger(total) || total < 1 || total > MAX_RECIPE_ROWS) throw new Error(`原生 recipe 总量必须为 1–${MAX_RECIPE_ROWS} 的整数`);
+  if (!Number.isFinite(Date.parse(frozenTime))) throw new Error("冻结时间无效");
+  if (!["atomic", "segmented"].includes(transactionMode)) throw new Error("事务模式必须为 atomic 或显式 segmented");
+  return { version: 1, connection_id: connectionId, schema, table, total, seed, frozen_time: frozenTime, schema_fingerprint: "", transaction_mode: transactionMode, fields: fields.map(f => ({ ...f })) };
+}
+export function validateRecipePreview(input: GeneratedRecipe, preview: GeneratedRecipePreview): GeneratedRecipePreview {
+  const r = preview?.recipe;
+  if (!r || r.connection_id !== input.connection_id || r.schema !== input.schema || r.table !== input.table || r.total !== input.total
+    || r.version !== input.version || r.seed !== input.seed || r.frozen_time !== input.frozen_time || r.transaction_mode !== input.transaction_mode || !["atomic", "segmented"].includes(r.transaction_mode)
+    || JSON.stringify(r.fields) !== JSON.stringify(input.fields) || !/^[0-9a-f]{64}$/.test(r.schema_fingerprint) || !/^[0-9a-f]{64}$/.test(preview.plan_hash)
+    || !Array.isArray(preview.columns) || !Array.isArray(preview.rows) || preview.rows.length !== Math.min(20, input.total)
+    || preview.rows.some(row => !Array.isArray(row) || row.length !== preview.columns.length || row.some(v => v !== null && typeof v !== "string"))
+    || !Array.isArray(preview.database_decided)) throw new Error("原生样本与冻结 recipe 不匹配；禁止授权写入");
+  return structuredClone(preview);
+}

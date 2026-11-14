@@ -180,6 +180,14 @@ export interface TableDesignSnapshot {
   capabilities: import("./types").TableDesignCapabilities;
 }
 
+/** 表设计器「选项」页的真实候选项，来自当前数据库的信息模式。 */
+export interface TableOptionChoices {
+  engines: string[];
+  charsets: string[];
+  collations: string[];
+  row_formats: string[];
+}
+
 export interface TableDesignPreview {
   request_sql: string;
   steps: { label: string; sql: string }[];
@@ -341,10 +349,11 @@ export const schedulerApi: ScheduleV2Bindings = {
 };
 
 /** 受控长批任务契约：payload 仅在注册时提交，运行消费一次性票据。 */
-export type BatchTaskKind = "generated_rows" | "sql_file";
+export type BatchTaskKind = "generated_rows" | "generated_recipe" | "sql_file";
 export type BatchFileEncoding = "utf-8" | "gbk" | "gb18030" | "big5" | "latin1";
 export type BatchTask =
   | { kind: "generated_rows"; request: import("./dataGenerator").GeneratedRowsRequest }
+  | { kind: "generated_recipe"; recipe: import("./dataGenerator").GeneratedRecipe }
   | { kind: "sql_file"; path: string; encoding?: BatchFileEncoding; stop_on_error: boolean };
 export interface BatchExecutionRequest {
   connection_id: string; namespace: string; owner_id: string;
@@ -354,7 +363,7 @@ export interface BatchExecutionTicket extends ExecutionContext {
   task_kind: BatchTaskKind; execution_grant: string; expires_in_ms: number;
   summary: string; total_rows: number | null; source_bytes: number | null;
 }
-export interface BatchExecutionMetrics { scanned: number; executed: number; errors: number; elapsed_ms: number }
+export interface BatchExecutionMetrics { scanned: number; executed: number; errors: number; elapsed_ms: number; generated?: number; sent?: number; acknowledged?: number; committed?: number }
 export interface BatchExecutionLog {
   sequence: number; level: "info" | "success" | "error";
   phase: "queued" | "scan" | "execute" | "commit" | "rollback" | "finish";
@@ -377,10 +386,17 @@ export interface BatchExecutionSnapshot {
   outcome: ExecutionOutcome | null;
 }
 
+export interface DiagramMetadata {
+  tables: import("./types").TableSchema[];
+  failures: { table: string; error: string }[];
+  limitations: string[];
+}
+
 export const api = {
   readObjectMutationBaseline: (object: DatabaseObjectId, ownerId: string) => call<import("./object-mutation").ObjectMutationBaseline>("read_object_mutation_baseline", { object, ownerId }),
   previewObjectMutation: (draft: import("./object-mutation").ObjectMutationDraft, ownerId: string) => call<import("./object-mutation").ObjectMutationPreview>("preview_object_mutation", { draft, ownerId }),
   executeObjectMutation: (request: ExecutionRequest, work: import("./object-mutation").ObjectMutationWork) => call<import("./object-mutation").ObjectMutationResponse>("execute_object_mutation", { request, work }),
+  previewGeneratedRecipe: (recipe: import("./dataGenerator").GeneratedRecipe, ownerId: string) => call<import("./dataGenerator").GeneratedRecipePreview>("preview_generated_recipe", { recipe, ownerId }),
   // BEGIN controlled batch API — 与设计/导出接口块独立。
   registerBatchExecution: (request: BatchExecutionRequest) => call<BatchExecutionTicket>("register_batch_execution", { request }),
   runBatchExecution: (ticket: BatchExecutionTicket) => call<BatchExecutionSnapshot>("run_batch_execution", { ticket }),
@@ -435,14 +451,17 @@ export const api = {
   executeRoutineCreation: (draft: RoutineCreationDraft, request: ExecutionRequest) => call<RoutineCreationResponse>("execute_routine_creation", { draft, request }),
   // 元数据
   listDatabases: (id: string) => call<[string, string][]>("list_databases", { id }),
+  tableOptionChoices: (id: string) => call<TableOptionChoices>("table_option_choices", { id }),
   listTables: (id: string, schemaName: string) =>
     call<[string, ObjectType][]>("list_tables", { id, schemaName }),
   listRoutines: (id: string, schemaName: string) =>
     call<[ObjectType, string][]>("list_routines", { id, schemaName }),
   listObjects: (id: string, schemaName: string) =>
     call<import("./types").ObjectInfo[]>("list_objects", { id, schemaName }),
-  getTableSchema: (id: string, schemaName: string, table: string) =>
-    call<import("./types").TableSchema>("get_table_schema", { id, schemaName, table }),
+  getDiagramMetadata: (id: string, schemaName: string) =>
+    call<DiagramMetadata>("get_diagram_metadata", { id, schemaName }),
+  getTableSchema: (id: string, schemaName: string, table: string, includeRowCount?: boolean) =>
+    call<import("./types").TableSchema>("get_table_schema", { id, schemaName, table, ...(includeRowCount == null ? {} : { includeRowCount }) }),
 
   // 数据
   pageTable: (req: PageRequest) => call<PageResult>("page_table", { req }),
@@ -522,15 +541,16 @@ export const api = {
   listBackups: (connectionId: string, schemaName: string) =>
     call<import("./types").BackupInfo[]>("list_backups", { connectionId, schemaName }),
   createBackup: (opts: import("./types").BackupOptions) =>
-    call<[number, number]>("create_backup", { opts }),
+    call<import("./types").BackupResult>("create_backup", { opts }),
   restoreBackup: (connectionId: string, schemaName: string, file: string) =>
     call<number>("restore_backup", { connectionId, schemaName, file }),
   /** 还原备份（详细版）：返回逐条语句的执行结果，供进度对话框展示。 */
-  restoreBackupDetailed: (connectionId: string, schemaName: string, file: string) =>
+  restoreBackupDetailed: (connectionId: string, schemaName: string, file: string, taskId?: string) =>
     call<import("./types").RestoreReport>("restore_backup_detailed", {
       connectionId,
       schemaName,
       file,
+      taskId: taskId ?? null,
     }),
   deleteBackup: (connectionId: string, schemaName: string, file: string) =>
     call<void>("delete_backup", { connectionId, schemaName, file }),
@@ -798,11 +818,35 @@ export interface BatchExportResult { items: BatchExportItemResult[]; combined_fi
 export const batchExportApi = { run: (request: BatchExportRequest) => call<BatchExportResult>("run_batch_export", { request }) };
 
 export const transferTasks = {
-  import: (opts: ImportOptions & { task_id: string; column_mapping: { source: string; target: string }[] }) => call<number>("run_import_task", { opts }),
+  import: (opts: ImportOptions & { task_id: string; column_mapping: { source: string; target: string }[]; write_strategy?: "row" | "pg_copy" }) => call<number>("run_import_task", { opts }),
   export: (opts: ExportOptions & { task_id: string }) => call<number>("run_export_task", { opts }),
   progress: (taskId: string) => call<TaskProgress>("transfer_task_progress", { taskId }),
   cancel: (taskId: string) => call<void>("cancel_transfer_task", { taskId }),
 };
+/** 比较缓冲/键/临时数据预算，不是整个程序 RSS 硬上限；后端重新采样并校验额度。 */
+export interface DiffMemoryOptions {
+  mode: "speed" | "auto" | "manual";
+  limit_bytes?: number | null;
+}
+export interface DiffMemoryStats {
+  mode: string;
+  available_bytes: number;
+  limit_bytes: number;
+  used_bytes: number;
+  peak_bytes: number;
+  spilled_bytes: number;
+  backend: "memory" | "disk" | "count_only";
+  scope: string;
+  pressure_events: number;
+}
+/** 原生 OS 只读预估；额度不代表预分配或内存驻留。 */
+export interface DiffMemoryPreview {
+  available_bytes: number;
+  suggested_limit_bytes: number;
+  global_limit_bytes: number;
+  scope: string;
+  limitations: string[];
+}
 /** 源表与目标表的差异报告（只读比较）。 */
 export interface SyncDiffReport {
   source_rows: number;
@@ -817,6 +861,7 @@ export interface SyncDiffReport {
   target_missing_columns: string[];
   target_extra_columns: string[];
   message: string | null;
+  memory?: DiffMemoryStats;
 }
 /** 结构差异同步请求（对应后端 structure_sync::StructureSyncRequest）。 */
 export interface StructureSyncRequest {
@@ -876,8 +921,11 @@ export interface StructureSyncReceipt {
 export const syncApi = {
   run: (opts: SyncOptions) => call<SyncReport>("run_sync", { opts }),
   runDatabase: (req: DbSyncOptions) => call<SyncTableReport[]>("run_sync_database", { req }),
-  diff: (req: { source_connection: string; source_schema: string; source_table: string; target_connection: string; target_schema: string; target_table: string; where_clause: string | null }) =>
-    call<SyncDiffReport>("sync_diff", req),
+  diff: async (req: { source_connection: string; source_schema: string; source_table: string; target_connection: string; target_schema: string; target_table: string; where_clause: string | null }, bounded = false, memory?: DiffMemoryOptions) => {
+    if (bounded && memory !== undefined) throw new Error("不能同时指定旧低内存比较 bounded 与内存预算 memory");
+    return call<SyncDiffReport>("sync_diff", memory !== undefined ? { req, memory } : bounded ? { req, bounded: true } : { req });
+  },
+  previewMemory: (memory?: DiffMemoryOptions) => call<DiffMemoryPreview>("preview_diff_memory", { memory }),
   typeMapping: (sourceConnection: string, sourceSchema: string, sourceTable: string, targetConnection: string) =>
     call<{ source: string; source_type: string; target_type: string }[]>("sync_type_mapping", { sourceConnection, sourceSchema, sourceTable, targetConnection }),
   /** 只读预览目标表相对源表的结构差异。 */

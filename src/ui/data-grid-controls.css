@@ -19,3 +19,35 @@
 .data-grid-controls .filter-placeholder { display: block; line-height: 1.5; }
 .data-grid-controls .sort-line { flex-wrap: nowrap; }
 .data-grid-controls .fb-act svg { width: 14px; height: 14px; }
+.data-load-status { flex-shrink: 0; padding: var(--sp-3); border-bottom: 1px solid var(--border); background: var(--bg-surface); color: var(--text); font-size: var(--fs-12); }
+.data-load-status[hidden] { display: none; }
+.grid-count-total { white-space: nowrap; padding: 0 var(--sp-2); }
+
+/* 生效摘要以无框文本显示；宽度从 320px 扩为 640px，窄窗优先让出分页空间。 */
+.data-grid-controls .grid-filter-summary {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 640px;
+  margin-left: var(--sp-2);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.statusbar-query-elapsed { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+/* 等待期间旧结果保留但不可交互；状态行说明即将自动更新，不伪装为空结果。 */
+.data-query-busy tbody { opacity: 0.55; }
+.data-query-busy [inert] { cursor: progress; }
+.data-query-busy .data-load-status { color: var(--accent-500); }
+.data-query-busy .fb-query-action { cursor: progress; }
+.data-query-busy .fb-query-action:disabled { opacity: 0.65; }
+

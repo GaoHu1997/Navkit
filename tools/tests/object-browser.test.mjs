@@ -269,10 +269,11 @@ test('方言模板确实创建指定对象，标识符转义且不预先删除',
   assert.match(helpers.objectCapability(cfg({ kind: 'redis' }), 'view', 'create'), /协议/);
   assert.match(helpers.objectCapability(cfg(), 'function', 'update'), /保存已禁用/);
 });
-test('四类树入口和顶部查询复用每连接一个对象页，新建查询才创建编辑器', async () => {
+test('四类树入口和顶部查询复用同一个全局对象页，新建查询才创建编辑器', async () => {
   const h = harness(); h.app.currentDbTarget = () => ({ connId: 'own', schema: 'one' }); h.app.selectDbTreeNode = () => {};
   for (const type of ['table', 'view', 'function', 'query']) { await h.app.selectNode({ id: `conn:own/db/one/grp-${type}` }); assert.equal(h.tab.objectType, type); }
   await h.app.runCommand('open-query'); assert.equal(h.app.tabs.length, 1); assert.equal(h.tab.title, '对象');
+  await h.app.selectNode({ id: 'conn:tree-other/db/other/grp-table' }); assert.equal(h.app.tabs.length, 1); assert.equal(h.tab.connectionId, 'tree-other'); assert.equal(h.tab.schema, 'other'); assert.equal(h.tab.objectType, 'table'); assert.equal(h.app.activeTab, h.tab);
   await h.app.runCommand('new-query'); assert.equal(h.app.tabs.length, 2); assert.equal(h.app.activeTab.kind, 'query'); assert.equal(h.app.activeTab.sql, '');
   assert(!h.calls.some(c => c[0] === 'executeSql'));
 });

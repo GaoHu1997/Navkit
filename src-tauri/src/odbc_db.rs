@@ -7,8 +7,8 @@
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
-use odbc_api::{ColumnDescription, Connection, Cursor, DataType, Environment, ResultSetMetadata};
+use anyhow::{anyhow, bail, Result};
+use odbc_api::{ColumnDescription, Connection, Cursor, DataType, Environment, ResultSetMetadata, TablesRow};
 
 use crate::models::{ColumnInfo, ConnectionRequest, DbKind};
 
@@ -171,6 +171,164 @@ impl OdbcDb {
         let res = self.query_rows(sql).await?;
         Ok(res.rows.first().and_then(|r| r.first().cloned()).flatten())
     }
+
+    /// 在独立 blocking 线程上打开只进游标，逐行文本化后经有界通道交给调用方，
+    /// 不把整表缓存进内存。连接锁在遍历期间持有；接收端关闭（取消/写入失败）后
+    /// producer 会在下一次 blocking_send 立即退出，不会继续无谓拉取。
+    /// 通过 ODBC 目录（SQLTables）判定对象类型，返回 "TABLE" 或 "VIEW"。
+    /// 仅用于非 Oracle 的 SQL 格式导出：TABLE 允许生成 INSERT，VIEW 必须拒绝。
+    pub(crate) async fn export_object_type(&self, schema: &str, table: &str) -> Result<String> {
+        const MAX_CATALOG_ROWS: usize = 200_000;
+        let conn = self.conn.clone();
+        let schema = schema.to_owned();
+        let table = table.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<String> {
+            let guard = conn.lock().map_err(|_| anyhow!("ODBC 连接锁已中毒"))?;
+            // 目录模式参数可能把 _/% 当作通配符，故一律取全量目录再精确过滤，并对扫描行数设上限。
+            let mut scanned = 0usize;
+            let mut exact: Vec<String> = Vec::new();
+            let mut casefold: Vec<String> = Vec::new();
+            for row in guard.tables("", "", "", "")? {
+                let row: TablesRow = row.map_err(|e| anyhow!("ODBC 目录查询失败: {e}"))?;
+                scanned += 1;
+                if scanned > MAX_CATALOG_ROWS {
+                    bail!("ODBC 目录对象过多，无法可靠判定对象类型");
+                }
+                let row_schema = row.schema.as_str().map_err(|e| anyhow!("ODBC 目录 schema 非合法 UTF-8: {e}"))?.unwrap_or("");
+                let row_table = row.table.as_str().map_err(|e| anyhow!("ODBC 目录表名非合法 UTF-8: {e}"))?.unwrap_or("");
+                let row_type = row.table_type.as_str().map_err(|e| anyhow!("ODBC 目录类型非合法 UTF-8: {e}"))?.unwrap_or("");
+                if row_table == table && row_schema == schema {
+                    exact.push(row_type.to_owned());
+                } else if row_table.eq_ignore_ascii_case(&table) && row_schema.eq_ignore_ascii_case(&schema) {
+                    casefold.push(row_type.to_owned());
+                }
+            }
+            let types = if exact.is_empty() { casefold } else { exact };
+            match types.len() {
+                0 => Err(anyhow!(
+                    "ODBC 目录中未找到对象 {}{}（可能不存在或当前用户权限不可见）",
+                    if schema.is_empty() { String::new() } else { format!("{schema}.") },
+                    table
+                )),
+                1 => normalize_object_type(&types[0]),
+                _ => bail!("ODBC 目录中对象 {schema}.{table} 存在多个匹配，无法唯一判定类型"),
+            }
+        })
+        .await
+        .map_err(|e| anyhow!("ODBC 目录查询任务失败: {e}"))?
+    }
+
+    pub(crate) fn spawn_row_stream(
+        &self,
+        sql: String,
+        names: Vec<String>,
+        binary: Vec<bool>,
+        max_record_bytes: u64,
+        tx: tokio::sync::mpsc::Sender<Vec<Option<String>>>,
+    ) -> tokio::task::JoinHandle<Result<u64>> {
+        let mut sql_log = crate::sql_history::Guard::new(&sql, Vec::new());
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<u64> {
+            let result: Result<u64> = (|| {
+                if tx.is_closed() { return Ok(0); }
+                let conn_lock = conn.lock().map_err(|_| anyhow!("ODBC 连接锁已中毒"))?;
+                let mut cursor = conn_lock
+                    .execute(&sql, (), Some(60))
+                    .map_err(|e| anyhow!("ODBC 流式查询失败: {e}"))?
+                    .ok_or_else(|| anyhow!("导出语句未返回结果集"))?;
+                let ncols = cursor.num_result_cols()? as usize;
+                if ncols != names.len() { bail!("ODBC 导出列数与预处理元数据不一致"); }
+                if binary.len() != ncols { bail!("ODBC 导出二进制元数据长度不一致"); }
+                let colnames: Vec<String> = cursor.column_names()?.map(|r| r.map(|s| s.to_string())).collect::<std::result::Result<_, _>>()?;
+                if colnames.len() != ncols || colnames.iter().zip(&names).any(|(actual, expected)| actual != expected) {
+                    bail!("ODBC 导出列元数据发生变化，目标未对齐");
+                }
+                // 依据 SQLDescribeCol 复核二进制标记：类型未知且按文本读取会丢失二进制数据，直接拒绝。
+                for i in 1..=ncols as u16 {
+                    let mut description = ColumnDescription::default();
+                    cursor.describe_col(i, &mut description).map_err(|e| anyhow!("ODBC 导出读取列类型失败: {e}"))?;
+                    let expected = binary[(i - 1) as usize];
+                    match odbc_binary_kind(&description) {
+                        Some(actual) => {
+                            if actual != expected {
+                                bail!("ODBC 导出列 {} 的二进制类型与预处理元数据不一致", names[(i - 1) as usize]);
+                            }
+                        }
+                        None => {
+                            if !expected {
+                                bail!("ODBC 导出列 {} 类型未知（SQLDescribeCol 未给出可用类型），拒绝按文本读取以避免二进制数据丢失", names[(i - 1) as usize]);
+                            }
+                        }
+                    }
+                }
+                let mut buf: Vec<u8> = Vec::with_capacity(256);
+                let mut count = 0u64;
+                loop {
+                    if tx.is_closed() { return Ok(count); }
+                    let Some(mut row) = cursor.next_row()? else { break; };
+                    let mut values: Vec<Option<String>> = Vec::with_capacity(ncols);
+                    let mut record_bytes = 0u64;
+                    for i in 1..=ncols as u16 {
+                        if tx.is_closed() { return Ok(count); }
+                        let is_binary = binary[(i - 1) as usize];
+                        let has_value = if is_binary { row.get_binary(i, &mut buf) } else { row.get_text(i, &mut buf) }?;
+                        let value = if has_value {
+                            if is_binary { Some(odbc_hex(&buf, max_record_bytes)?) } else { Some(odbc_text(&buf)?) }
+                        } else { None };
+                        buf.clear();
+                        record_bytes = record_bytes
+                            .checked_add(value.as_ref().map_or(0, |text| text.len()) as u64)
+                            .ok_or_else(|| anyhow!("ODBC 导出单条记录大小溢出"))?;
+                        if record_bytes > max_record_bytes { bail!("ODBC 导出单条记录超过上限"); }
+                        values.push(value);
+                    }
+                    if tx.blocking_send(values).is_err() { return Ok(count); }
+                    count = count.checked_add(1).ok_or_else(|| anyhow!("ODBC 导出行计数溢出"))?;
+                }
+                Ok(count)
+            })();
+            sql_log.result(&result, |n| *n as i64);
+            result
+        })
+    }
+}
+
+/// 严格 UTF-8 解码 ODBC 文本列：不做 lossy、不裁剪 NUL，非法字节直接报错。
+fn odbc_text(buf: &[u8]) -> Result<String> {
+    std::str::from_utf8(buf)
+        .map(str::to_owned)
+        .map_err(|e| anyhow!("ODBC 文本列不是合法 UTF-8: {e}"))
+}
+
+/// 二进制列转 0x 大写十六进制；分配十六进制串前先按上限校验长度，避免超大缓冲放大分配。
+fn odbc_hex(buf: &[u8], max_record_bytes: u64) -> Result<String> {
+    if buf.len() as u64 > max_record_bytes { bail!("ODBC 导出单条记录超过上限"); }
+    let capacity = buf.len().checked_mul(2).and_then(|n| n.checked_add(2))
+        .ok_or_else(|| anyhow!("ODBC 二进制列长度溢出"))?;
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut hex = String::with_capacity(capacity);
+    hex.push_str("0x");
+    for byte in buf { hex.push(HEX[(byte >> 4) as usize] as char); hex.push(HEX[(byte & 15) as usize] as char); }
+    Ok(hex)
+}
+
+/// 依据 SQLDescribeCol 判定列是否二进制；None 表示类型未知（Unknown/Other）。
+fn odbc_binary_kind(description: &ColumnDescription) -> Option<bool> {
+    match description.data_type {
+        DataType::Binary { .. } | DataType::Varbinary { .. } | DataType::LongVarbinary { .. } => Some(true),
+        DataType::Unknown | DataType::Other { .. } => None,
+        _ => Some(false),
+    }
+}
+
+/// 将 SQLTables 的 TABLE_TYPE 归一化为 "TABLE"/"VIEW"；其余类型明确报错，绝不臆断为表。
+fn normalize_object_type(raw: &str) -> Result<String> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "TABLE" => Ok("TABLE".to_string()),
+        "VIEW" => Ok("VIEW".to_string()),
+        "" => bail!("ODBC 目录未返回对象类型"),
+        other => bail!("不支持的 ODBC 对象类型 {other}（仅 TABLE/VIEW 允许导出 SQL）"),
+    }
 }
 
 fn described_column(name: String, description: &ColumnDescription) -> ColumnInfo {
@@ -277,6 +435,42 @@ mod description_tests {
         let column = described_column("AMOUNT".into(), &description);
         assert_eq!(column.data_type, "DECIMAL(38,20)");
         assert_eq!((column.precision, column.scale, column.nullable), (Some(38), Some(20), false));
+    }
+
+    #[test]
+    fn text_decoding_is_strict_and_preserves_nul() {
+        assert_eq!(odbc_text(b"abc").unwrap(), "abc");
+        // 不裁剪 NUL：内嵌/尾部 NUL 都原样保留
+        assert_eq!(odbc_text(b"a\0b").unwrap(), "a\0b");
+        assert_eq!(odbc_text(b"trail\0").unwrap(), "trail\0");
+        // 非法 UTF-8 直接报错，绝不 lossy 替换
+        assert!(odbc_text(&[0xFF, 0xFE]).is_err());
+    }
+
+    #[test]
+    fn hex_encoding_bounds_and_format() {
+        assert_eq!(odbc_hex(&[0xDE, 0xAD], 16).unwrap(), "0xDEAD");
+        // 超过单条记录上限时，在分配十六进制串前即拒绝
+        assert!(odbc_hex(&[0u8; 5], 4).is_err());
+    }
+
+    #[test]
+    fn binary_kind_classification() {
+        let bin = ColumnDescription::new("P", DataType::Varbinary { length: std::num::NonZeroUsize::new(8000) }, Nullability::Nullable);
+        assert_eq!(odbc_binary_kind(&bin), Some(true));
+        let text = ColumnDescription::new("T", DataType::Varchar { length: std::num::NonZeroUsize::new(255) }, Nullability::Nullable);
+        assert_eq!(odbc_binary_kind(&text), Some(false));
+        let unknown = ColumnDescription::new("U", DataType::Unknown, Nullability::Nullable);
+        assert_eq!(odbc_binary_kind(&unknown), None);
+    }
+
+    #[test]
+    fn object_type_normalization() {
+        assert_eq!(normalize_object_type("TABLE").unwrap(), "TABLE");
+        assert_eq!(normalize_object_type(" view ").unwrap(), "VIEW");
+        // 系统表等非 TABLE/VIEW 类型必须明确拒绝，绝不当作可写表
+        assert!(normalize_object_type("SYSTEM TABLE").is_err());
+        assert!(normalize_object_type("").is_err());
     }
 }
 

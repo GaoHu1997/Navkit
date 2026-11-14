@@ -18,13 +18,18 @@ export function exportExtension(path: string, format: string): string {
   const dot = path.lastIndexOf(".");
   return `${dot > boundary + 1 ? path.slice(0, dot) : path}.${format}`;
 }
+/** Join an export directory and exact filename using the host platform's path rules. */
+export async function joinExportPath(directory: string, fileName: string): Promise<string> {
+  const { join } = await import("@tauri-apps/api/path");
+  return join(directory, fileName);
+}
 export async function defaultExportPath(name: string): Promise<string> {
   const path = await import("@tauri-apps/api/path");
   for (const directory of [path.downloadDir, path.documentDir, path.homeDir]) {
     try {
       const dir = await directory();
       if (!dir.trim() || !isAbsoluteExportPath(dir)) continue;
-      const output = await path.join(dir, exportFileName(name));
+      const output = await joinExportPath(dir, exportFileName(name));
       if (!exportPathProblem(output)) return output;
     } catch { /* Another real user directory may be available. */ }
   }

@@ -1,64 +1,65 @@
 /* ==========================================================================
-   NavKit 设计令牌（v2 · 精致桌面版）
+   NavKit 设计令牌（v3 · 与 src/styles/base.css 同步）
    --------------------------------------------------------------------------
    设计原则
-   1. 单一强调色：只有一个蓝（--accent-500），其余全部是中性灰阶。
+   1. 单一强调色：只有一个蓝（--accent-500 #3574f0），其余全部是中性灰阶。
    2. 4px 栅格：所有间距、行高、圆角都是 4 的倍数（1.5px 描边除外）。
-   3. 五级字号：11 / 12 / 13 / 15 / 18，每级有明确职责，不再出现 10.5 与 13.6 混用。
-   4. 一个图标族：24 网格、1.75px 描边、currentColor；只有主操作允许上色。
-   5. 状态分层：hover 用底色、selected 用强调浅底 + 强调文字、active 用强调实底。
+   3. 五级字号：11 / 12 / 13 / 15 / 18（另有 22），每级有明确职责。
+   4. 两个图标族：对象类扁平双色，操作类单色 currentColor。
+   5. 状态分层：hover 用底色、selected 用强调浅底、active 用强调实底。
+   本文件是画廊（docs/design）的引用副本，数值必须与 src/styles/base.css 保持一致。
    ========================================================================== */
 
 :root {
   /* ---------------------------------------------------------------- 中性色 */
   --n-0: #ffffff;
   --n-25: #fbfcfd;
-  --n-50: #f6f8fa;
-  --n-100: #eff2f6;
-  --n-150: #e7ebf1;
-  --n-200: #dde3ea;
-  --n-300: #c6cfda;
-  --n-400: #a2adbb;
-  --n-500: #7b8695;
-  --n-600: #5a6675;
-  --n-700: #3d4753;
-  --n-800: #262e38;
-  --n-900: #141a21;
+  --n-50: #f7f8fa;
+  --n-100: #f1f3f6;
+  --n-150: #e8ebef;
+  --n-200: #e4e7ec;
+  --n-300: #d3d8e0;
+  --n-400: #a8b3c1;
+  --n-500: #7d8794;
+  --n-600: #5c6673;
+  --n-700: #3c434e;
+  --n-800: #23272f;
+  --n-900: #14171c;
 
   /* ---------------------------------------------------------------- 强调色 */
-  --accent-50: #eef4fe;
-  --accent-100: #dde8fd;
-  --accent-200: #b9d1fa;
-  --accent-300: #8fb2f5;
-  --accent-400: #5b8ded;
-  --accent-500: #2f6fed;
-  --accent-600: #1f5bd4;
-  --accent-700: #1746a5;
+  --accent-50: #f2f7fe;
+  --accent-100: #e3edfd;
+  --accent-200: #c4d9fa;
+  --accent-300: #9abef6;
+  --accent-400: #6396f3;
+  --accent-500: #3574f0;
+  --accent-600: #2b62d9;
+  --accent-700: #2450b4;
 
   /* ---------------------------------------------------------------- 语义色 */
   --ok-50: #e9f7ef;
   --ok-100: #d3eedd;
   --ok-500: #1f9254;
   --ok-600: #177346;
-  --warn-50: #fef5e7;
-  --warn-100: #fbe8c8;
-  --warn-500: #b5760a;
-  --warn-600: #8f5c05;
-  --danger-50: #fdecec;
-  --danger-100: #fadada;
-  --danger-500: #d93636;
-  --danger-600: #b32626;
+  --warn-50: #fdf1e5;
+  --warn-100: #f9e0c3;
+  --warn-500: #b54708;
+  --warn-600: #8f3a08;
+  --danger-50: #fdeceb;
+  --danger-100: #fad8d5;
+  --danger-500: #d92d20;
+  --danger-600: #b42318;
 
   /* ------------------------------------------------------------ 语义别名 */
-  --bg-app: var(--n-100);
-  --bg-chrome: var(--n-0);
+  --bg-app: var(--n-50);
+  --bg-chrome: var(--n-50);
   --bg-surface: var(--n-0);
   --bg-subtle: var(--n-50);
   --bg-sunken: var(--n-100);
   --bg-hover: var(--n-100);
   --bg-pressed: var(--n-150);
-  --bg-selected: var(--accent-50);
-  --bg-selected-hover: var(--accent-100);
+  --bg-selected: var(--accent-100);
+  --bg-selected-hover: var(--accent-200);
 
   --border: var(--n-200);
   --border-subtle: var(--n-150);
@@ -72,17 +73,17 @@
   --text-accent: var(--accent-600);
 
   /* ---------------------------------------------------------------- 字体 */
-  --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
-    "Hiragino Sans GB", "Segoe UI", system-ui, sans-serif;
+  --font-ui: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei",
+    "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
 
   /* ---------------------------------------------------------------- 字号 */
-  --fs-11: 11px; /* 角标、极密说明、行号 */
-  --fs-12: 12px; /* 辅助文字、状态栏、表头、快捷键 */
-  --fs-13: 13px; /* 正文：菜单 / 工具栏 / 树 / 网格 / 对话框字段 */
-  --fs-15: 15px; /* 区块标题、信息面板对象名 */
-  --fs-18: 18px; /* 对话框标题、空态标题 */
-  --fs-22: 22px; /* 欢迎页标题 */
+  --fs-11: 11px; /* 元信息 / 表头 / 状态栏 / 角标 / 行号 */
+  --fs-12: 12px; /* chrome、菜单、表单、页工具栏、标签页 */
+  --fs-13: 13px; /* 正文：树 / 网格 / 面板 / 对话框字段 */
+  --fs-15: 15px; /* 区块标题、信息面板对象名、空态标题 */
+  --fs-18: 18px; /* 对话框大标题、欢迎页 / 批执行指标 */
+  --fs-22: 22px; /* 欢迎页主标题 */
 
   --lh-tight: 1.25;
   --lh-normal: 1.5;
@@ -105,22 +106,22 @@
   --r-full: 999px;
 
   /* ---------------------------------------------------------------- 阴影 */
-  --shadow-1: 0 1px 2px rgba(20, 26, 33, 0.06);
-  --shadow-2: 0 2px 8px rgba(20, 26, 33, 0.08), 0 1px 2px rgba(20, 26, 33, 0.04);
-  --shadow-3: 0 8px 24px rgba(20, 26, 33, 0.12), 0 2px 6px rgba(20, 26, 33, 0.06);
-  --shadow-pop: 0 6px 20px rgba(20, 26, 33, 0.14), 0 1px 3px rgba(20, 26, 33, 0.08);
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-2: 0 2px 6px rgba(16, 24, 40, 0.07), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-3: 0 12px 32px rgba(16, 24, 40, 0.14), 0 2px 8px rgba(16, 24, 40, 0.06);
+  --shadow-pop: 0 4px 16px rgba(16, 24, 40, 0.13), 0 1px 4px rgba(16, 24, 40, 0.08);
 
   /* ---------------------------------------------------------------- 尺寸 */
-  --h-titlebar: 38px;
-  --h-command: 46px;
-  --h-tabstrip: 34px;
-  --h-toolbar: 34px;
+  --h-titlebar: 36px;
+  --h-command: 44px;
+  --h-tabstrip: 32px;
+  --h-toolbar: 32px;
   --h-statusbar: 26px;
-  --h-row: 28px;
-  --h-header: 30px;
-  --h-tree-row: 26px;
-  --h-control: 28px;
-  --h-control-sm: 24px;
+  --h-row: 26px;
+  --h-header: 28px;
+  --h-tree-row: 24px;
+  --h-control: 26px;
+  --h-control-sm: 22px;
   --w-sidebar: 264px;
   --w-info: 292px;
 

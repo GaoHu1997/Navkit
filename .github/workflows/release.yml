@@ -19,8 +19,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  acceptance:
+    name: Release acceptance (Windows x64)
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: release-acceptance-windows-x64
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify release identity
+        shell: bash
+        run: node tools/check-release.mjs --tag "$RELEASE_TAG"
+      - name: Build frontend and check types
+        run: npm run build
+      - name: Run UI safety regressions
+        run: npm run test:ui
+      - name: Run Rust library and portable integration regressions
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --test backup_roundtrip --test backup_dump_streaming --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance -- --test-threads=1
+
   build:
     name: Build (${{ matrix.label }})
+    needs: acceptance
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,6 +90,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -105,6 +140,7 @@ jobs:
           if [ -n "${{ matrix.target }}" ]; then
             args+=(--target "${{ matrix.target }}")
           fi
+          args+=(-- --locked)
           npx tauri "${args[@]}"
 
       - name: Package Windows
@@ -176,10 +212,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
-        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node tools/check-release.mjs --tag "$RELEASE_TAG"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -188,13 +230,52 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
+      - name: Generate update manifest
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+
+          ver = json.load(open("package.json", encoding="utf-8"))["version"]
+          asset = f"NavKit-{ver}-windows-x64-portable.exe"
+          path = os.path.join("dist-release", asset)
+          if not os.path.isfile(path):
+              raise SystemExit(f"缺少 Windows x64 便携版产物: {path}")
+
+          digest = hashlib.sha256()
+          with open(path, "rb") as fh:
+              for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                  digest.update(chunk)
+
+          tag = os.environ["RELEASE_TAG"]
+          manifest = {
+              "version": ver,
+              "notes": f"NavKit {ver}",
+              "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}/{asset}",
+              "sha256": digest.hexdigest(),
+              "size": os.path.getsize(path),
+          }
+          out = os.path.join("dist-release", "navkit-win64.json")
+          with open(out, "w", encoding="utf-8") as fh:
+              json.dump(manifest, fh, ensure_ascii=False, indent=2)
+              fh.write("\n")
+          print(f"--- {out} ---")
+          print(open(out, encoding="utf-8").read())
+          PY
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: NavKit ${{ steps.tag.outputs.tag }} 预览版
+          name: NavKit ${{ steps.tag.outputs.tag }}${{ contains(inputs.tag || github.ref_name, '-') && ' 预览版' || '' }}
           body_path: .github/RELEASE_NOTES.md
-          prerelease: true
-          make_latest: false
+          # 预发布（tag 含 '-'，如 v1.0.0-pre）标记为 prerelease；正式版则设为 latest，
+          # 这样客户端固定的 .../releases/latest/download/navkit-win64.json 才会指向它。
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          make_latest: ${{ !contains(inputs.tag || github.ref_name, '-') }}
           files: dist-release/*
           fail_on_unmatched_files: false

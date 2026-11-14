@@ -163,6 +163,15 @@ impl Fixture {
         }
         self.source_observer.close().await; self.target_observer.close().await;
         assert!(self.source_observer.is_closed() && self.target_observer.is_closed());
+        // SQLx can signal closed before a retiring connection's size guard is
+        // dropped. Wait for the actual counters, with a hard deadline: persistent
+        // retained resources still fail, rather than turning a scheduling race
+        // into a false security/DDL regression.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.source_observer.size() != 0 || self.target_observer.size() != 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }).await.expect("observer physical connection counters did not drain");
         assert_eq!(self.source_observer.size(), 0);
         assert_eq!(self.target_observer.size(), 0);
         let root = self.root;

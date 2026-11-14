@@ -1,5 +1,5 @@
 //! H2 JDBC sidecar using the Java 11 source-file launcher, not ODBC.
-use std::{path::{Path, PathBuf}, process::Stdio, time::Duration};
+use std::{collections::VecDeque, path::{Path, PathBuf}, process::Stdio, sync::{Arc, Mutex as StdMutex}, time::Duration};
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
@@ -45,7 +45,7 @@ pub fn default_jar() -> PathBuf {
     let legacy = crate::storage::data_dir().join("managed-drivers").join("h2").join("h2.jar");
     if legacy.exists() { legacy } else { versioned }
 }
-struct Process { child: Child, input: Option<ChildStdin>, output: BufReader<ChildStdout>, source_dir: PathBuf }
+struct Process { child: Child, input: Option<ChildStdin>, output: BufReader<ChildStdout>, source_dir: PathBuf, stderr_tail: Arc<StdMutex<VecDeque<u8>>> }
 impl Drop for Process {
     fn drop(&mut self) {
         // EOF lets JDBC Connection.close() flush committed MVStore/auth data. A hard kill
@@ -65,6 +65,7 @@ impl Drop for Process {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        crate::jdbc_db::report_sidecar_exit("H2", &mut self.child, &self.stderr_tail);
         if self.source_dir.is_absolute() && self.source_dir.parent().and_then(Path::file_name).and_then(|s|s.to_str()) == Some("h2-sidecar")
             && self.source_dir.file_name().and_then(|s|s.to_str()).is_some_and(|s|uuid::Uuid::parse_str(s).is_ok()) {
             let _ = std::fs::remove_dir_all(&self.source_dir);
@@ -81,6 +82,27 @@ fn decode_response(line: &str) -> Result<HttpRows> {
         rows: serde_json::from_value(value.get("rows").cloned().ok_or_else(|| anyhow!("H2响应缺少rows"))?)?,
     })
 }
+/// 在启动 Java 之前解析并校验 H2 目标：文件 / 内存 / TCP / 自定义 JDBC URL。
+/// 空路径是显式的内存库，不是缺参数；但 TCP 必须同时有 host、port 和库名。
+pub(crate) fn resolve_url(req: &ConnectionRequest) -> Result<String> {
+    let p = crate::native_db::Params::new(req);
+    let url = p.get("jdbc_url").map(str::to_owned).unwrap_or_else(|| {
+        if req.database.starts_with("jdbc:h2:") { req.database.clone() }
+        else if !req.file.trim().is_empty() { format!("jdbc:h2:{}", req.file.trim()) }
+        else if !req.host.trim().is_empty() || req.port != 0 {
+            if req.host.trim().is_empty() || req.port == 0 || req.database.trim().is_empty() {
+                return String::new();
+            }
+            format!("jdbc:h2:tcp://{}:{}/{}", req.host.trim(), req.port, req.database.trim())
+        }
+        else { format!("jdbc:h2:mem:{};DB_CLOSE_DELAY=-1", if req.database.trim().is_empty() { "navkit" } else { req.database.trim() }) }
+    });
+    if url.is_empty() { bail!("H2 TCP 连接必须同时填写主机、端口和数据库名"); }
+    if !url.starts_with("jdbc:h2:") { bail!("H2 连接 URL 必须以 jdbc:h2: 开头"); }
+    if url == "jdbc:h2:" || url == "jdbc:h2:;" { bail!("H2 连接 URL 缺少数据库目标"); }
+    Ok(url)
+}
+
 impl H2Db {
     pub async fn connect(req: &ConnectionRequest) -> Result<Self> {
         // 托管驱动版本选择（@navkit-driver-version: 前缀）优先；剥离后剩余参数照常解析。
@@ -100,16 +122,13 @@ impl H2Db {
         let dir = crate::storage::data_dir().join("h2-sidecar").join(uuid::Uuid::new_v4().to_string()); tokio::fs::create_dir_all(&dir).await?;
         let source = dir.join("NavkitH2.java"); tokio::fs::write(&source, relational::source_with_support(include_str!("NavkitH2.java"))).await?;
         let mut child = crate::background_process::tokio_command(java).arg("-Dfile.encoding=UTF-8").arg("--class-path").arg(&jar).arg(&source)
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).kill_on_drop(false).spawn().context("无法启动H2 JDBC sidecar")?;
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(false).spawn().context("无法启动H2 JDBC sidecar")?;
         let input = child.stdin.take().ok_or_else(|| anyhow!("H2 stdin不可用"))?;
         let output = BufReader::new(child.stdout.take().ok_or_else(|| anyhow!("H2 stdout不可用"))?);
-        let mut db = Self { process: Mutex::new(Process { child, input: Some(input), output, source_dir: dir }), timeout: Duration::from_secs(req.timeout_secs.clamp(1, 300)), version: String::new(), session_id: String::new(), catalog: String::new(), initial_schema: String::new() };
-        let url = p.get("jdbc_url").map(str::to_owned).unwrap_or_else(|| {
-            if req.database.starts_with("jdbc:h2:") { req.database.clone() }
-            else if !req.file.is_empty() { format!("jdbc:h2:{}", req.file) }
-            else if !req.host.is_empty() && req.port != 0 { format!("jdbc:h2:tcp://{}:{}/{}", req.host, req.port, req.database) }
-            else { format!("jdbc:h2:mem:{};DB_CLOSE_DELAY=-1", if req.database.is_empty() { "navkit" } else { &req.database }) }
-        });
+        let stderr_tail = Arc::new(StdMutex::new(VecDeque::new()));
+        if let Some(stderr) = child.stderr.take() { crate::jdbc_db::drain_sidecar_stderr(stderr, stderr_tail.clone()); }
+        let mut db = Self { process: Mutex::new(Process { child, input: Some(input), output, source_dir: dir, stderr_tail }), timeout: Duration::from_secs(req.timeout_secs.clamp(1, 300)), version: String::new(), session_id: String::new(), catalog: String::new(), initial_schema: String::new() };
+        let url = resolve_url(req)?;
         if !url.starts_with("jdbc:h2:") { bail!("jdbc_url必须使用jdbc:h2:"); }
         let response = db.request(format!("connect\t{}\t{}\t{}\n", enc(&url), enc(if req.user.is_empty() { "sa" } else { &req.user }), enc(&req.password))).await?;
         db.version = response.rows.first().and_then(|r| r.first()).cloned().flatten().unwrap_or_default();
@@ -203,6 +222,26 @@ impl HttpAdapter for H2Db {
     use super::*;
     #[test] fn h2_error_is_not_success() { assert!(decode_response(r#"{"error":"JdbcSQLSyntaxErrorException [42000]: bad"}"#).err().unwrap().to_string().contains("42000")); }
     #[test] fn h2_null_and_unicode_preserved() { let r = decode_response(r#"{"columns":["中文"],"rows":[[null],["值;尾"]]}"#).unwrap(); assert_eq!(r.rows[0][0],None); assert_eq!(r.rows[1][0].as_deref(),Some("值;尾")); }
+
+
+    #[test] fn h2_url_resolution_preserves_all_modes_and_rejects_partial_tcp() {
+        let base=|file:&str,host:&str,port:u16,database:&str,params:&str| ConnectionRequest {
+            kind: crate::models::DbKind::of("h2"), host:host.into(), port, user:"sa".into(), password:String::new(),
+            database:database.into(), file:file.into(), params:params.into(), timeout_secs:10,
+        };
+        // 空路径是显式内存库，不是缺参数。
+        assert_eq!(resolve_url(&base("","",0,"","{}")).unwrap(), "jdbc:h2:mem:navkit;DB_CLOSE_DELAY=-1");
+        assert_eq!(resolve_url(&base("","",0,"demo","{}")).unwrap(), "jdbc:h2:mem:demo;DB_CLOSE_DELAY=-1");
+        // 本地文件优先于 TCP 和内存。
+        assert_eq!(resolve_url(&base("/tmp/navkit.db","",0,"","{}")).unwrap(), "jdbc:h2:/tmp/navkit.db");
+        // 显式 jdbc_url 优先。
+        assert_eq!(resolve_url(&base("","",0,"","{\"jdbc_url\":\"jdbc:h2:tcp://db:9092/x\"}")).unwrap(), "jdbc:h2:tcp://db:9092/x");
+        assert_eq!(resolve_url(&base("","db",9092,"x","{}")).unwrap(), "jdbc:h2:tcp://db:9092/x");
+        // 部分 TCP 参数在启动 Java 前被拒绝，而不是猜一个目标。
+        assert!(resolve_url(&base("","db",0,"x","{}")).is_err());
+        assert!(resolve_url(&base("","db",9092,"","{}")).is_err());
+        assert!(resolve_url(&base("","",0,"","{\"jdbc_url\":\"jdbc:postgresql://x\"}")).is_err());
+    }
 
     #[tokio::test]
     #[ignore = "real official H2 jar + Java; copied executable in navkit-jdbc-command-tests-* temp dir"]
