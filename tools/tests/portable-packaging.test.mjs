@@ -27,7 +27,10 @@ test('portable packaging updates executable without deleting connections, encryp
       [join(data, 'backups', 'fixture', 'backup.sql'), Buffer.from('SELECT 42;')],
     ]);
     for (const [path, bytes] of fixtures) writeFileSync(path, bytes);
-    writeFileSync(script, `param([string]$srcExe,[string]$PortableDir)\n$ErrorActionPreference='Stop'\n${block}`, 'utf8');
+    // Windows PowerShell 5.1 按系统 ANSI 代码页读取无 BOM 的 .ps1，
+    // 脚本里的中文会被误解码成乱码，甚至把字符串终止符吃掉而报
+    // "The string is missing the terminator"。因此生成的脚本必须带 UTF-8 BOM。
+    writeFileSync(script, `\uFEFFparam([string]$srcExe,[string]$PortableDir)\n$ErrorActionPreference='Stop'\n${block}`, 'utf8');
     for (const version of ['version-one', 'version-two']) {
       writeFileSync(srcExe, version);
       const run = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-srcExe', srcExe, '-PortableDir', portable], { encoding: 'utf8' });

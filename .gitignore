@@ -35,6 +35,14 @@ tools/acceptance/driver-ranges-*/
 tools/acceptance/sandbox/
 tools/acceptance/fulltest/
 tools/acceptance/simulation/
+# 例外：CI 门禁 tools/tests/fixture-transport.test.mjs 依赖该脚本里真实的
+# JSON 控制台序列化写法（GBK→UTF8 管道回归），因此只放行这一个源文件，
+# 同目录的运行产物与证据数据仍然全部忽略。
+!tools/acceptance/simulation/
+tools/acceptance/simulation/*
+!tools/acceptance/simulation/odbc/
+tools/acceptance/simulation/odbc/*
+!tools/acceptance/simulation/odbc/verify-report.py
 tools/usertest-ipc-20261107/
 
 # 本地数据与临时文件
