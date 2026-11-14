@@ -596,14 +596,19 @@ mod tests {
 
     #[test]
     fn pdf_结构合法_含内嵌字体() {
-        // 无数据库中文字体时跳过（CI 环境）
-        if !std::path::Path::new(r"C:\Windows\Fonts\simhei.ttf").exists()
-            && !std::path::Path::new(r"C:\Windows\Fonts\Deng.ttf").exists()
-        {
-            eprintln!("跳过 PDF 测试：系统中文字体缺失");
-            return;
-        }
-        let bytes = pdf_writer::build_pdf(&sample(), &opts("pdf")).unwrap();
+        // 中文字体可用性由生产代码自己判断（候选字体不止 SimHei/等线，
+        // 复制一份字体清单必然与实现漂移）。没有可用字体时必须给出明确的
+        // 字体缺失原因，而不是别的失败；有字体时才校验 PDF 内部结构。
+        let bytes = match pdf_writer::build_pdf(&sample(), &opts("pdf")) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                assert!(
+                    format!("{e:#}").contains("字体"),
+                    "PDF 构建失败必须说明缺少中文字体，实际错误：{e:#}"
+                );
+                return;
+            }
+        };
         assert!(bytes.starts_with(b"%PDF-1.7"));
         assert!(bytes.ends_with(b"%%EOF\n"));
         let text = String::from_utf8_lossy(&bytes);
@@ -623,10 +628,20 @@ mod tests {
         for format in ["markdown", "html", "excel", "word", "pdf"] {
             let path = temp_path(&format!("out.{format}"));
             let result = export_to_file(&dto, &opts(format), &path);
-            if format == "pdf" && !std::path::Path::new(r"C:\Windows\Fonts\simhei.ttf").exists()
-                && !std::path::Path::new(r"C:\Windows\Fonts\Deng.ttf").exists()
-            {
-                assert!(result.is_err(), "无中文字体时应报错");
+            if format == "pdf" {
+                // PDF 依赖系统中文字体：要么写出真实 PDF，要么明确报字体缺失，
+                // 不得用其它失败掩盖，也不得静默产出空文档。
+                match result {
+                    Ok(n) => {
+                        assert!(n > 0, "pdf 应写出内容");
+                        let bytes = std::fs::read(&path).unwrap();
+                        assert!(bytes.starts_with(b"%PDF-1.7"), "pdf 应是合法 PDF 头");
+                    }
+                    Err(e) => assert!(
+                        format!("{e:#}").contains("字体"),
+                        "pdf 导出失败必须说明缺少中文字体，实际错误：{e:#}"
+                    ),
+                }
                 continue;
             }
             match result {
