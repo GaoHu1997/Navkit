@@ -36,11 +36,15 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-chrome);
+  /* 控件多时不压缩按钮导致文字换行，改为横向滚动 */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .er-select {
   height: var(--h-control);
   max-width: 180px;
   font-size: var(--fs-12);
+  flex: 0 0 auto;
 }
 .er-search {
   height: var(--h-control);
@@ -50,6 +54,7 @@
   border: 1px solid var(--border);
   border-radius: var(--r-2);
   background: var(--n-50);
+  flex: 0 0 auto;
 }
 .er-search:focus { outline: 2px solid var(--accent-500); outline-offset: -1px; }
 
@@ -58,6 +63,7 @@
   border: 1px solid var(--border);
   border-radius: var(--r-2);
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .er-mode-btn {
   height: var(--h-control);
@@ -67,6 +73,7 @@
   color: var(--text-secondary);
   font-size: var(--fs-12);
   cursor: pointer;
+  white-space: nowrap;
 }
 .er-mode-btn:hover { background: var(--bg-hover); }
 .er-mode-btn.active {
@@ -84,6 +91,11 @@
   color: var(--text-secondary);
   font-size: var(--fs-12);
   cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .er-tool-btn:hover { background: var(--bg-hover); color: var(--text); }
 .er-tool-btn.icon { width: var(--h-control); padding: 0; }
@@ -95,6 +107,7 @@
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 /* 画布 */
