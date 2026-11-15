@@ -1114,6 +1114,7 @@ pub async fn apply_table_design(
     require_writable_connection(&state, &id)?;
     let db = scoped_db(&state, &id, &design.schema).await?;
     let kind = kind_of(&state, &id)?;
+    crate::table_workflows::require_table_design_dialect(&kind).map_err(|e| AppError::coded("TABLE_DESIGN_DIALECT_UNSUPPORTED", e.to_string()))?;
     crate::design::apply(db.as_ref(), &kind, &design).await.map_err(AppError::from)
 }
 

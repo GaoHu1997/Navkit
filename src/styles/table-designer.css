@@ -44,21 +44,41 @@
 .table-designer .designer-check { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; white-space: nowrap; }
 .table-designer .designer-check-bare { justify-content: center; }
 /* 主键钥匙图标：替代复选框，选中态高亮 */
-.table-designer .designer-key { min-width: 28px; padding: 0 4px; border: 1px solid transparent; border-radius: 4px; background: transparent; font-size: 14px; line-height: 1; filter: grayscale(1); opacity: .55; cursor: pointer; }
-.table-designer .designer-key:hover { background: var(--bg-hover); opacity: .85; }
-.table-designer .designer-key.active { filter: none; opacity: 1; background: color-mix(in srgb, var(--accent-500) 14%, transparent); border-color: var(--accent-500); }
+.table-designer .designer-key { min-width: 26px; height: 24px; padding: 0 4px; border: 1px solid transparent; border-radius: 4px; background: transparent; line-height: 1; display: inline-grid; place-items: center; opacity: .5; cursor: pointer; }
+.table-designer .designer-key:hover { opacity: 1; background: var(--bg-hover); border-color: var(--border); }
+.table-designer .designer-key.active { opacity: 1; color: var(--accent-600); background: var(--accent-50); border-color: var(--accent-200); }
+.table-designer .designer-key svg { display: block; }
+.table-designer .designer-key.empty { opacity: 1; }
+.table-designer .designer-key.empty:hover { background: var(--bg-hover); border-color: var(--border); }
+.table-designer .designer-key.empty:focus-visible { border-color: var(--accent-500); }
 .table-designer .designer-key:disabled { opacity: .35; cursor: not-allowed; }
 /* 字段页：字段属性已并入表格列（默认值 / 自增 / 无符号 / 填充零），不再有底部属性面板 */
 /* 索引字段顺序编辑器：字段 / 排序 / 上移 / 删除 + 添加字段（浮层内固定列宽，行数变化不改变弹窗尺寸） */
-.table-designer .designer-index-cols { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
-.table-designer .designer-index-col-row { display: flex; gap: 8px; align-items: center; }
-.table-designer .designer-index-col-row select { flex: 0 1 auto; min-width: 0; height: 28px; }
-.table-designer .designer-index-col-row .designer-index-field { flex: 1 1 auto; min-width: 0; }
-.table-designer .designer-index-col-row .designer-index-order { flex: 0 0 96px; width: 96px; }
-.table-designer .designer-index-col-row .designer-mini { flex: 0 0 auto; padding: 0 8px; min-width: 28px; height: 28px; }
-.table-designer .designer-add-col { align-self: flex-start; margin: 8px 0 0; padding: 0 10px; }
-/* 浮层滚动区固定高度：字段增减只滚动内容，不改变弹窗大小 */
-.table-designer .designer-index-dialog-cols { max-height: 200px; min-height: 200px; overflow: auto; padding: 2px; }
+/* 索引字段浮层：表头 + 定高滚动列表 + 底部工具条（尺寸固定，增删字段只滚动内容） */
+.popover .designer-index-cols { display: flex; flex-direction: column; width: 100%; min-width: 0; }
+.popover .designer-index-head { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--bg-subtle); font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.popover .designer-index-head span:first-child { flex: 1 1 auto; }
+.popover .designer-index-head span:nth-child(2) { flex: 0 0 84px; }
+.popover .designer-index-head span:last-child { flex: 0 0 24px; }
+.popover .designer-index-list { height: 128px; overflow: auto; }
+.popover .designer-index-col-row { display: flex; align-items: center; gap: 8px; padding: 2px 8px; }
+.popover .designer-index-col-row.current { background: var(--accent-50); }
+.popover .designer-index-col-row select { height: 26px; min-width: 0; }
+.popover .designer-index-col-row .designer-index-field { flex: 1 1 auto; min-width: 0; }
+.popover .designer-index-col-row .designer-index-order { flex: 0 0 84px; width: 84px; }
+.popover .designer-index-col-row .designer-index-remove {
+  flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--r-2);
+  background: transparent; color: var(--text-tertiary); font: inherit; cursor: pointer;
+}
+.popover .designer-index-col-row .designer-index-remove:hover { color: var(--danger-600); background: var(--danger-50); }
+.popover .designer-index-tools { display: flex; align-items: center; gap: 2px; padding: 4px 6px 6px; border-top: 1px solid var(--border-subtle); }
+.popover .designer-index-tools .designer-index-tool {
+  height: 24px; min-width: 24px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent;
+  border-radius: var(--r-2); background: transparent; color: var(--text-secondary); font: 12px var(--font-ui); cursor: pointer;
+}
+.popover .designer-index-tools .designer-index-tool:hover { background: var(--bg-hover); border-color: var(--border); }
+.popover .designer-index-tools .designer-add-col { margin-left: 4px; }
+
 .table-designer .designer-control, .table-plan-dialog .designer-control { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin-bottom: 10px; max-width: 720px; }
 .table-designer .designer-options .designer-control { flex-direction: row; align-items: center; gaps: 0; }
 .table-designer .designer-options .designer-control > span { flex: 0 0 140px; color: var(--text-secondary); }
@@ -117,8 +137,8 @@
 }
 .table-designer .designer-grid td > :is(input:not([type=checkbox]), select):hover { background: var(--bg-hover); }
 .table-designer .designer-grid td > :is(input:not([type=checkbox]), select):focus { border-color: var(--accent-500); background: var(--bg-surface); outline: none; }
-.table-designer .designer-grid td .designer-check { justify-content: center; padding: 0 4px; }
-.table-designer .designer-grid td .designer-key { margin: 0 auto; display: block; }
+.table-designer .designer-grid td .designer-check { display: flex; justify-content: center; align-items: center; height: 100%; padding: 0; }
+.table-designer .designer-grid td .designer-key { margin: 0 auto; display: grid; }
 /* 索引/主键字段：单元格是「摘要 + 右侧 … 按钮」，点任意位置都打开字段选择浮层 */
 .table-designer .designer-grid .designer-picker { width: 100%; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 8px; color: var(--text-primary); cursor: pointer; }
 .table-designer .designer-grid .designer-picker:hover { background: var(--bg-hover); }
@@ -194,25 +214,16 @@
 .popover-check.disabled { color: var(--text-disabled); cursor: not-allowed; }
 .popover-check.disabled:hover { background: transparent; }
 .popover.index-cols .popover-body { padding: 0; display: flex; flex-direction: column; }
-.popover-index-cols { padding: 6px; max-height: 220px; overflow: auto; }
+.popover-index-cols { padding: 0; }
 .popover-footer { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--border-subtle); background: var(--bg-subtle); }
 .popover-footer .btn.primary { background: var(--accent-500); border-color: var(--accent-500); color: #fff; }
-.table-designer .designer-index-col-row select { height: 26px; }
-.table-designer .designer-index-col-row .designer-mini { height: 24px; }
+.popover .designer-index-col-row select { height: 26px; }
+.popover .designer-index-col-row .designer-mini { height: 24px; }
 
-/* SQL 预览：实时状态条 + DDL 高亮，没有「生成」按钮 */
-.table-designer .designer-sql-bar {
-  display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 8px; margin-bottom: 8px;
-  border: 1px solid var(--border-subtle); border-radius: var(--r-2); background: var(--bg-subtle); color: var(--text-tertiary); font-size: 11px;
-}
-.table-designer .designer-sql-bar .btn { margin-left: auto; height: 22px; }
-.table-designer .designer-sql-live {
-  display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: var(--r-full);
-  border: 1px solid var(--accent-200); background: var(--accent-50); color: var(--accent-700); font-size: 11px; font-weight: 600;
-}
-.table-designer .designer-sql-live i { width: 6px; height: 6px; border-radius: var(--r-full); background: currentColor; }
-.table-designer .designer-sql-live.loading { border-color: var(--border-strong); background: var(--bg-surface); color: var(--text-secondary); }
-.table-designer .designer-sql-live.error { border-color: var(--danger-100); background: var(--danger-50); color: var(--danger-600); }
-.table-designer .designer-sql-live.idle { border-color: var(--border); background: var(--bg-surface); color: var(--text-tertiary); }
-.table-designer .designer-sql-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .table-designer .designer-sql.error { color: var(--danger-600); }
+
+/* SQL 预览：只放 SQL 本体——不要外框、不要说明，像代码区一样铺满 */
+.table-designer .designer-sql {
+  white-space: pre; overflow-wrap: normal; border: 0; padding: 12px 14px; background: var(--bg-surface);
+  font-size: 12.5px; line-height: 1.75;
+}

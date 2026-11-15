@@ -40,8 +40,11 @@ impl PgEvidence{
 pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)->Result<Stored>{
     let k=s.kind();let ns=db::quote_literal(&b.namespace);let tn=db::quote_literal(table);let full=db::qualified(&k,&b.namespace,table);
     let mut limitations:Vec<String>=Vec::new();
+    // 方言层面的写能力缺口（目前只有 TiDB 的 noop 服务器锁）；读取不受影响，但保存必须在发送 DDL 前拒绝。
+    let mut dialect_write_reason:Option<String>=None;
     let (meta,ddl,mut cols,mut indexes,foreign_keys,objects,options)=if k.is_mysql_family(){
         let evidence=MysqlEvidence::probe(s).await?;
+        if evidence.tidb{dialect_write_reason=Some("TiDB 的 GET_LOCK/RELEASE_LOCK/LOCK TABLES 只是 noop 兼容功能，无法证明并发安全；表结构保存明确拒绝，读取与复制预览仍可用".into());}
         // MySQL 8 用 @@server_uuid；MariaDB/TiDB/OceanBase 缺少该变量时退到 @@server_id，仍缺则留空，
         // 身份由 host/port/db/sql_mode 等其余列共同构成，不能因方言缺一个兼容变量就拒绝读取。
         let server=if evidence.server_uuid{"@@server_uuid"}else if !s.rows("SHOW VARIABLES LIKE 'server_id'").await?.is_empty(){"CAST(@@server_id AS CHAR)"}else{"''"};
@@ -131,8 +134,14 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
     for t in design.triggers.as_mut().unwrap(){if let Some(r)=meta.triggers.iter().find(|r|get(r,"name").ok()==Some(t.name.as_str())){if k.is_mysql_family(){t.statement=get(r,"body")?.into();}else{t.statement=get(r,"definition")?.into();}}}
     let base=crate::object_catalog::revision(&(&ddl,&meta.columns,&meta.indexes,&meta.constraints,&meta.triggers,&meta.table,&meta.sequences));
     let revision=crate::object_catalog::revision(&(&base,&meta.identity,&meta.physical,b));design.base_revision=Some(revision.clone());design.source_fingerprint=Some(b.fingerprint.clone());
-    let cap=FeatureCapability{supported:!readonly,reason:readonly.then(||"保存连接为只读".into())};
-    let capabilities=TableCapabilities{checks:cap.clone(),triggers:cap.clone(),options:cap.clone(),rebuild:cap.clone(),clear:clear_capability(&k,&meta.table,readonly),copy_structure:cap.clone(),copy_data:cap,supported_options:if k.is_mysql_family(){vec!["charset","collation","row_format"]}else{vec!["fillfactor"]}.into_iter().map(str::to_string).collect(),limitations:{let mut v=if k.is_mysql_family(){vec!["DDL 隐式提交；失败可能部分保存，保留草稿并报告未验证".to_string(),"直接 TRIGGER 权限必须可证明；角色授权需单独认证".to_string(),"仅认证 InnoDB/TiDB 真实 TABLE_ID；非 InnoDB 及更换引擎在发送 DDL 前拒绝".to_string()]}else{vec!["清空拒绝 RLS/FORCE RLS 或缺失策略元数据，不能用同角色可见行数证明物理清空".to_string(),"复制对 RLS/分区/继承/规则/排除约束及自定义类型逐项拒绝；普通表完整支持".to_string()]};v.extend(limitations);v}};
+    let cap=match (&dialect_write_reason,readonly){
+        (Some(reason),_)=>FeatureCapability{supported:false,reason:Some(reason.clone())},
+        (None,true)=>FeatureCapability{supported:false,reason:Some("保存连接为只读".into())},
+        _=>FeatureCapability{supported:true,reason:None},
+    };
+    let clear=clear_capability(&k,&meta.table,readonly);
+    let clear=if let Some(reason)=&dialect_write_reason{FeatureCapability{supported:false,reason:Some(reason.clone())}}else{clear};
+    let capabilities=TableCapabilities{checks:cap.clone(),triggers:cap.clone(),options:cap.clone(),rebuild:cap.clone(),clear,copy_structure:cap.clone(),copy_data:cap,supported_options:if k.is_mysql_family(){vec!["charset","collation","row_format"]}else{vec!["fillfactor"]}.into_iter().map(str::to_string).collect(),limitations:{let mut v=if k.is_mysql_family(){vec!["DDL 隐式提交；失败可能部分保存，保留草稿并报告未验证".to_string(),"直接 TRIGGER 权限必须可证明；角色授权需单独认证".to_string(),"仅认证 InnoDB/TiDB 真实 TABLE_ID；非 InnoDB 及更换引擎在发送 DDL 前拒绝".to_string()]}else{vec!["清空拒绝 RLS/FORCE RLS 或缺失策略元数据，不能用同角色可见行数证明物理清空".to_string(),"复制对 RLS/分区/继承/规则/排除约束及自定义类型逐项拒绝；普通表完整支持".to_string()]};v.extend(limitations);v}};
     let hidden=meta.columns.iter().map(|c|Ok((get(c,"name")?.into(),if opt(c,"generated")?.is_some_and(|v|!v.is_empty()){3}else{0}))).collect::<Result<_>>()?;
     Ok(Stored{public:TableDesignSnapshot{schema,objects,options,design,revision,source_fingerprint:b.fingerprint.clone(),owner_id:b.owner.clone(),completeness:"complete".into(),capabilities},ddl,indexes:vec![],columns:hidden,rowid:None,sequence:None,base,kind:k,native:Some(meta)})
 }

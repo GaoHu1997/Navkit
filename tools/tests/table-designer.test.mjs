@@ -36,7 +36,7 @@ test('field grid keeps type select, single-box default with choices, clickable k
   const page = await designerPage(browser); t.after(() => page.close());
   // 字段属性面板已并入表格列
   assert.equal(await page.locator('.designer-field-props').count(), 0);
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.designer-grid.designer-fields thead th')].map(th => th.textContent)), ['名称', '类型', '长度', '小数位', '默认值', '主键', '扩展', '允许 NULL', '注释']);
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.designer-grid.designer-fields thead th')].map(th => th.textContent)), ['名称', '类型', '长度', '小数位', '默认值', '主键', '允许 NULL', '扩展', '注释']);
   // 表头、colgroup 与每行单元格数必须一致，否则表格会多出空白列把内容挤到左边
   assert.equal(await page.evaluate(() => {
     const table = document.querySelector('.designer-grid.designer-fields');
@@ -231,12 +231,13 @@ test('column order uses a full baseline-bound C1 design, preserves compound PK a
 test('keyboard tabs, modal focus containment and live highlighted SQL are accessible', async t => {
   const page = await designerPage(browser); t.after(() => page.close()); await page.getByRole('tab', { name: '字段', exact: true }).focus(); await page.keyboard.press('ArrowRight'); assert.equal(await page.getByRole('tab', { name: '索引', exact: true }).getAttribute('aria-selected'), 'true');
   // 先制造一处结构改动，SQL 预览才有内容
+  await page.getByRole('tab', { name: '字段', exact: true }).click();
   await page.getByRole('textbox', { name: '字段 id 注释', exact: true }).fill('live sql');
   await page.getByRole('tab', { name: 'SQL 预览', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.designer-sql')?.textContent.includes('backend_actual_plan'));
   // 没有「生成」按钮：切到本页即自动生成，并做语法高亮
   assert.equal(await page.getByRole('button', { name: '生成后端实际计划', exact: true }).count(), 0);
-  const text = await page.locator('.designer-sql').textContent(); assert.ok(text.includes('\nALTER TABLE backend_actual_plan;')); assert.equal(text.includes('\\n'), false);
+  const text = await page.locator('.designer-sql').textContent(); assert.ok(text.includes('ALTER TABLE backend_actual_plan;')); assert.equal(text.includes('\\n'), false);
   assert.ok(await page.locator('.designer-sql .ddl-kw').count() > 0);
   // 改一处结构后自动刷新
   const before = await page.evaluate(() => fixture.previews.length);

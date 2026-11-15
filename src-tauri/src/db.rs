@@ -376,13 +376,24 @@ pub fn qualified(kind: &DbKind, schema: &str, table: &str) -> String {
 }
 
 
+/// 服务端是否为 TiDB 这类“MySQL 语法兼容、部分功能只做 noop 占位”的方言。
+fn mysql_noop_dialect(version: &str, comment: &str) -> bool {
+    format!("{version} {comment}").to_ascii_lowercase().contains("tidb")
+}
+
 /// TiDB 的只读事务语法只是 noop 兼容占位（默认未开启 `tidb_enable_noop_functions`），
 /// `START TRANSACTION READ ONLY` 会返回 1235；该方言必须降级为普通事务。
 ///
 /// 通过服务端版本与版本注释识别，不能用连接配置里的数据库类型：用户可能用 MySQL
 /// 协议连接一个 TiDB 端点，二者在 catalog 里都是 mysql 族。
 pub fn mysql_read_only_unsupported(version: &str, comment: &str) -> bool {
-    format!("{version} {comment}").to_ascii_lowercase().contains("tidb")
+    mysql_noop_dialect(version, comment)
+}
+
+/// TiDB 的 `GET_LOCK`/`RELEASE_LOCK`/`LOCK TABLES` 也只是 noop 兼容功能，
+/// 表结构保存依赖这些服务器锁证明并发安全，因此该方言保存必须明确拒绝（读取不受影响）。
+pub fn mysql_noop_lock_unsupported(version: &str, comment: &str) -> bool {
+    mysql_noop_dialect(version, comment)
 }
 
 /// 用列名 + 类型构造 ResultColumn。

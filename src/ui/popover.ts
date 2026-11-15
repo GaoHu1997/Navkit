@@ -3,6 +3,7 @@
 
 export interface PopoverHandle {
   element: HTMLElement;
+  anchor: HTMLElement;
   close: () => void;
 }
 
@@ -25,6 +26,11 @@ export function closePopover(): void {
 
 export function activePopover(): PopoverHandle | null {
   return active;
+}
+
+/** 该触发元素当前是否已经开着浮层（点击同一元素应关闭，而不是重开）。 */
+export function isPopoverOpenFor(anchor: HTMLElement): boolean {
+  return !!active && active.anchor === anchor;
 }
 
 const CHEVRON = '<svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4l3 3 3-3"/></svg>';
@@ -103,7 +109,7 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
     element.style.visibility = "";
   }
 
-  const handle: PopoverHandle = { element, close };
+  const handle: PopoverHandle = { element, anchor, close };
   active = handle;
   return handle;
 }

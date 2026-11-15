@@ -39,8 +39,52 @@
 - SQL 文件范围：`src-tauri/src/batch_sql_reader.rs`、`src-tauri/src/execution_policy.rs`、`src-tauri/src/batch_execution.rs`。
 - 共享测量与证据：`src-tauri/src/transfer_stream.rs`、`src-tauri/src/performance_rss_probe.rs`、`src-tauri/tests/perf_matrix.rs`、`tools/tests/backup-dump-perf-harness.rs`。
 
-## 交付物
+## 验收结果（2026-11-15）
 
-- 独立第四轮问题修复与验证报告。
-- 全驱动/实际路由能力矩阵及性能对照表。
-- 仅保留被报告按行引用的证据日志；完成后按 docs 生命周期合入结果文档并删除过程计划。
+### 已修复并验证
+
+| 项 | 根因与修改 | 证据 | 状态 |
+|---|---|---|---|
+| D7 跨库转储删源表 | MySQL 整库归档的 `DROP/INSERT` 带源库名，而 `SHOW CREATE TABLE` 的 `CREATE` 不带；还原到 B 时先删 A 表。整库归档改为目标相对对象，单表导出保持显式限定。入口：[transfer.rs](../../src-tauri/src/transfer.rs)、[transfer_export_cursor.rs](../../src-tauri/src/transfer_export_cursor.rs)。 | 本机 MySQL 8.0.44 实库：源 A 转储→B 还原，A 仍 4 行、B 值与 YEAR 一致；协议 wire 测试断言整库 INSERT 不带源库名。 | ✅ |
+| YEAR 阻断转储 | YEAR 误走 SQLx 有符号整数兼容路径，SQLx 的 `i64` 兼容集合不含 YEAR，失败后提前返回被当作不可解码。改为经 `u64` 无损解码。入口：[values.rs](../../src-tauri/src/values.rs)。 | 协议 wire 测试 1901/2026/2155/NULL；MySQL 实库跨库还原包含同组值。 | ✅ |
+| D10 同构类型膨胀 | 映射只看源类型文本与目标方言，同引擎也统一放大。新增 source-aware 映射：仅精确同一 MySQL 系列 ID 时保留经验证的类型；异构映射不变。入口：[sync.rs](../../src-tauri/src/sync.rs)。 | 186 个同步过滤测试通过；MySQL 实库建表为 `int`、`decimal(12,2)`、`datetime`，值一致。 | ✅ |
+| D5 树库列表不刷新 | 连接节点折叠后未失效缓存，重新展开沿用旧 children。折叠时失效并清空连接子节点，异步代次防止迟到响应覆盖。入口：[App.ts](../../src/core/App.ts)。 | 78 个前端回归通过，包含折叠再展开、库列表变化、重复展开与迟到响应。 | ✅ |
+| D9 localhost/::1 | SQLx `PoolTimedOut` 掩盖真实拒绝/认证差异。只增加本机连接错误分类与明确指引，不自动换地址、不重试认证失败、不改 TLS。入口：[sqlx_runtime.rs](../../src-tauri/src/sqlx_runtime.rs)。 | 3/3 Rust 测试：真实 ERR 包只尝试 1 次、拒绝端口不误报认证失败、TLS/未知错误不被改写。 | ✅（未完成自动回退，见下） |
+
+### 未修复 / 已知缺口
+
+| 项 | 当前事实 | 后续 |
+|---|---|---|
+| D11 `CREATE DATABASE/USE` SQL 文件 | 通用 SQL 文件路径仍拒绝改变数据库范围；受控管理脚本模式未完成端到端授权/UI 接入，临时实现已回滚，没有死代码或放宽保护。 | 🚧 需单独立项：完整预扫描 → 精确库名清单 → 用户确认 → 授权绑定 → 仅放行匹配声明。 |
+| D9 `::1` 自动回退 | 未实现静默地址切换；仅提示明确选择 `127.0.0.1` / `::1`。认证失败不自动重试。 | 若产品要自动回退，必须先证明只发生在建连阶段且不改变认证/TLS 语义。 |
+| D17/D19/P5-R/D13/D14/D8 | 缺少本轮对应的 TiDB / SQL Server / 达梦 / PostgreSQL / 还原进度现场环境，未复验。 | ⏳ 不在本轮宣称通过或修复。 |
+| P8-R 非清空输入 | 本轮未做专项复测。 | ⏳ |
+
+### 全驱动能力矩阵
+
+- [生成器](../../tools/tests/round4-driver-matrix.mjs)、[14 项矩阵测试](../../tools/tests/round4-driver-matrix.test.mjs) 通过；产物 `artifacts/round4/driver-matrix.json`。
+- 覆盖 101 个目录 ID + 2 个通用绑定，206 条实际路由、3502 个操作单元；运行证据全部为 `not-run`，不把源码分支或模拟夹具写成真实通过。
+- 明确记录：JDBC 实际走 `Db::Http`，不继承原生/ODBC 的导入、还原、同步能力；通用 ODBC 的未识别 kind 会被 planned 门禁拒绝；关系型导入/同步只对 SQLite/MySQL/PostgreSQL/SQL Server/ClickHouse/ODBC 分支开放。性能机会指向共享导出序列化路径（167 条路由未实测），但只有 MySQL/SQLite 本轮有实测数据。
+
+### 性能 A/B（本机、release）
+
+| 场景 | 旧路径 | 新路径 | 结果 | 默认 |
+|---|---:|---:|---|---|
+| MySQL CSV 导入 1,000 行 | 中位 0.212667s | 中位 0.039004s | **5.452×**；5 轮交错、每值全量比对 | 严格门控自动启用 |
+| MySQL CSV 导入 100,000 行 | 22.822644s | 1.183901s | **19.277×**；5 轮 | 同上 |
+| MySQL CSV 导入 1,000,000 行 | 346.563731s | 12.915087s | **26.834×**；3 轮 | 同上 |
+| MySQL JSON 导出 100,000 行 | 0.746216s | 0.548657s | **1.360×**；5 轮，输出字节一致 | 共享序列化路径 |
+| SQLite JSON 导出 100,000 行 | 0.571091s | 0.242082s | **2.359×**；5 轮，输出字节一致 | 共享序列化路径 |
+
+MySQL 导入门控仅适用于精确 `mysql` 8.0、InnoDB、已有表且无 prefix DDL、无 trigger/FK/default/generated、显式完整普通列、严格 SQL mode、足够 packet 与可验证全局元数据权限；不满足时继续逐行。整批仍在一个事务中，失败不拆批重放。
+
+- 证据：[1k](../../artifacts/round4/import/mysql-release-1000-final.log#L4-L14)、[100k](../../artifacts/round4/import/mysql-release-100000-final.log#L4-L15)、[1M](../../artifacts/round4/import/mysql-release-1000000-final.log#L5-L8)、[门控实库](../../artifacts/round4/import/mysql-release-live-gate-final.log#L3-L6)、[MySQL JSON](../../artifacts/round4/json/mysql-json-100k.log#L663-L675)、[SQLite JSON](../../artifacts/round4/json/sqlite-json-100k.log#L660-L672)。
+- MySQL 全进程峰值 working set：1k 23,351,296 B、100k 25,456,640 B、1M 25,604,096 B（采样上限，不是单任务硬限）。
+- 未做其他数据库真实性能：TiDB/MariaDB/SQL Server/PostgreSQL/ClickHouse/ODBC/JDBC/HTTP/Native 无可用隔离实例或本轮未运行；不把协议相同当成性能等价。H2 也未执行性能测试。
+
+### 最终回归
+
+- `cargo check --lib --offline` 通过。
+- 完整 Rust 库：**1340 passed / 0 failed / 62 ignored**（[日志](../../artifacts/round4/rust-lib-final.log)）。
+- 前端 92/92 通过（[含驱动矩阵](../../tools/tests/round4-driver-matrix.test.mjs)）；`npm run build` 通过；文档链接检查通过。
+- 工作树中另有其他并行任务的 ER / 更新对话框改动，未由本轮修改或回退，也不计入本轮通过范围。

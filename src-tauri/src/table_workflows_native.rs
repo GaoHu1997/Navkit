@@ -86,6 +86,10 @@ async fn apply(s:&mut Session,b:&Binding,entry:&Arc<Entry>,work:&TableWork,steps
     let table=match work{TableWork::Design(d)=>&d.table,TableWork::Operation(o)=>&o.table};let kind=s.kind();let full=db::qualified(&kind,&b.namespace,table);
     if kind.is_pg_family(){s.execute("BEGIN").await?;s.execute(&format!("LOCK TABLE {full} IN ACCESS EXCLUSIVE MODE")).await?;}else{
         ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");
+        // TiDB 的 GET_LOCK/LOCK TABLES 只是 noop 兼容功能，拿不到任何并发证明；
+        // 必须在发送第一条锁语句和 DDL 之前拒绝，不能先 GET_LOCK 再失败。
+        let server=s.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
+        if db::mysql_noop_lock_unsupported(&server,""){return Err(AppError::coded("TABLE_MYSQL_LOCK_UNSUPPORTED","TiDB 的 GET_LOCK/LOCK TABLES 只是 noop 兼容功能，无法证明并发安全；表结构保存已拒绝，读取与预览仍可用").into());}
         let lock=plan::lock_name(b,table);ensure!(s.scalar(&format!("SELECT GET_LOCK({},10)",db::quote_literal(&lock))).await?=="1","TABLE_CAS_LOCK_BUSY");
         // LOCK TABLES 跨隐式提交持有服务端元数据写锁；同会话每条 DDL 后重新核验完整定义。
         s.execute(&format!("LOCK TABLES {full} WRITE")).await?;

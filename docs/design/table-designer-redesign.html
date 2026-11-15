@@ -156,11 +156,6 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
 .pop.ext::before{left:24px;right:auto}
 
 /* ── SQL 预览：实时状态条 + DDL 高亮（复用 base.css 的 ddl-* 色） ── */
-.sql-bar{height:36px;display:flex;align-items:center;gap:10px;padding:0 var(--sp-3);border-bottom:1px solid var(--border-subtle);background:var(--bg-subtle);font-size:11px;color:var(--text-tertiary)}
-.sql-bar .live{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:var(--r-full);background:var(--accent-50);color:var(--accent-700);border:1px solid var(--accent-200);font-size:11px;font-weight:600}
-.sql-bar .live i{width:6px;height:6px;border-radius:var(--r-full);background:var(--accent-500);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-500) 16%,transparent)}
-.sql-bar .sql-meta{font-variant-numeric:tabular-nums}
-.sql-bar .grow{flex:1}
 .designer-sql{white-space:pre;overflow:auto;margin:0;padding:12px 14px;border:0;border-radius:0;background:var(--bg-surface);font:12.5px/1.75 var(--font-mono);tab-size:2}
 .ddl-kw{color:var(--accent-600);font-weight:600}
 .ddl-type{color:#7a5af8}
@@ -219,11 +214,11 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
     </div>
     <table class="grid">
       <colgroup>
-        <col style="width:152px"><col style="width:146px"><col style="width:66px"><col style="width:66px"><col style="width:236px"><col style="width:54px"><col style="width:120px"><col style="width:76px"><col>
+        <col style="width:152px"><col style="width:146px"><col style="width:66px"><col style="width:66px"><col style="width:236px"><col style="width:54px"><col style="width:76px"><col style="width:120px"><col>
       </colgroup>
       <thead>
         <tr>
-          <th>名称</th><th>类型</th><th>长度</th><th>小数位</th><th>默认值</th><th style="text-align:center">主键</th><th>扩展</th><th style="text-align:center">允许 NULL</th><th>注释</th>
+          <th>名称</th><th>类型</th><th>长度</th><th>小数位</th><th>默认值</th><th style="text-align:center">主键</th><th style="text-align:center">允许 NULL</th><th>扩展</th><th>注释</th>
         </tr>
       </thead>
       <tbody>
@@ -234,8 +229,8 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell center"><span class="key on" title="已在主键中，点击移出"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="tag">自增</span><span class="tag">无符号</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="tag">自增</span><span class="tag">无符号</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">主键</span></div></td>
         </tr>
         <tr>
@@ -244,9 +239,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">任务ID</span></div></td>
         </tr>
         <tr>
@@ -255,9 +250,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val">1024</span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val mono">''</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">来源端的schema</span></div></td>
         </tr>
         <tr>
@@ -266,9 +261,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val">32</span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo hot"><span class="val mono">'TABLE'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">类型:TABLE/VIEW</span></div></td>
         </tr>
         <tr>
@@ -277,9 +272,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">来源端的table列表</span></div></td>
         </tr>
         <tr>
@@ -288,9 +283,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val">1</span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val mono">'0'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">是否排除(0:否 1:是)</span></div></td>
         </tr>
         <tr>
@@ -299,9 +294,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">源端查询的前置执行sql脚本</span></div></td>
         </tr>
         <tr>
@@ -310,9 +305,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val">200</span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val mono">''</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">目的端的schema(一个)</span></div></td>
         </tr>
         <tr>
@@ -321,9 +316,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val">32</span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val mono">'TABLE'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">目标端表类型:TABLE(物理表)/VIEW(视图)</span></div></td>
         </tr>
         <tr>
@@ -332,9 +327,9 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val mono">'10000'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">处理批次大小</span></div></td>
         </tr>
         <tr>
@@ -343,16 +338,16 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell"><span class="val ghost"></span></div></td>
           <td><div class="cell combo"><span class="val mono">CURRENT_TIMESTAMP</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
-          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
-          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"></div></td>
           <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
           <td><div class="cell"><span class="val">创建时间</span></div></td>
         </tr>
       </tbody>
     </table>
 
     <!-- 扩展属性浮层：自增 / 无符号 / 填充零收进这里，按类型与方言决定是否可选 -->
-    <div class="pop ext" style="top:138px;left:712px;width:262px">
+    <div class="pop ext" style="top:138px;left:788px;width:262px">
       <div class="pop-head"><span style="flex:1;border-right:0">扩展属性 · id</span></div>
       <div class="ext-list">
         <label class="opt"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span><span class="k">自增</span><span class="hint">AUTO_INCREMENT</span></label>
@@ -550,8 +545,7 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
       </div>
       <div class="note">索引行尾的「…」<span style="vertical-align:-2px;display:inline-grid;place-items:center;width:20px;height:20px;border:1px solid var(--border);border-radius:4px;margin:0 2px"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11" cy="7" r="1.25"/></svg></span>与浮层是同一个入口，键盘 Enter 也能打开。</div>
     </div>
-  </div>
-</section>
+  </section>
 
 <!-- ════════════════ ④ SQL 预览 ════════════════ -->
 <section class="shot">
@@ -566,27 +560,18 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
       <span class="tb-sep"></span>
       <button class="tb" disabled>上移</button>
       <button class="tb" disabled>下移</button>
-      <span style="margin-left:auto;color:var(--text-tertiary);font-size:11px">编辑字段结构后回到本页，SQL 自动刷新</span>
     </div>
     <div class="tabs">
       <span class="tab">字段</span><span class="tab">索引</span><span class="tab">外键</span><span class="tab">检查</span><span class="tab">触发器</span><span class="tab">选项</span><span class="tab">注释</span><span class="tab on">SQL 预览</span>
     </div>
-    <div class="sql-bar">
-      <span class="live"><i></i>实时预览</span>
-      <span class="sql-meta">已与草稿同步 · 4 处改动 · 128 ms</span>
-      <span class="grow"></span>
-      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5h-7a1 1 0 0 0-1 1v7"/></svg>复制 SQL</button>
-    </div>
-    <pre class="designer-sql" style="max-height:none"><span class="ddl-comment">-- 1. 修改字段</span>
-<span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
+    <pre class="designer-sql" style="max-height:none"><span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
   <span class="ddl-kw">MODIFY COLUMN</span> <span class="ddl-ident">`id`</span> <span class="ddl-type">bigint</span> <span class="ddl-kw">unsigned</span> <span class="ddl-kw">NOT NULL</span> <span class="ddl-kw">COMMENT</span> <span class="ddl-str">'主键'</span>,
   <span class="ddl-kw">ADD COLUMN</span> <span class="ddl-ident">`channel_size`</span> <span class="ddl-type">bigint</span> <span class="ddl-kw">NOT NULL</span> <span class="ddl-kw">DEFAULT</span> <span class="ddl-str">'100'</span> <span class="ddl-kw">COMMENT</span> <span class="ddl-str">'通道队列大小'</span>;
 
-<span class="ddl-comment">-- 2. 调整索引</span>
 <span class="ddl-kw">DROP INDEX</span> <span class="ddl-ident">`idx_target_connection`</span> <span class="ddl-kw">ON</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>;
 <span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
   <span class="ddl-kw">ADD UNIQUE INDEX</span> <span class="ddl-ident">`uk_assignment`</span> (<span class="ddl-ident">`assignment_id`</span> <span class="ddl-kw">ASC</span>);</pre>
-    <div class="status"><span>预览与当前草稿一致</span><span class="dot"></span><span>切页签自动刷新 · 编辑后 300ms 防抖重算</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+    <div class="status"><span>有未保存的表结构草稿</span><span class="dot"></span><span>字段 24 · 索引 4</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
   </div>
 </section>
 

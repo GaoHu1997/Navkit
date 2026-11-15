@@ -4,7 +4,7 @@
 > 不是过程记录。任何一条能力的代码入口都必须可打开核对。
 > 更新规则见 `.agents/skills/docs-lifecycle/SKILL.md`。
 >
-> 最后核对：2026-11-14｜代码基线：工作树（`d81541e` + 未提交修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）
+> 最后核对：2026-11-15｜代码基线：工作树（`1d01834` + 未提交修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）
 
 > 最新修复验收基线：2026-11-14 Windows 程序 `5670dd85…6b930a84`，公开大总量预览完成判定已修复并经真实 IPC 验证；旧 F44373CB 失败结论保留为历史，后续未验收改动不覆盖本结论。
 
@@ -254,6 +254,11 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 系统 ODBC 驱动 | 达梦 DM、Hive；表级导出分派已覆盖全部 34 个 ODBC 目录类型，需用户安装兼容驱动，不等于厂商实库认证 |
 | JDBC / H2 | Java 11+ sidecar，严格匹配原包与厂商类 |
 
+表设计读取按服务端实际能力探测，不按连接类型等同：
+- MySQL 协议族：MySQL 8 用 `@@server_uuid` + `information_schema.INNODB_TABLES`；MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID`。TiDB 没有触发器，其空目录按方言事实处理；TiDB 的 `GET_LOCK`/`LOCK TABLES` 是 noop 兼容功能，**表结构保存明确拒绝**（读取、预览仍可用）。
+- PostgreSQL 协议族：`attgenerated`/`attidentity`/`attcompression`/`indnkeyatts`/`pg_sequence`/`relrowsecurity` 等版本相关列逐个探测，缺失时降级并在设计器 limitations 中标注；解构约束/索引改用所有版本都接受的单参数 `pg_get_*`。
+- Doris/StarRocks/SelectDB/Databend/Manticore、CockroachDB/Redshift/Cloudberry/QuestDB 的表目录/DDL 与 MySQL/PostgreSQL 不兼容，表设计入口明确拒绝，不把 1054/1146/42703 裸抛给界面。
+
 目录共 101 个条目（34 个 ODBC）。其余 90+ 类型仅提供图标与协议探测，**未做厂商实库认证**，
 按「明确拒绝或协议模拟」处理；**目录条目数不等于已认证数据源数**。
 
@@ -295,6 +300,8 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 | PERF-01 | 数据管线代码与受控策略 | [有界预览/原事务批写](<../../src-tauri/src/transfer.rs>)、[recipe原子/SQLite分段](<../../src-tauri/src/generated_recipe_segments.rs>)、[详细还原](<../../src-tauri/src/transfer_restore_stream.rs>)、[显式native备份](<../../src-tauri/src/transfer_backup_native.rs>)、[COPY](<../../src-tauri/src/transfer_pg_copy.rs>)、[生产者准入](<../../src-tauri/src/transfer_admission.rs>)；本地正确性/规模与前端覆盖 | 已开发范围⏳现场验收；全协议typed参数批/PG-MySQL分段/所有入口资源和交互保留预算🚧；bounded diff负收益默认关闭；当前审阅表待用户决定保留，不自动提交 |
 
+| ROUND4-FIX-01 | 第三轮回归修复与实库性能 | [整库转储目标相对身份](<../../src-tauri/src/transfer.rs>)、[YEAR 无损解码](<../../src-tauri/src/values.rs>)、[同引擎类型映射](<../../src-tauri/src/sync.rs>)、[连接树刷新](<../../src/core/App.ts>)、[本机 MySQL 错误分类](<../../src-tauri/src/sqlx_runtime.rs>)、[严格 MySQL 导入批写门控](<../../src-tauri/src/transfer_import_batch.rs>)、[共享 JSON 写出](<../../src-tauri/src/transfer_json_row.rs>)、[全驱动矩阵生成器](<../../tools/tests/round4-driver-matrix.mjs>) | MySQL 实库已验证 D7/YEAR/D10 与导入 5.452×/19.277×/26.834×；SQLite/MySQL JSON 导出 2.359×/1.360×；D11 `CREATE DATABASE/USE` 仍 🚧；其他厂商实库性能未验收 ⏳ |
+
 ## 六、已知限制汇总
 
 1. **平台**：只在 Windows 11 x64 验证过；无 macOS / Linux 结论。
@@ -315,6 +322,8 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 14. **全驱动实测遗留**：金仓保存、HighGo 查询、达梦首屏、H2 空路径等静默退出仍缺运行时崩溃证据（已补 sidecar 退出码与有界 stderr，不代表修复）；达梦/金仓/HighGo 未在本次环境复测；PostgreSQL MONEY/INTERVAL/POINT 的网格解析需真实 PG 现场验收。入口见 [DRIVER-FIX-01](<../../src-tauri/src/values.rs>)。
 
 15. **生成预览验收边界**：正常无取消完成已修复，不再误报 Unknown；失败、取消、超时、未知清理与在途资源仍拒绝返回样本。本次公开 IPC 只实测 Windows/SQLite，不外推全部厂商与压力环境。
+
+16. **第四轮遗留**：D11 含 `CREATE DATABASE/USE` 的 SQL 文件仍未接入受控管理脚本授权，通用路径继续拒绝；D9 只对 localhost 认证/连接错误做了明确分类，没有自动 IPv4/IPv6 回退；TiDB/SQL Server/达梦/PostgreSQL 等现场项未复验。MySQL 导入批写只对精确 `mysql` 8.0/InnoDB/无副作用普通表自动启用，其他协议仍逐行。全驱动矩阵是源码能力清单，运行证据均为 not-run，不能当作厂商实库通过。
 
 ## 七、文档来源合并记录
 
@@ -342,4 +351,5 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | active/driver-test-fixes.md | 并入 §三 2026-11-13 全驱动实测问题修复块、§五 DRIVER-FIX-01、§六 第 14 条；原件按生命周期删除 |
 | 2026-11-14 封存发布验收（结果合并） | §三合并快照哈希、完整回归、真实原生工作流、构建与明确不通过结论；§六记录公开 recipe 预览完成误判，旧失败报告已移入 artifact 历史区；完成判定后续修复见 RECIPE-PREVIEW-FIX-01，不把后续并行源码改动当作已通过 |
 | active/release-acceptance-2026-11-14.md（后续修复归档） | 公开预览复用正式终态并保留严格未知拒绝；完整库、相关前端、固定哈希真实IPC/工作流/缓存与新构建结果并入§三/§五；旧失败报告保留artifact，过程文件从active删除 |
+| active/navkit-round4-regression-performance.md | 并入 §五 ROUND4-FIX-01、§六 第 16 条；D7/YEAR/D10/D5/D9 与全驱动矩阵、MySQL/SQLite 性能结论归档；D11 仍标 🚧，过程文档保留在 active 以对应未完成缺口 |
 | active/query-streaming-backend.md | §三 合并独立流式后端、成功终态导出门、MySQL 回环/生命周期回归与真实边界；前端未开工项放 planned/query-streaming-frontend.md |

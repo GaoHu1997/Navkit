@@ -1,5 +1,5 @@
 import { api, type TableDesignSnapshot, type TableDesignPayload, type TableDesignPreview, type TableDesignResponse, type TableOptionChoices, type ForeignKeyDesign, type IndexDesign } from "../core/api";
-import { openPopover, closePopover, POPOVER_CHEVRON } from "./popover";
+import { openPopover, closePopover, isPopoverOpenFor, POPOVER_CHEVRON } from "./popover";
 import { highlightSql } from "./sql-highlight";
 import type { ConnectionConfig, TabState, TableOptionsDesign } from "../core/types";
 import type { DraftSnapshot } from "../core/editing-state";
@@ -84,7 +84,6 @@ export class TableDesigner {
   private previewSignature = "";
   private previewState: "idle" | "loading" | "ok" | "error" = "idle";
   private previewError = "";
-  private previewMs = 0;
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
   private previewToken = 0;
   private readonly references = new Map<string, { columns: string[] | null; error: string; loading: boolean }>();
@@ -294,7 +293,7 @@ export class TableDesigner {
     pick.addEventListener("click", event => {
       event.preventDefault();
       if (pick.disabled) return;
-      if (pick.classList.contains("open")) { closePopover(); return; }
+      if (isPopoverOpenFor(pick)) { closePopover(); return; }
       this.openDefaultChoices(pick, column, field, label);
     });
     wrap.append(field, pick);
@@ -340,7 +339,7 @@ export class TableDesigner {
     const chevron = document.createElement("span"); chevron.className = "designer-ext-chevron"; chevron.innerHTML = POPOVER_CHEVRON;
     btn.append(text, chevron);
     btn.addEventListener("click", () => {
-      if (btn.classList.contains("open")) { closePopover(); return; }
+      if (isPopoverOpenFor(btn)) { closePopover(); return; }
       btn.classList.add("open");
       openPopover({
         anchor: btn,
@@ -395,10 +394,11 @@ export class TableDesigner {
     const el = document.createElement("input"); el.type = "checkbox"; el.checked = value; el.setAttribute("aria-label", ariaLabel); el.disabled = disabled || !!this.editReason();
     el.addEventListener("change", () => { set(el.checked); this.changed(); }); wrapper.appendChild(el); return wrapper;
   }
-  /** 主键钥匙图标：点击切换是否属于主键（替代复选框），与参考图的键图标一致。 */
+  /** 主键钥匙：只有已在主键中的字段才显示图标；空白格同样可点，点一下即加入主键并显示图标。 */
   private keyToggle(active: boolean, ariaLabel: string, action: () => void, disabled = false): HTMLButtonElement {
-    const el = document.createElement("button"); el.type = "button"; el.className = "designer-key" + (active ? " active" : "");
-    el.textContent = "🔑"; el.setAttribute("aria-label", ariaLabel); el.setAttribute("aria-pressed", String(active));
+    const el = document.createElement("button"); el.type = "button"; el.className = "designer-key" + (active ? " active" : " empty");
+    if (active) el.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="4.6" cy="8" r="2.4"/><path d="M7 8h6.4M11 8v3.2"/></svg>';
+    el.setAttribute("aria-label", ariaLabel); el.setAttribute("aria-pressed", String(active));
     el.title = active ? "已在主键中，点击移出" : "点击加入主键"; el.disabled = disabled || !!this.editReason();
     el.addEventListener("click", action); return el;
   }
@@ -450,9 +450,10 @@ export class TableDesigner {
       { title: "小数位", width: "68px" },
       { title: "默认值", width: "250px" },
       { title: "主键", width: "54px", align: "center" },
+      { title: "允许 NULL", width: "80px", align: "center" },
     ];
     if (mysql) columns.push({ title: "扩展", width: "120px" });
-    columns.push({ title: "允许 NULL", width: "80px", align: "center" }, { title: "注释", width: "auto" });
+    columns.push({ title: "注释", width: "auto" });
     return columns;
   }
   private renderFields(body: HTMLElement): void {
@@ -486,9 +487,9 @@ export class TableDesigner {
         if (at >= 0) draft.primary_key.splice(at, 1); else draft.primary_key.push(column.name);
         this.changed(); this.render();
       }, column.deleted));
-      // 自增 / 无符号 / 填充零收进扩展列：列里只显示已启用的标签，点开浮层勾选
-      if (mysql) cell(this.extensionCell(column, label()));
+      // 允许 NULL 紧跟在主键之后；自增 / 无符号 / 填充零收在扩展列里（列序：… 主键 / 允许 NULL / 扩展 / 注释）
       cell(this.checkBare(column.nullable, label() + " 允许 NULL", value => { column.nullable = value; }, column.deleted || (mysql && !!column.auto_increment)));
+      if (mysql) cell(this.extensionCell(column, label()));
       const comment = this.input(column.comment, label() + " 注释", value => { column.comment = value; }, column.deleted || this.host.connection()?.kind === "sqlite"); if (this.host.connection()?.kind === "sqlite") comment.title = "SQLite 不支持列注释 DDL。"; cell(comment);
       rows.appendChild(tr);
     }
@@ -499,13 +500,19 @@ export class TableDesigner {
     if (kind === "mysql" || kind === "mariadb" || kind === "postgresql") return ["BTREE", "HASH"];
     return ["BTREE"];
   }
-  /** 索引/主键字段顺序编辑器：可多字段，每字段可选升/降序，并可上移调整列顺序。 */
+  /** 索引/主键字段编辑器（浮层内）：每行「字段下拉 + 排序下拉 + 删除」，底部 ↑ ↓ 调整顺序、＋ 添加字段。 */
   private indexColumnsEditor(columns: string[], descending: string[], columnNames: string[], label: string, onChange: (columns: string[], descending: string[]) => void): HTMLElement {
     const box = document.createElement("div"); box.className = "designer-index-cols";
+    let cursor = 0;
     const render = () => {
       box.innerHTML = "";
+      const head = document.createElement("div"); head.className = "designer-index-head";
+      for (const title of ["字段", "排序", ""]) { const span = document.createElement("span"); span.textContent = title; head.appendChild(span); }
+      box.appendChild(head);
+      const list = document.createElement("div"); list.className = "designer-index-list";
       columns.forEach((name, i) => {
         const rowEl = document.createElement("div"); rowEl.className = "designer-index-col-row";
+        if (i === cursor) rowEl.classList.add("current");
         const pos = label + " 字段 " + (i + 1);
         const colSel = this.select(name, columnNames, pos, value => {
           const old = columns[i]; columns[i] = value;
@@ -513,20 +520,26 @@ export class TableDesigner {
           onChange(columns, descending); render();
         });
         colSel.classList.add("designer-index-field");
+        colSel.addEventListener("focus", () => { cursor = i; });
         const dirSel = this.select(descending.includes(name) ? "DESC" : "ASC", ["ASC", "DESC"], pos + " 排序", value => {
           const set = new Set(descending); if (value === "DESC") set.add(name); else set.delete(name); descending = [...set];
           onChange(columns, descending); render();
         });
         dirSel.classList.add("designer-index-order");
-        const up = this.button("↑", () => { if (i > 0) { const tmp = columns[i - 1]; columns[i - 1] = columns[i]; columns[i] = tmp; onChange(columns, descending); render(); } }, this.editReason());
-        up.className = "btn designer-mini"; up.setAttribute("aria-label", "上移" + pos);
-        const del = this.button("×", () => { const removed = columns.splice(i, 1)[0]; descending = descending.filter(n => n !== removed); onChange(columns, descending); render(); }, this.editReason());
-        del.className = "btn designer-mini"; del.setAttribute("aria-label", "删除" + pos);
-        rowEl.append(colSel, dirSel, up, del); box.appendChild(rowEl);
+        const del = this.button("×", () => { const removed = columns.splice(i, 1)[0]; descending = descending.filter(n => n !== removed); cursor = Math.max(0, i - 1); onChange(columns, descending); render(); }, this.editReason());
+        del.className = "designer-index-remove"; del.setAttribute("aria-label", "删除" + pos);
+        rowEl.append(colSel, dirSel, del); list.appendChild(rowEl);
       });
-      const add = this.button("＋字段", () => { columns.push(columnNames.find(n => !columns.includes(n)) ?? ""); onChange(columns, descending); render(); }, this.editReason());
-      add.className = "btn designer-mini designer-add-col"; add.setAttribute("aria-label", "为" + label + "添加字段");
-      box.appendChild(add);
+      box.appendChild(list);
+      const tools = document.createElement("div"); tools.className = "designer-index-tools";
+      const up = this.button("↑", () => { const at = Math.min(cursor, columns.length - 1); if (at > 0) { [columns[at - 1], columns[at]] = [columns[at], columns[at - 1]]; cursor = at - 1; onChange(columns, descending); render(); } }, this.editReason());
+      up.className = "designer-index-tool"; up.setAttribute("aria-label", "上移" + label + "字段");
+      const down = this.button("↓", () => { const at = Math.min(cursor, columns.length - 1); if (at < columns.length - 1) { [columns[at + 1], columns[at]] = [columns[at], columns[at + 1]]; cursor = at + 1; onChange(columns, descending); render(); } }, this.editReason());
+      down.className = "designer-index-tool"; down.setAttribute("aria-label", "下移" + label + "字段");
+      const add = this.button("＋字段", () => { columns.push(columnNames.find(n => !columns.includes(n)) ?? ""); cursor = columns.length - 1; onChange(columns, descending); render(); }, this.editReason());
+      add.className = "designer-index-tool designer-add-col"; add.setAttribute("aria-label", "为" + label + "添加字段");
+      tools.append(up, down, add);
+      box.appendChild(tools);
     };
     render();
     return box;
@@ -551,7 +564,7 @@ export class TableDesigner {
   private pickerOpenedFrom: HTMLButtonElement | null = null;
   private openIndexColumnsPopover(anchor: HTMLButtonElement, columns: string[], descending: string[], columnNames: string[], label: string, apply: (columns: string[], descending: string[]) => void): void {
     const reason = this.editReason(); if (reason) { this.host.toast("info", reason); return; }
-    if (this.pickerOpenedFrom === anchor) { closePopover(); return; }
+    if (isPopoverOpenFor(anchor)) { closePopover(); return; }
     let nextColumns = [...columns];
     let nextDescending = [...descending];
     this.pickerOpenedFrom = anchor;
@@ -840,49 +853,21 @@ export class TableDesigner {
     }
     for (const limitation of capability.limitations) { const note = document.createElement("p"); note.textContent = limitation; body.appendChild(note); }
   }
-  /** SQL 预览页：没有「生成」按钮——切到本页或继续编辑都会自动重算，并做 DDL 语法高亮。 */
+  /** SQL 预览页：只显示 SQL 本体——没有生成按钮、没有状态条、没有附加说明。
+   *  切到本页或继续编辑都会自动重算；高亮沿用 DDL 同一套着色。 */
   private renderPreview(body: HTMLElement): void {
     const synced = !!this.preview && this.previewSignature === draftSignature(this.draft!);
-    const bar = document.createElement("div"); bar.className = "designer-sql-bar";
-    const state = this.previewState === "loading" ? "loading" : this.previewState === "error" ? "error" : this.draftDirty() ? (synced ? "ok" : "loading") : "idle";
-    const badge = document.createElement("span"); badge.className = "designer-sql-live " + state;
-    const dot = document.createElement("i");
-    badge.append(dot, document.createTextNode(state === "error" ? "生成失败" : state === "loading" ? "正在生成" : state === "ok" ? "实时预览" : "无待执行变更"));
-    const meta = document.createElement("span"); meta.className = "designer-sql-meta";
-    meta.textContent = state === "ok"
-      ? `已与草稿同步 · ${this.previewDiffCount()} 处改动 · ${this.previewMs || 0} ms`
-      : state === "loading" ? "草稿已变更，正在重新计算后端计划…"
-        : state === "error" ? "后端拒绝了当前草稿，详见下方提示"
-          : "表结构与读取基线一致，修改字段或索引后这里会自动出现 SQL";
-    const copy = document.createElement("button"); copy.type = "button"; copy.className = "btn";
-    copy.textContent = "复制 SQL"; copy.disabled = !synced;
-    copy.addEventListener("click", () => { void this.copyPreviewSql(); });
-    bar.append(badge, meta, copy);
-    body.appendChild(bar);
-
     const code = document.createElement("pre"); code.className = "designer-sql"; code.tabIndex = 0;
     code.setAttribute("aria-label", "后端实际 SQL 计划");
-    if (state === "error") { code.textContent = this.previewError; code.classList.add("error"); }
-    else if (!this.draftDirty()) code.textContent = "表结构与读取基线一致，没有待执行的 DDL。";
+    if (this.previewState === "error") { code.textContent = this.previewError; code.classList.add("error"); }
     else if (synced && this.preview) code.innerHTML = highlightSql(this.previewSql());
-    else code.textContent = "正在生成当前草稿的后端计划…";
+    else if (!this.draftDirty()) code.textContent = "-- 没有待执行的结构变更";
+    else code.textContent = "-- 正在生成…";
     body.appendChild(code);
-    if (synced && this.preview) for (const limitation of this.preview.limitations) { const note = document.createElement("p"); note.textContent = limitation; body.appendChild(note); }
   }
   private previewSql(): string {
     if (!this.preview) return "";
-    return this.preview.steps.map((step, i) => `-- ${i + 1}. ${step.label}\n${step.sql}`).join("\n\n") || "后端计划没有待执行步骤。";
-  }
-  private previewDiffCount(): number {
-    const preview = this.preview;
-    if (preview && typeof (preview as unknown as { step_count?: number }).step_count === "number") return (preview as unknown as { step_count: number }).step_count;
-    return preview?.steps.length ?? 0;
-  }
-  private async copyPreviewSql(): Promise<void> {
-    const text = this.previewSql();
-    if (!text) return;
-    try { await navigator.clipboard.writeText(text); this.host.toast("success", "SQL 已复制到剪贴板。"); }
-    catch (error) { this.host.toast("error", `复制失败：${String(error)}`); }
+    return this.preview.steps.map(step => step.sql).join("\n\n");
   }
   /** 编辑后（或切到预览页）自动重算；防抖把连续输入合并成一次后端调用。 */
   private queuePreview(delay = 260): void {
@@ -899,14 +884,13 @@ export class TableDesigner {
     const token = ++this.previewToken;
     const signature = draftSignature(this.draft);
     this.previewState = "loading"; this.previewError = ""; this.render();
-    const started = performance.now();
     try {
       const design = this.payload();
       const preview = await api.previewTableDesign(this.tab.connectionId, design, this.tab.id);
       if (this.disposed || token !== this.previewToken || this.currentTab !== "SQL 预览") return;
       if (!this.draft || draftSignature(this.draft) !== signature) { this.queuePreview(120); return; }
       this.preview = preview; this.previewSignature = signature;
-      this.previewMs = Math.round(performance.now() - started); this.previewState = "ok";
+      this.previewState = "ok";
       this.render();
     } catch (error) {
       if (this.disposed || token !== this.previewToken) return;
