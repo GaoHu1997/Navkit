@@ -26,7 +26,6 @@ import {
   computeEngineeringLayout,
   computeLayout,
   edgeEndpoints,
-  orthogonalPath,
   filterTables,
   loadPositions,
   savePositions,
@@ -34,6 +33,38 @@ import {
   type ErRelationship,
   type ErTable,
 } from "../core/erDiagram";
+import {
+  describeStrategy,
+  filterByStorage,
+  inferRelationships,
+  mergeRelationships,
+  type InferredRelationship,
+  type MatchResult,
+} from "../core/erDiagramMatch";
+import {
+  isAutoMatchEnabled,
+  loadMatchConfirms,
+  loadMatchIgnores,
+  saveMatchConfirms,
+  saveMatchIgnores,
+  setAutoMatchEnabled,
+  toggleMatchId,
+} from "../core/erDiagramMatchStorage";
+import {
+  computeElkLayout,
+  computeGridLayout,
+  ELK_EDGE_LIMIT,
+  ELK_NODE_LIMIT,
+  type LayoutDirection,
+} from "../core/erDiagramLayout";
+import {
+  inferSide,
+  inferTargetSide,
+  pointsToSvgPath,
+  routeEdge,
+  type ObstacleRect,
+  type Point as RoutePoint,
+} from "../core/erDiagramRouting";
 import "./../styles/er-diagram.css";
 
 interface Viewport {
@@ -58,9 +89,24 @@ export function openErDiagramDialog(
   let connectionId = current?.id ?? connections[0]?.id ?? "";
   let database = currentSchema;
   let tables: ErTable[] = [];
+  /** 物理外键 + 自定义关系（不含推断）。 */
+  let physicalRelationships: ErRelationship[] = [];
+  /** 图上实际展示的关系（物理 + 用户启用的推断）。 */
   let relationships: ErRelationship[] = [];
+  /** 最近一次推断的全部结果（未过滤）。 */
+  let inferredAll: InferredRelationship[] = [];
+  /** 过滤后的匹配结果（上图 / 冲突 / 统计）。 */
+  let matchResult: MatchResult = { relationships: [], conflicts: [], pending: [], stats: { total: 0, high: 0, medium: 0 } };
+  let matchConfirms: string[] = [];
+  let matchIgnores: string[] = [];
+  let autoMatch = isAutoMatchEnabled();
+  let showMatchPanel = false;
   let visibleNames = new Set<string>();
   let nodes: ReturnType<typeof computeLayout> = [];
+  /** ELK 布局算出的关系折线（关系 id → 点集），优先于内置三段折线。 */
+  let edgePaths = new Map<string, RoutePoint[]>();
+  let layoutDirection: LayoutDirection = "LR";
+  let layoutRunning = false;
   let mode: "tables" | "engineering" = "tables";
   let viewport: Viewport = { x: 0, y: 0, zoom: 1 };
   let selectedTable: string | null = null;
@@ -132,6 +178,36 @@ export function openErDiagramDialog(
   layoutBtn.type = "button";
   layoutBtn.className = "er-tool-btn";
   layoutBtn.textContent = "自动布局";
+  layoutBtn.title = "用 ELK 分层算法重新排布（最小化连线交叉）";
+
+  // 布局方向：LR / TB / RL / BT
+  const dirSelect = document.createElement("select");
+  dirSelect.className = "er-select er-dir-select";
+  dirSelect.setAttribute("aria-label", "布局方向");
+  for (const [value, label] of [["LR", "左 → 右"], ["TB", "上 → 下"], ["RL", "右 → 左"], ["BT", "下 → 上"]] as const) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    dirSelect.appendChild(opt);
+  }
+  dirSelect.value = layoutDirection;
+
+  // 自动匹配：切换推断面板
+  const matchBtn = document.createElement("button");
+  matchBtn.type = "button";
+  matchBtn.className = "er-tool-btn";
+  const matchLabel = document.createElement("span");
+  matchLabel.textContent = "自动匹配";
+  const matchBadge = document.createElement("span");
+  matchBadge.className = "er-badge";
+  matchBadge.hidden = true;
+  matchBtn.append(matchLabel, matchBadge);
+  matchBtn.title = "按命名约定与类型签名推断虚拟外键（不写库）";
+  matchBtn.addEventListener("click", () => {
+    showMatchPanel = !showMatchPanel;
+    renderMatchPanel();
+  });
+
   const fitBtn = document.createElement("button");
   fitBtn.type = "button";
   fitBtn.className = "er-tool-btn";
@@ -160,8 +236,14 @@ export function openErDiagramDialog(
   stats.className = "er-stats";
   stats.textContent = "未加载数据";
 
-  toolbar.append(connSelect, dbSelect, search, modeGroup, newTableBtn, layoutBtn, fitBtn, copySqlBtn, syncBtn, refreshBtn, stats, zoomOutBtn, zoomInBtn);
+  toolbar.append(connSelect, dbSelect, search, modeGroup, newTableBtn, layoutBtn, dirSelect, matchBtn, fitBtn, copySqlBtn, syncBtn, refreshBtn, stats, zoomOutBtn, zoomInBtn);
   dlg.body.appendChild(toolbar);
+
+  // 自动匹配面板（复用现有面板的视觉与折叠模式，位于工具栏与画布之间）
+  const matchPanel = document.createElement("div");
+  matchPanel.className = "er-match-panel";
+  matchPanel.hidden = true;
+  dlg.body.appendChild(matchPanel);
 
   // 画布与右侧表设计器左右分栏。
   const workspace = document.createElement("div");
@@ -273,7 +355,10 @@ export function openErDiagramDialog(
           ref_table: fk.ref_table, ref_schema: fk.ref_schema, ref_columns: fk.ref_columns })),
       })).sort((a, b) => a.name.localeCompare(b.name));
       tables = next;
-      relationships = buildRelationships(tables);
+      physicalRelationships = buildRelationships(tables);
+      matchConfirms = loadMatchConfirms(scope.connection.id, scope.namespace);
+      matchIgnores = loadMatchIgnores(scope.connection.id, scope.namespace);
+      recomputeRelationships();
       loadedScope = scopeKey(scope);
       if (!selectedTable || !tables.some((t) => t.name === selectedTable)) selectedTable = tables[0]?.name ?? null;
       rebuildLayout(false);
@@ -293,6 +378,134 @@ export function openErDiagramDialog(
         inspMessage.dataset.tone = "error";
       } else showOverlay(message, true);
     }
+  }
+
+  // ---------------------------------------------------------------- 关系与自动匹配
+
+  /**
+   * 重算图上关系：物理外键优先，叠加用户启用的推断关系（虚拟外键）。
+   * 推断只在「自动匹配开启」且不是工程 ER 图时参与上图。
+   */
+  function recomputeRelationships(): void {
+    inferredAll = tables.length ? inferRelationships(tables, physicalRelationships) : [];
+    matchResult = filterByStorage(inferredAll, matchConfirms, matchIgnores);
+    if (autoMatch && matchResult.relationships.length) {
+      relationships = mergeRelationships(physicalRelationships, matchResult.relationships);
+    } else {
+      relationships = [...physicalRelationships];
+    }
+  }
+
+  /** 推断关系数（用于工具栏徽标与统计）。 */
+  function inferredCount(): number {
+    return relationships.filter((rel) => rel.kind === "inferred").length;
+  }
+
+  function renderMatchPanel(): void {
+    matchPanel.hidden = !showMatchPanel;
+    matchBtn.classList.toggle("active", showMatchPanel);
+    const badgeCount = autoMatch ? matchResult.relationships.length + matchResult.conflicts.length : 0;
+    matchBadge.hidden = badgeCount === 0;
+    matchBadge.textContent = String(badgeCount);
+    if (!showMatchPanel) return;
+
+    const head = document.createElement("div");
+    head.className = "er-match-head";
+    const title = document.createElement("div");
+    title.className = "er-match-title";
+    title.textContent = "自动匹配（虚拟外键）";
+    const summary = document.createElement("div");
+    summary.className = "er-match-summary";
+    summary.textContent = `${matchResult.stats.total} 条推断 · 高置信 ${matchResult.stats.high} · 中置信 ${matchResult.stats.medium} · 冲突 ${matchResult.conflicts.length}`;
+
+    const toggleWrap = document.createElement("label");
+    toggleWrap.className = "er-match-toggle";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.checked = autoMatch;
+    toggle.addEventListener("change", () => {
+      autoMatch = toggle.checked;
+      setAutoMatchEnabled(autoMatch);
+      recomputeRelationships();
+      rebuildLayout(false);
+      renderAll();
+    });
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "在图上显示";
+    toggleWrap.append(toggle, toggleText);
+    head.append(title, summary, toggleWrap);
+
+    const body = document.createElement("div");
+    body.className = "er-match-body";
+
+    if (!inferredAll.length) {
+      const empty = document.createElement("p");
+      empty.className = "er-match-empty";
+      empty.textContent = tables.length
+        ? "没有可推断的关系：需要目标表存在主键，且列名形如 user_id / userId / order_uuid。"
+        : "尚未加载表结构。";
+      body.appendChild(empty);
+    } else {
+      for (const rel of inferredAll) {
+        body.appendChild(renderMatchRow(rel));
+      }
+    }
+
+    matchPanel.replaceChildren(head, body);
+  }
+
+  function renderMatchRow(rel: InferredRelationship): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "er-match-row";
+    if (matchResult.conflicts.some((item) => item.id === rel.id)) row.classList.add("conflict");
+    if (matchConfirms.includes(rel.id)) row.classList.add("confirmed");
+    if (matchIgnores.includes(rel.id)) row.classList.add("ignored");
+
+    const label = document.createElement("div");
+    label.className = "er-match-label";
+    const pair = document.createElement("div");
+    pair.className = "er-match-pair";
+    pair.textContent = `${rel.sourceTable}.${rel.sourceColumn} → ${rel.targetTable}.${rel.targetColumn}`;
+    const meta = document.createElement("div");
+    meta.className = "er-match-meta";
+    const confidence = rel.confidence === "high" ? "高置信" : "中置信";
+    const conflictHint = matchResult.conflicts.some((item) => item.id === rel.id) ? " · 多目标冲突，需人工选择" : "";
+    meta.textContent = `${confidence} · ${describeStrategy(rel)}${conflictHint}`;
+    label.append(pair, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "er-match-actions";
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "er-match-btn";
+    confirmBtn.textContent = matchConfirms.includes(rel.id) ? "已确认" : "确认";
+    confirmBtn.disabled = matchConfirms.includes(rel.id);
+    confirmBtn.addEventListener("click", () => {
+      matchConfirms = toggleMatchId(matchConfirms, rel.id, true);
+      matchIgnores = toggleMatchId(matchIgnores, rel.id, false);
+      saveMatchConfirms(matchConfirms, connectionId, database);
+      saveMatchIgnores(matchIgnores, connectionId, database);
+      recomputeRelationships();
+      rebuildLayout(false);
+      renderAll();
+    });
+    const ignoreBtn = document.createElement("button");
+    ignoreBtn.type = "button";
+    ignoreBtn.className = "er-match-btn ghost";
+    ignoreBtn.textContent = matchIgnores.includes(rel.id) ? "已忽略" : "忽略";
+    ignoreBtn.disabled = matchIgnores.includes(rel.id);
+    ignoreBtn.addEventListener("click", () => {
+      matchIgnores = toggleMatchId(matchIgnores, rel.id, true);
+      matchConfirms = toggleMatchId(matchConfirms, rel.id, false);
+      saveMatchIgnores(matchIgnores, connectionId, database);
+      saveMatchConfirms(matchConfirms, connectionId, database);
+      recomputeRelationships();
+      rebuildLayout(false);
+      renderAll();
+    });
+    actions.append(confirmBtn, ignoreBtn);
+    row.append(label, actions);
+    return row;
   }
 
   // ---------------------------------------------------------------- 布局与渲染
@@ -327,8 +540,109 @@ export function openErDiagramDialog(
         }
       }
     }
+    // 内置分层布局给出初始坐标；ELK 结果（若可用）在 applyElkLayout 里覆盖。
+    edgePaths.clear();
     applyViewport();
   }
+
+  // ---------------------------------------------------------------- ELK 自动布局
+
+  /** 当前可见表卡片的障碍矩形，供边路由绕行。 */
+  function obstacleRects(): ObstacleRect[] {
+    return nodes.map((node) => ({ id: node.table.name, x: node.x, y: node.y, width: node.width, height: node.height }));
+  }
+
+  /**
+   * 用 ELK 分层算法重排当前可见表，并把 ELK 算出的正交拐点用作关系折线。
+   * 大图跳过 ELK（Sugiyama 在数百节点上会明显变慢），退回网格布局。
+   */
+  async function applyElkLayout(): Promise<void> {
+    if (disposed || layoutRunning || mode !== "tables") return;
+    const filtered = filterTables(tables, search.value);
+    if (!filtered.length) return;
+    layoutRunning = true;
+    layoutBtn.classList.add("busy");
+    layoutBtn.textContent = "布局中…";
+    const generation = loadGeneration;
+    try {
+      const visibleSet = new Set(filtered.map((t) => t.name));
+      const edges = relationships
+        .filter((rel) => visibleSet.has(rel.sourceTable) && visibleSet.has(rel.targetTable))
+        .map((rel) => ({ id: rel.id, source: rel.sourceTable, target: rel.targetTable }));
+
+      if (filtered.length > ELK_NODE_LIMIT || edges.length > ELK_EDGE_LIMIT) {
+        const positions = computeGridLayout(
+          filtered.map((table) => ({ table, width: 260, height: cardHeightOf(table) })),
+          relationships.filter((rel) => visibleSet.has(rel.sourceTable) && visibleSet.has(rel.targetTable)),
+          canvasSize.width || 1200,
+        );
+        for (const node of nodes) {
+          const pos = positions[node.table.name];
+          if (pos) { node.x = pos.x; node.y = pos.y; }
+        }
+        edgePaths.clear();
+      } else {
+        const result = await computeElkLayout(
+          filtered.map((table) => ({ table, width: 260, height: cardHeightOf(table) })),
+          edges,
+          { direction: layoutDirection },
+        );
+        // 布局期间用户可能切换了连接/库或关闭了对话框。
+        if (disposed || generation !== loadGeneration) return;
+        if (result.applied) {
+          for (const node of nodes) {
+            const pos = result.positions[node.table.name];
+            if (pos) { node.x = pos.x; node.y = pos.y; }
+          }
+          edgePaths.clear();
+          for (const [id, points] of Object.entries(result.edgeWaypoints)) {
+            edgePaths.set(id, points);
+          }
+          // 布局结果需要持久化，否则刷新会跳回旧位置。
+          persistPositions();
+        }
+      }
+      dirtyEdges = new Set(edgesById.keys());
+      fullRenderPending = true;
+      applyViewport();
+      void Promise.resolve().then(fitView);
+    } finally {
+      layoutRunning = false;
+      layoutBtn.classList.remove("busy");
+      layoutBtn.textContent = "自动布局";
+    }
+  }
+
+  function cardHeightOf(table: ErTable): number {
+    // 与渲染共用的卡片高度口径（含表头与裁剪后的列体）。
+    return 34 + Math.min(table.columns.length * 22, 240) + 2;
+  }
+
+  function persistPositions(): void {
+    const positions: Record<string, { x: number; y: number }> = {};
+    for (const node of nodes) positions[node.table.name] = { x: node.x, y: node.y };
+    savePositions(connectionId, database, positions);
+  }
+
+  /**
+   * 关系折线：优先用 ELK 拐点，否则用避障路由绕开中间卡片。
+   * 端点由节点矩形实时算出，保证拖拽时连线跟随。
+   */
+  function edgePolyline(rel: ErRelationship, source: DiagramNodeLike, target: DiagramNodeLike): RoutePoint[] {
+    const endpoints = edgeEndpoints(source, target);
+    const elk = edgePaths.get(rel.id);
+    if (elk && elk.length >= 2) return elk;
+    return routeEdge({
+      source: { x: endpoints.x1, y: endpoints.y1 },
+      target: { x: endpoints.x2, y: endpoints.y2 },
+      sourceSide: inferSide({ x: endpoints.x1, y: endpoints.y1 }, { x: endpoints.x2, y: endpoints.y2 }),
+      targetSide: inferTargetSide({ x: endpoints.x1, y: endpoints.y1 }, { x: endpoints.x2, y: endpoints.y2 }),
+      obstacles: obstacleRects(),
+      endpointIds: [rel.sourceTable, rel.targetTable],
+    });
+  }
+
+  type DiagramNodeLike = ReturnType<typeof computeLayout>[number];
 
   // 平移、缩放、拖拽和 ResizeObserver 共用一个有终止条件的帧；不在 mousemove 重建 DOM。
   let renderFrame: number | null = null;
@@ -390,15 +704,22 @@ export function openErDiagramDialog(
     for (const id of dirtyEdges) {
       const rel = edgesById.get(id);
       if (!rel) continue;
-      const endpoints = edgeEndpoints(nodeByName.get(rel.sourceTable)!, nodeByName.get(rel.targetTable)!);
+      const source = nodeByName.get(rel.sourceTable);
+      const target = nodeByName.get(rel.targetTable);
+      if (!source || !target) continue;
+      const endpoints = edgeEndpoints(source, target);
       let mounted = mountedEdges.get(id);
       if (clip && !intersectsDiagramViewport(edgeBounds(endpoints), bounds)) {
         if (mounted) { mounted.path.remove(); mounted.source.remove(); mounted.target.remove(); mountedEdges.delete(id); }
       } else {
         mounted ??= mountTableEdge(id, rel);
-        mounted.path.setAttribute("d", orthogonalPath(endpoints));
-        moveCardinalityBadge(mounted.source, endpoints.x1, endpoints.y1, "source");
-        moveCardinalityBadge(mounted.target, endpoints.x2, endpoints.y2, "target");
+        const points = edgePolyline(rel, source, target);
+        mounted.path.setAttribute("d", pointsToSvgPath(points));
+        // 端点徽标落在折线首尾，绕行后也不会偏离卡片。
+        const head = points[0] ?? { x: endpoints.x1, y: endpoints.y1 };
+        const tail = points[points.length - 1] ?? { x: endpoints.x2, y: endpoints.y2 };
+        moveCardinalityBadge(mounted.source, head.x, head.y, "source");
+        moveCardinalityBadge(mounted.target, tail.x, tail.y, "target");
       }
       dirtyEdges.delete(id);
     }
@@ -450,7 +771,8 @@ export function openErDiagramDialog(
   function renderStats(): void {
     const relCount = relationships.filter((r) => visibleNames.has(r.sourceTable) && visibleNames.has(r.targetTable)).length;
     const pending = pendingCount();
-    stats.textContent = `${visibleNames.size} 张表 · ${relCount} 条关系 · ${Math.round(viewport.zoom * 100)}%${pending ? ` · ${pending} 项待同步` : ""}`;
+    const inferred = inferredCount();
+    stats.textContent = `${visibleNames.size} 张表 · ${relCount} 条关系${inferred ? `（含 ${inferred} 条推断）` : ""} · ${Math.round(viewport.zoom * 100)}%${pending ? ` · ${pending} 项待同步` : ""}`;
   }
 
   /** 渲染全部（按模式）。 */
@@ -458,6 +780,7 @@ export function openErDiagramDialog(
     modeTables.classList.toggle("active", mode === "tables");
     modeEng.classList.toggle("active", mode === "engineering");
     renderStats();
+    renderMatchPanel();
     applyViewport();
     updateInspector();
     renderPending();
@@ -493,17 +816,21 @@ export function openErDiagramDialog(
     // 连线按自身 bbox 裁剪，不能仅看两端节点是否挂载。
     const wantedEdges = new Set<string>();
     for (const [id, rel] of edgesById) {
-      const source = nodeByName.get(rel.sourceTable)!;
-      const target = nodeByName.get(rel.targetTable)!;
+      const source = nodeByName.get(rel.sourceTable);
+      const target = nodeByName.get(rel.targetTable);
+      if (!source || !target) continue;
       const endpoints = edgeEndpoints(source, target);
       if (clip && !intersectsDiagramViewport(edgeBounds(endpoints), bounds)) continue;
       wantedEdges.add(id);
       const mounted = mountedEdges.get(id) ?? mountTableEdge(id, rel);
       if (dirtyEdges.has(id)) {
-        mounted.path.setAttribute("d", orthogonalPath(endpoints));
+        const points = edgePolyline(rel, source, target);
+        mounted.path.setAttribute("d", pointsToSvgPath(points));
         // 路径与两端基数共用同一份坐标，拖拽时徽标不会留在原地。
-        moveCardinalityBadge(mounted.source, endpoints.x1, endpoints.y1, "source");
-        moveCardinalityBadge(mounted.target, endpoints.x2, endpoints.y2, "target");
+        const head = points[0] ?? { x: endpoints.x1, y: endpoints.y1 };
+        const tail = points[points.length - 1] ?? { x: endpoints.x2, y: endpoints.y2 };
+        moveCardinalityBadge(mounted.source, head.x, head.y, "source");
+        moveCardinalityBadge(mounted.target, tail.x, tail.y, "target");
         dirtyEdges.delete(id);
       }
       mounted.path.classList.toggle("highlight", rel.sourceTable === selectedTable || rel.targetTable === selectedTable);
@@ -522,8 +849,12 @@ export function openErDiagramDialog(
   function mountTableEdge(id: string, rel: ErRelationship): NonNullable<ReturnType<typeof mountedEdges.get>> {
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.classList.add("er-edge");
+    // 虚拟外键用虚线，和物理外键区分。
+    if (rel.kind === "inferred") path.classList.add("inferred");
+    if (rel.kind === "custom") path.classList.add("custom");
     path.dataset.source = rel.sourceTable;
     path.dataset.target = rel.targetTable;
+    path.dataset.kind = rel.kind;
     const mounted = { path, source: cardinalityBadge(0, 0, rel.sourceCardinality, "source"),
       target: cardinalityBadge(0, 0, rel.targetCardinality, "target") };
     path.classList.toggle("highlight", rel.sourceTable === selectedTable || rel.targetTable === selectedTable);
@@ -1033,9 +1364,12 @@ export function openErDiagramDialog(
     void Promise.resolve().then(fitView);
   });
   layoutBtn.addEventListener("click", () => {
-    rebuildLayout(true);
-    renderAll();
-    void Promise.resolve().then(fitView);
+    void applyElkLayout();
+  });
+  dirSelect.addEventListener("change", () => {
+    layoutDirection = dirSelect.value as LayoutDirection;
+    // 切方向即重排，否则用户要再点一次「自动布局」。
+    void applyElkLayout();
   });
   fitBtn.addEventListener("click", () => fitView());
   zoomInBtn.addEventListener("click", () => {

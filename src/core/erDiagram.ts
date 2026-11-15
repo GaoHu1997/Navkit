@@ -49,7 +49,8 @@ export interface ErRelationship {
   fkName: string;
   sourceCardinality: Cardinality;
   targetCardinality: Cardinality;
-  kind: "foreign-key" | "custom";
+  /** foreign-key：物理外键（实线）；custom：用户建模；inferred：自动匹配的虚拟外键（虚线）。 */
+  kind: "foreign-key" | "custom" | "inferred";
 }
 
 /** 表卡片节点（布局结果）。 */

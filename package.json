@@ -35,7 +35,8 @@
     "@codemirror/view": "^6.36.2",
     "@lezer/highlight": "^1.2.1",
     "@tauri-apps/api": "^2.2.0",
-    "@tauri-apps/plugin-dialog": "^2.8.4"
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "elkjs": "0.12.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.7",
