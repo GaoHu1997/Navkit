@@ -483,8 +483,9 @@ async fn legacy_side(db: &Db, kind: &DbKind, schema: &str, table: &str, clause: 
             let mut connection=pool.acquire().await?;
             connection.close_on_drop();
             let result:Result<u64>=async {
-                crate::sql_history::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").execute(&mut *connection).await?;
-                (&mut *connection).execute("START TRANSACTION READ ONLY").await?;
+                // TiDB 的 READ ONLY 只是 noop 占位（默认 1235），按服务端版本降级为普通事务。
+                let (version,comment):(String,String)=crate::sql_history::query_as("SELECT @@version, @@version_comment").fetch_one(&mut *connection).await?;
+                if crate::db::mysql_read_only_unsupported(&version,&comment){(&mut *connection).execute("START TRANSACTION").await?;}else{crate::sql_history::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").execute(&mut *connection).await?;(&mut *connection).execute("START TRANSACTION READ ONLY").await?;}
                 // Nontransactional tables cannot promise the same preflight/data snapshot.
                 let namespace=if schema.is_empty(){crate::sql_history::query_scalar::<_,String>("SELECT DATABASE()").fetch_one(&mut *connection).await?}else{schema.to_owned()};
                 let engine=crate::sql_history::query("SELECT ENGINE,TABLE_TYPE FROM information_schema.tables WHERE table_schema=? AND table_name=?")

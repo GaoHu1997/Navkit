@@ -64,7 +64,7 @@ try {
   assert.equal(await page.locator('.result-preview-note:visible').count(), 0);
   assert.equal(await pager.locator('.query-page-range').count(), 0);
   const footerStatus = pager.locator('.query-footer-status');
-  assert.match(await footerStatus.innerText(), /运行时间: 0.456s.*第 1–200 行.*共 100001 行/);
+  assert.match(await footerStatus.innerText(), /运行时间: 0.456s.*第 1\/501 页（共 100001 行）/);
   assert.doesNotMatch(await page.locator('.statusbar').innerText(), /运行时间|共 100001 行/);
   const footerPosition = await pager.evaluate(el => ({ left: el.getBoundingClientRect().left, statusLeft: el.querySelector('.query-footer-status').getBoundingClientRect().left, inputLeft: el.querySelector('input').getBoundingClientRect().left }));
   assert(footerPosition.statusLeft - footerPosition.left <= 10);
@@ -74,7 +74,7 @@ try {
   await input.fill('501'); await input.press('Enter');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).offset === 100000);
   assert.equal(await input.inputValue(), '501');
-  assert.match(await footerStatus.innerText(), /100001–100001/);
+  assert.match(await footerStatus.innerText(), /第 501\/501 页/);
   assert.equal(await firstRowNumber.innerText(), '100001');
   await input.fill('2'); await input.press('Tab');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).offset === 200);
@@ -92,14 +92,14 @@ try {
   assert(sizePosition.selectRight < sizePosition.firstButtonLeft);
   await pageSize.selectOption('500');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).rows.length === 500);
-  assert.equal(await input.inputValue(), '1'); assert.match(await footerStatus.innerText(), /第 1–500 行/);
+  assert.equal(await input.inputValue(), '1'); assert.match(await footerStatus.innerText(), /第 1\/201 页/);
   assert.equal(await firstRowNumber.innerText(), '1');
   await pageSize.selectOption('1000');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).rows.length === 1000);
-  assert.match(await footerStatus.innerText(), /第 1–1000 行/);
+  assert.match(await footerStatus.innerText(), /第 1\/101 页/);
   await pager.getByRole('button', { name: '下一页（读取本次执行缓存，不重新执行 SQL）' }).click();
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).offset === 1000);
-  assert.equal(await input.inputValue(), '2'); assert.match(await footerStatus.innerText(), /第 1001–2000 行/);
+  assert.equal(await input.inputValue(), '2'); assert.match(await footerStatus.innerText(), /第 2\/101 页/);
   assert.equal(await firstRowNumber.innerText(), '1001');
   const renderedRows = await page.locator('tbody tr[data-row]:visible').evaluateAll(rows => rows.map(row => ({ index: Number(row.dataset.row), number: row.querySelector('.grid-row-header')?.textContent })));
   assert(renderedRows.every(row => row.number === String(row.index + 1001)));

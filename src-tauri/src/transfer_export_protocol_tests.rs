@@ -46,13 +46,13 @@ async fn mysql_wire_simulation_exports_views_without_weakening_innodb_and_keeps_
     let fixture=Fixture::start("mysql").await;
     let pool=sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(fixture.port).username("fixture").password("fixture").database("fixture").ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await.unwrap();
     let db=Db::Mysql(pool.clone());let kind=DbKind::of("mysql");
-    for (table,format,count) in [("base","csv",2),("selected_view","json",2),("empty_view","csv",0),("selected_view","sql",0),("base","sql",2)] {
+    for (table,format,count) in [("base","csv",2),("selected_view","json",2),("empty_view","csv",0),("selected_view","sql",0),("base","sql",2),("year_values","json",5)] {
         let before=fixture.wire().len();let request=options(&fixture,"fixture",table,&format!("{table}.{format}"),format,None);
         assert_eq!(crate::transfer::run_export_task(&db,&kind,&request).await.unwrap(),count);
         let text=std::fs::read_to_string(&request.options.file).unwrap();
         if table=="selected_view"&&format=="sql" {assert!(text.contains("CREATE VIEW `fixture`.`selected_view`"));assert!(!text.contains("INSERT INTO"));}
         if table=="empty_view" {assert!(text.starts_with("id,payload,nullable,note\r\n"));}
-        if format=="json" {let rows:serde_json::Value=serde_json::from_str(&text).unwrap();assert_eq!(rows[0]["id"],"9223372036854775807");assert_eq!(rows[0]["payload"],"0x00FF8027");assert!(rows[0]["nullable"].is_null());assert_eq!(rows[1]["nullable"],"");}
+        if format=="json" {let rows:serde_json::Value=serde_json::from_str(&text).unwrap();if table=="year_values" {for (index,year) in ["0","1901","2026","2155"].iter().enumerate(){assert_eq!(rows[index]["c_year"],*year);}assert!(rows[4]["c_year"].is_null());}else{assert_eq!(rows[0]["id"],"9223372036854775807");assert_eq!(rows[0]["payload"],"0x00FF8027");assert!(rows[0]["nullable"].is_null());assert_eq!(rows[1]["nullable"],"");}}
         if table=="base"&&format=="sql" {assert!(text.contains("X'00FF8027'"));}
         let wire=fixture.wire();let data:Vec<_>=wire[before..].iter().filter(|row|data_select(row)).collect();
         assert_eq!(data.len(),if table=="selected_view"&&format=="sql" {0}else{1});
@@ -65,6 +65,8 @@ async fn mysql_wire_simulation_exports_views_without_weakening_innodb_and_keeps_
     let mut data_dump=dump_options(&fixture,"fixture","base");data_dump.data_only=true;data_dump.file=fixture.file("legacy-data.sql");
     let before=fixture.wire().len();assert_eq!(crate::transfer::dump(&db,&kind,&data_dump).await.unwrap(),2);let sql=std::fs::read_to_string(&data_dump.file).unwrap();assert!(sql.contains("X'00FF8027'"));assert_eq!(fixture.wire()[before..].iter().filter(|row|data_select(row)).count(),1);
     let before=fixture.wire().len();let file=fixture.file("database-data.sql");let (rows,bytes)=crate::transfer::dump_database(&db,&kind,"fixture",&["base".into()],&[],false,true,&file,"").await.unwrap();assert_eq!(rows,2);assert_eq!(bytes,std::fs::metadata(&file).unwrap().len());assert_eq!(fixture.wire()[before..].iter().filter(|row|data_select(row)).count(),1);
+    let archive=std::fs::read_to_string(&file).unwrap();assert!(archive.contains("INSERT INTO `base` ("));assert!(!archive.contains("INSERT INTO `fixture`.`base`"));
+    assert!(std::fs::read_to_string(&data_dump.file).unwrap().contains("INSERT INTO `fixture`.`base`"),"single-table data export retains its explicit target");
     for table in ["unsafe","mixed_view"] {
         let before=fixture.wire().len();let request=options(&fixture,"fixture",table,&format!("{table}.csv"),"csv",None);
         let error=crate::transfer::run_export_task(&db,&kind,&request).await.unwrap_err();assert!(format!("{error:#}").contains("InnoDB"));assert!(!Path::new(&request.options.file).exists());assert!(!fixture.wire()[before..].iter().any(data_select));

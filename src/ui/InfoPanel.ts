@@ -15,6 +15,7 @@
  */
 
 import { ICON_INFO_CIRCLE, svg, iconSvgLarge, iconSvgByName, linearIcon } from "./icons";
+import { highlightSql } from "./sql-highlight";
 
 /** 资源名 → v2 线性图标 key（信息面板对象头用强调色线性图标）。 */
 const LINEAR_KEY_BY_RES: Record<string, string> = {
@@ -597,46 +598,3 @@ export class InfoPanel {
   }
 }
 
-/** SQL 简单语法高亮（DDL 页）：注释 / 字符串 / 关键字 / 类型。 */
-function highlightSql(sql: string): string {
-  const esc = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const KEYWORDS = new Set([
-    "CREATE", "TABLE", "PRIMARY", "KEY", "NOT", "NULL", "DEFAULT", "ENGINE",
-    "CHARSET", "COLLATE", "COMMENT", "AUTO_INCREMENT", "UNSIGNED", "ZEROFILL",
-    "UNIQUE", "INDEX", "CONSTRAINT", "FOREIGN", "REFERENCES", "ON", "DELETE",
-    "UPDATE", "CASCADE", "SET", "VIEW", "AS", "SELECT", "FROM", "WHERE", "AND",
-    "OR", "IF", "EXISTS", "REPLACE", "ALTER", "ADD", "DROP", "COLUMN", "TYPE",
-    "GENERATED", "ALWAYS", "STORED", "VIRTUAL", "PARTITION", "BY", "RANGE",
-    "LIST", "HASH", "CHECK", "UNIQUE", "TEMPORARY", "INCREMENT", "START",
-  ]);
-  const TYPES = new Set([
-    "INT", "BIGINT", "SMALLINT", "TINYINT", "MEDIUMINT", "VARCHAR", "CHAR",
-    "DECIMAL", "NUMERIC", "FLOAT", "DOUBLE", "REAL", "TEXT", "LONGTEXT",
-    "MEDIUMTEXT", "TINYTEXT", "BLOB", "LONGBLOB", "DATETIME", "TIMESTAMP",
-    "DATE", "TIME", "YEAR", "BIT", "BOOLEAN", "BOOL", "ENUM", "JSON", "UUID",
-    "SERIAL", "BIGSERIAL", "TINYBLOB", "MEDIUMBLOB", "VARBINARY", "BINARY",
-  ]);
-  // 逐 token 扫描：注释 / 字符串 / 反引号标识符 / 单词
-  const re = /(--[^\n]*|\/\*[\s\S]*?\*\/|'(?:[^'\\]|\\.|'')*'|"(?:[^"\\]|\\.)*"|`[^`]*`|[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|\s+|.)/g;
-  let out = "";
-  for (const m of sql.matchAll(re)) {
-    const tok = m[0];
-    const first = tok[0];
-    if (first === "-" || first === "/") {
-      out += `<span class="ddl-comment">${esc(tok)}</span>`;
-    } else if (first === "'" || first === '"') {
-      out += `<span class="ddl-str">${esc(tok)}</span>`;
-    } else if (first === "`") {
-      out += `<span class="ddl-ident">${esc(tok)}</span>`;
-    } else if (/^[A-Za-z_]/.test(tok)) {
-      const up = tok.toUpperCase();
-      if (KEYWORDS.has(up)) out += `<span class="ddl-kw">${esc(tok)}</span>`;
-      else if (TYPES.has(up)) out += `<span class="ddl-type">${esc(tok)}</span>`;
-      else out += esc(tok);
-    } else {
-      out += esc(tok);
-    }
-  }
-  return out;
-}

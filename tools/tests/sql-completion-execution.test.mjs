@@ -527,14 +527,14 @@ test('spool paging replaces rows, navigates the cached total beyond 10000 and is
   const pages = new QueryResultPages(200), result = spoolResult('spool', [10001, 700]);
   pages.replace(result, spoolContext);
   assert.equal(result.sets[0].rows.length, 200);
-  assert.equal(pages.range(0), '第 1–200 行 / 共 10001 行');
+  assert.equal(pages.range(0), '第 1/51 页（共 10001 行）');
   const read = async (_scope, index, offset, limit) => ({ rows: Array.from({ length: Math.min(limit, result.sets[index].total - offset) }, (_, i) => [String(offset + i)]), total: result.sets[index].total, truncated: false, message: '' });
   await pages.fetch(0, pages.offset(0, 'next'), read);
   assert.equal(result.sets[0].rows.length, 200); assert.equal(result.sets[0].rows[0][0], '200');
   assert.equal(pages.page(1).offset, 0); assert.equal(result.sets[1].rows[0][0], '0');
   await pages.fetch(0, pages.offset(0, 'last'), read);
   assert.equal(pages.page(0).offset, 10000); assert.equal(result.sets[0].rows.at(-1)[0], '10000');
-  assert.equal(pages.range(0), '第 10001–10001 行 / 共 10001 行');
+  assert.equal(pages.range(0), '第 51/51 页（共 10001 行）');
   await pages.fetch(0, pages.offset(0, 'previous'), read); assert.equal(pages.page(0).offset, 200);
   await pages.fetch(0, pages.offset(0, 'first'), read); assert.equal(pages.page(0).offset, 0);
 });
@@ -571,8 +571,8 @@ test('real query result controls page from spool and keep exact keyboard accessi
   await view.loadResultPage('next'); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.grid.data.rows.length, 200); assert.equal(view.grid.data.rows[0][0], '200');
   assert.equal(view.grid.data.rowNumberOffset, 200);
-  assert.match(view.statusInfo().pageText, /201–400/);
-  assert.equal(view.pageNumberInput.value, "2"); assert.match(view.footerStatusEl.textContent, /运行时间: 0.001s.*201–400/);
+  assert.match(view.statusInfo().pageText, /第 2\/51 页/);
+  assert.equal(view.pageNumberInput.value, "2"); assert.match(view.footerStatusEl.textContent, /运行时间: 0.001s.*第 2\/51 页/);
   view.resultTabsEl.children[2].fire('click'); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(tab.activeResult, 1); assert.equal(view.grid.data.rows[0][0], '0');
   assert.equal(view.grid.data.rowNumberOffset, 0);
@@ -694,7 +694,7 @@ test('manual page entry validates boundaries and jumps via cached offsets withou
   const { view, api, calls, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
   api.executeSql = async (_id, sql) => { calls.push(['execute', sql]); return spoolResult('numbered', [10001]); }; await view.execute('SELECT value FROM t', false);
   await readOnlyResultsSettled(view, evidenceCalls);
-  assert.equal(view.pageNumberInput.value, '1'); assert.match(view.footerStatusEl.textContent, /运行时间: 0.001s.*第 1–200 行/);
+  assert.equal(view.pageNumberInput.value, '1'); assert.match(view.footerStatusEl.textContent, /运行时间: 0.001s.*第 1\/51 页/);
   assert.equal(view.resultPager.children[0], view.footerStatusEl);
   assert.equal(view.pageCountEl, undefined);
   for (const value of ['', '0', '-1', '1.5', 'abc', '52', '1e1', '9007199254740993']) {
@@ -706,7 +706,7 @@ test('manual page entry validates boundaries and jumps via cached offsets withou
   await readOnlyResultsSettled(view, evidenceCalls); await new Promise(resolve => setImmediate(resolve));
   await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.resultPages.page(0).offset, 10000); assert.equal(view.pageNumberInput.value, '51');
-  assert.match(view.statusInfo().pageText, /10001–10001/);
+  assert.match(view.statusInfo().pageText, /第 51\/51 页/);
   view.pageNumberInput.value = '2'; view.pageNumberInput.fire('blur');
   await new Promise(resolve => setImmediate(resolve)); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.resultPages.page(0).offset, 200);

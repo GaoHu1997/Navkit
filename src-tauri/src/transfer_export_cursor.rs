@@ -89,11 +89,18 @@ pub(super) async fn view_definition(db:&Db, kind:&DbKind, schema:&str, name:&str
 
 /// 旧转储入口复用同一个有界数据游标，写入调用者已固定的 stage；不发布中间文件。
 pub(super) async fn append_dump_data(db: &Db, kind: &DbKind, schema: &str, table: &str, stage: &StagedOutput) -> Result<u64> {
+    append_dump_data_to_schema(db, kind, schema, table, stage, None).await
+}
+
+/// Append table data while optionally rewriting only the SQL INSERT target.
+/// The source schema remains the read scope; a target schema is used solely for
+/// cross-database restore archives, never by the SELECT or metadata query.
+pub(super) async fn append_dump_data_to_schema(db: &Db, kind: &DbKind, schema: &str, table: &str, stage: &StagedOutput, target_schema: Option<&str>) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
     let task = TaskControl::begin(&format!("dump_{}", uuid::Uuid::new_v4().simple()))?;
     let options = ExportOptions { connection_id: String::new(), schema: schema.into(), table: table.into(), file: String::new(), format: "sql".into(), delimiter: ",".into(), encoding: "utf8".into(), has_header: true, where_clause: None, limit: None };
-    let result = export_cursor(db, kind, &options, &task, stage).await;
+    let result = export_cursor_with_sql_schema(db, kind, &options, &task, stage, target_schema).await;
     task.finish(&result);
     result
 
@@ -101,6 +108,10 @@ pub(super) async fn append_dump_data(db: &Db, kind: &DbKind, schema: &str, table
 }
 
 pub(super) async fn export_cursor(db: &Db, kind: &DbKind, options: &ExportOptions, task: &TaskControl, stage: &StagedOutput) -> Result<u64> {
+    export_cursor_with_sql_schema(db, kind, options, task, stage, None).await
+}
+
+async fn export_cursor_with_sql_schema(db: &Db, kind: &DbKind, options: &ExportOptions, task: &TaskControl, stage: &StagedOutput, target_schema: Option<&str>) -> Result<u64> {
     let __sql_history_context = crate::sql_history::db_context(db);
     crate::sql_history::scope(__sql_history_context, async {
     let sql = if matches!(db, Db::Mongo(_) | Db::Http(_) | Db::Redis(_)) { String::new() } else { select_sql(kind, options)? };
@@ -134,7 +145,7 @@ pub(super) async fn export_cursor(db: &Db, kind: &DbKind, options: &ExportOption
                     if actual.columns().len() != names.len() || actual.columns().iter().zip(&names).any(|(column, name)| column.name() != name) { bail!("MONEY 文本投影与原始对象列元数据不一致"); }
                     actual.columns().iter().map(|column| column.type_info().name().to_owned()).collect::<Vec<_>>()
                 } else { types.clone() };
-                let mut sink = ExportSink::create(stage, &options.format.to_ascii_lowercase(), kind, &options.schema, &options.table, &names, &types, &options.delimiter, options.has_header, &options.encoding)?;
+                let mut sink = ExportSink::create_with_sql_schema(stage, &options.format.to_ascii_lowercase(), kind, &options.schema, &options.table, &names, &types, &options.delimiter, options.has_header, &options.encoding, target_schema)?;
                 // 一个 SELECT 对应一个 statement snapshot，空结果仍有 describe 的完整列元数据。
                 let mut stream = crate::sql_history::query(&execution_sql).fetch(&mut *connection);
                 let mut count = 0u64;

@@ -40,3 +40,13 @@ impl Fixture{
     let b=f.opened("src").await;assert!(b.public.schema.indexes.iter().any(|i|i.name=="saved_index"&&i.unique));let mut d=b.public.design.clone();d.indexes=None;d.triggers=None;d.checks=Some(vec![CheckDesign{name:"saved_check".into(),orig_name:None,expression:"id>0".into(),generated_name:false}]);let r=f.execute(TableWork::Design(d)).await;assert!(r.result.is_ok(),"{:?}",r.result.err());assert!(r.design.unwrap().receipt.verified);assert!(sqlx::query("INSERT INTO src VALUES(-1,'blocked')").execute(&f.pool).await.is_err());f.sql("INSERT INTO src VALUES(3,'preserved trigger')").await;assert_eq!(f.count("audit").await,2);f.finish().await;
 }
 #[tokio::test]async fn sqlite_unknown_keeps_actual_resource_quarantined_until_drain(){let f=Fixture::new().await;f.sql("CREATE TABLE src(x TEXT)").await;let b=f.opened("src").await;let work=f.operation(&b,"clear",None);let e=f.entry(&work);assert!(e.start());let (tx,rx)=tokio::sync::oneshot::channel::<()>();let mut conn=f.pool.acquire().await.unwrap();sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await.unwrap();sqlx::query("INSERT INTO src VALUES('pending')").execute(&mut *conn).await.unwrap();e.request_stop(false);let (r,proof)=execution::supervise_with_grace(e.clone(),async move{let _=rx.await;sqlx::query("ROLLBACK").execute(&mut *conn).await.unwrap();conn.return_to_pool().await;(Err(AppError::coded("TABLE_STOPPED_ROLLED_BACK","真实事务已回滚")),true)},std::time::Duration::from_millis(1)).await;assert!(!proof);assert_eq!(r.unwrap_err().code,"EXECUTION_EFFECTS_UNKNOWN");assert!(e.status().resources_pending);assert!(f.registry.require_quiescent(&f.binding.connection).is_err());tx.send(()).unwrap();tokio::time::timeout(std::time::Duration::from_secs(2),async{while e.status().resources_pending{tokio::task::yield_now().await;}}).await.unwrap();assert_eq!(f.count("src").await,0);f.finish().await;}
+
+#[test]fn table_design_dialect_gate_allows_native_mysql_pg_and_rejects_incompatible_catalogs(){
+    for kind in ["mysql","mariadb","tidb","oceanbase","polardb","tdsql","goldendb","greatsql","dolt","custom_mysql","postgresql","custom_pg","opengauss","gaussdb","kingbase","highgo","uxdb","vastbase","kwdb","opententbase"]{
+        assert!(require_table_design_dialect(&DbKind::of(kind)).is_ok(),"{kind} 应允许表设计读取");
+    }
+    for kind in ["doris","selectdb","starrocks","databend","manticore","cockroachdb","redshift","cloudberry","questdb"]{
+        let error=require_table_design_dialect(&DbKind::of(kind)).unwrap_err().to_string();
+        assert!(error.contains("TABLE_DESIGN_DIALECT_UNSUPPORTED"),"{kind}: {error}");
+    }
+}

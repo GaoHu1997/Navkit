@@ -376,6 +376,15 @@ pub fn qualified(kind: &DbKind, schema: &str, table: &str) -> String {
 }
 
 
+/// TiDB 的只读事务语法只是 noop 兼容占位（默认未开启 `tidb_enable_noop_functions`），
+/// `START TRANSACTION READ ONLY` 会返回 1235；该方言必须降级为普通事务。
+///
+/// 通过服务端版本与版本注释识别，不能用连接配置里的数据库类型：用户可能用 MySQL
+/// 协议连接一个 TiDB 端点，二者在 catalog 里都是 mysql 族。
+pub fn mysql_read_only_unsupported(version: &str, comment: &str) -> bool {
+    format!("{version} {comment}").to_ascii_lowercase().contains("tidb")
+}
+
 /// 用列名 + 类型构造 ResultColumn。
 fn make_columns(names: &[String], types: &[String]) -> Vec<crate::models::ResultColumn> {
     names
@@ -949,6 +958,10 @@ fn split_protocol_commands(command: &str) -> Vec<String> {
 #[cfg(test)]
 #[path = "db_protocol_dispatch_tests.rs"]
 mod protocol_dispatch_tests;
+
+#[cfg(test)]
+#[path = "mysql_dialect_tests.rs"]
+mod mysql_dialect_tests;
 
 /// 按分号切分 SQL（尊重字符串字面量与注释）。
 pub fn split_statements(sql: &str) -> Vec<String> {

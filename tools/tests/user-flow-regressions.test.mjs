@@ -88,6 +88,106 @@ function environment() {
     driverApi: { testConnection: async () => ({ ok: true }), list: async () => [] }, openFile: async () => null,
   });
 }
+function treeHarness(kind = 'mysql') {
+  const gates = [], errors = [];
+  const context = environment();
+  context.api = { listDatabases: () => new Promise((resolve, reject) => gates.push({ resolve, reject })),
+    listTables: async () => [['fresh_table', 'table']] };
+  context.namespaceType = () => 'database'; context.namespaceName = () => '数据库';
+  runTs(`globalThis.TreeApp = class { treeLoads = new WeakMap(); ${members('App', ['toggleNode', 'loadChildren', 'cmdTreeRefresh', 'cmdCloseConnection'])} };`, context);
+  const app = new context.TreeApp();
+  const node = { id: 'conn:a', type: 'connection', children: [], expandable: true, expanded: false, loaded: false };
+  let live = node;
+  Object.assign(app, {
+    connections: [{ id: 'a', kind }], favorites: [], openConnections: new Set(['a']), openDbs: new Set(), tabs: [],
+    tree: { find: id => id === live?.id ? live : undefined, selectedNodeId: node.id, render() {} },
+    ensureConnection: async () => {}, syncConnIcons() {}, toast: (...args) => errors.push(args),
+    currentConnectionId: () => 'a', guardLeave: async (_ids, _label, action) => { await action(); return true; },
+    manualTransactionController: { closeConnection: async () => true }, suspendDatasourceTabs() {}, stopKeepAlive() {},
+  });
+  return { app, node, gates, errors, replace: replacement => { live = replacement; } };
+}
+const treeSettle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+
+test('D5: collapse/re-expand refreshes added and removed databases and retains unchanged subtrees', async () => {
+  const h = treeHarness();
+  const first = h.app.toggleNode(h.node); await treeSettle();
+  h.gates[0].resolve([['keep'], ['removed']]); await first;
+  const keep = h.node.children[0]; keep.expanded = keep.loaded = true; keep.children = [{ id: 'cached-table' }];
+  await h.app.toggleNode(h.node); assert.equal(h.node.loaded, false);
+  const second = h.app.toggleNode(h.node); await treeSettle();
+  assert.equal(h.gates.length, 2);
+  h.gates[1].resolve([['keep'], ['created']]); await second;
+  assert.deepEqual(plain(h.node.children.map(child => child.label)), ['keep', 'created']);
+  assert.equal(h.node.children[0], keep); assert.equal(keep.expanded, true);
+  assert.equal(keep.children[0].id, 'cached-table'); assert.equal(h.node.loading, false);
+});
+
+test('D5: failed refresh remains retryable, including an empty successful database list', async () => {
+  const h = treeHarness();
+  const first = h.app.toggleNode(h.node); await treeSettle(); h.gates[0].reject(Error('metadata failed')); await first;
+  assert.equal(h.node.loaded, false); assert.equal(h.node.loading, false); assert.equal(h.node.expanded, false);
+  assert.equal(h.errors.length, 1);
+  const second = h.app.toggleNode(h.node); await treeSettle(); h.gates[1].resolve([]); await second;
+  assert.equal(h.node.loaded, true);
+  await h.app.toggleNode(h.node);
+  const third = h.app.toggleNode(h.node); await treeSettle(); h.gates[2].resolve([['new_db']]); await third;
+  assert.equal(h.node.children[0].label, 'new_db');
+});
+
+test('D5: superseded load cannot overwrite a re-expanded connection or clear its pending state', async () => {
+  const h = treeHarness();
+  const old = h.app.toggleNode(h.node); await treeSettle();
+  await h.app.toggleNode(h.node);
+  const fresh = h.app.toggleNode(h.node); await treeSettle();
+  h.gates[0].resolve([['stale']]); await old;
+  assert.equal(h.node.children.length, 0); assert.equal(h.node.loading, true);
+  h.gates[1].resolve([['fresh']]); await fresh;
+  assert.equal(h.node.children[0].label, 'fresh'); assert.equal(h.node.loading, false);
+});
+
+test('D5: explicit refresh supersedes pending load; disconnect and node replacement discard late responses', async () => {
+  for (const action of ['refresh', 'disconnect', 'replace']) {
+    const h = treeHarness(); const pending = h.app.toggleNode(h.node); await treeSettle();
+    if (action === 'refresh') { h.app.cmdTreeRefresh(); await treeSettle(); }
+    if (action === 'disconnect') await h.app.cmdCloseConnection();
+    if (action === 'replace') h.replace({ ...h.node, children: [] });
+    h.gates[0].resolve([['stale']]); await pending;
+    assert.equal(h.node.children.length, 0, action);
+    if (action === 'refresh') {
+      assert.equal(h.node.loading, true); h.gates[1].resolve([['fresh']]); await treeSettle();
+      assert.equal(h.node.children[0].label, 'fresh');
+    }
+    if (action === 'disconnect') { assert.equal(h.node.expanded, false); assert.equal(h.node.loaded, false); }
+  }
+});
+
+test('D5: a late connection handshake cannot mark a collapsed or disconnected node open', async () => {
+  const h = treeHarness();
+  h.app.openConnections.clear();
+  h.app.startKeepAlive = () => { throw Error('stale handshake must not start keepalive'); };
+  const context = environment(); let resolve;
+  context.api = { ensureConnection: () => new Promise(done => { resolve = done; }) };
+  runTs(`globalThis.ensure = class { ${members('App', ['ensureConnection'])} }.prototype.ensureConnection;`, context);
+  h.app.ensureConnection = context.ensure;
+  const pending = h.app.toggleNode(h.node); await treeSettle();
+  await h.app.toggleNode(h.node);
+  resolve({ ok: true }); await pending;
+  assert.equal(h.app.openConnections.has('a'), false); assert.equal(h.gates.length, 0);
+  assert.equal(h.node.loaded, false); assert.equal(h.node.expanded, false);
+});
+
+test('D5: SQLite re-expand refreshes tables while database child collapse remains cached', async () => {
+  const h = treeHarness('sqlite');
+  h.node.children = [{ id: 'stale-table' }]; h.node.loaded = h.node.expanded = true;
+  await h.app.toggleNode(h.node);
+  const pending = h.app.toggleNode(h.node); await treeSettle(); h.gates[0].resolve([['main']]); await pending;
+  assert.equal(h.node.children[0].label, 'fresh_table');
+  const child = { id: 'conn:a/db/main', children: [{ id: 'cached' }], expandable: true, expanded: true, loaded: true };
+  await h.app.toggleNode(child); await h.app.toggleNode(child);
+  assert.equal(child.loaded, true); assert.equal(child.children[0].id, 'cached'); assert.equal(h.gates.length, 1);
+});
+
 function gridView(hidden = []) {
   const context = environment();
   const constructor = sourceClass('DataTabView').members.find(ts.isConstructorDeclaration);

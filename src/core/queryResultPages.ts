@@ -43,9 +43,7 @@ export class QueryResultPages {
   range(index: number): string {
     const page = this.page(index), set = this.result?.sets[index];
     if (!page || !set) return "";
-    const start = page.rows.length ? page.offset + 1 : 0;
-    const end = page.offset + page.rows.length;
-    return this.scope ? `第 ${start}–${page.rows.length ? end : 0} 行 / 共 ${page.total} 行`
+    return this.scope ? `第 ${this.pageNumber(index)}/${this.pageCount(index)} 页（共 ${page.total} 行）`
       : `已加载 ${set.rows.length} / 共 ${set.total} 行（无完整快照，仅可导出已加载行）`;
   }
 

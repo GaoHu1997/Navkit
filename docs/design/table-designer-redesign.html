@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NavKit · 表设计器 · 调整稿 v1</title>
+<style>
+/* 令牌取自 src/styles/base.css，数值与网格规范取自 docs/design/DESIGN.md */
+:root{
+  --n-0:#fff;--n-25:#fbfcfd;--n-50:#f7f8fa;--n-100:#f1f3f6;--n-150:#e8ebef;--n-200:#e4e7ec;
+  --n-300:#d3d8e0;--n-400:#a8b3c1;--n-500:#7d8794;--n-600:#5c6673;--n-700:#3c434e;--n-800:#23272f;
+  --accent-50:#f2f7fe;--accent-100:#e3edfd;--accent-200:#c4d9fa;--accent-300:#9abef6;--accent-400:#6396f3;--accent-500:#3574f0;--accent-600:#2b62d9;--accent-700:#2450b4;
+  --bg-surface:var(--n-0);--bg-subtle:var(--n-50);--bg-sunken:var(--n-100);--bg-hover:var(--n-100);--bg-pressed:var(--n-150);--bg-selected:var(--accent-100);
+  --border:var(--n-200);--border-subtle:var(--n-150);--border-strong:var(--n-300);
+  --text:var(--n-800);--text-secondary:var(--n-600);--text-tertiary:var(--n-500);--text-disabled:var(--n-400);--text-accent:var(--accent-600);
+  --font-ui:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  --font-mono:"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+  --fs-11:11px;--fs-12:12px;--fs-13:13px;
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;
+  --r-1:3px;--r-2:4px;--r-3:6px;--r-4:8px;--r-full:999px;
+  --shadow-1:0 1px 2px rgba(16,24,40,.05);
+  --shadow-2:0 2px 6px rgba(16,24,40,.07),0 1px 2px rgba(16,24,40,.04);
+  --shadow-3:0 12px 32px rgba(16,24,40,.14),0 2px 8px rgba(16,24,40,.06);
+  --shadow-pop:0 4px 16px rgba(16,24,40,.13),0 1px 4px rgba(16,24,40,.08);
+  --h-header:28px;--h-row:30px;--ease-out:cubic-bezier(.2,.8,.2,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-sunken);padding:28px 32px 40px}
+.doc-head{max-width:1240px;margin:0 0 20px}
+.doc-head h1{margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:.01em}
+.doc-head p{margin:0;color:var(--text-secondary);font-size:12px}
+.doc-head .chips{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.chip{height:22px;display:inline-flex;align-items:center;gap:5px;padding:0 8px;border:1px solid var(--border-strong);border-radius:var(--r-full);background:var(--bg-surface);color:var(--text-secondary);font-size:11px}
+.chip b{width:15px;height:15px;display:grid;place-items:center;border-radius:var(--r-full);background:var(--accent-500);color:#fff;font-size:10px;font-weight:600;line-height:1}
+
+.shot{position:relative;width:1240px;margin:0 0 34px}
+.shot-title{display:flex;align-items:baseline;gap:8px;margin:0 0 8px;font-size:11px;color:var(--text-tertiary)}
+.shot-title b{font-size:12px;color:var(--text-secondary);font-weight:600}
+.frame{position:relative;background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:var(--r-3);box-shadow:var(--shadow-2);overflow:visible}
+
+/* ── 命令条 ─────────────────────────────────────────── */
+.cmdbar{height:40px;display:flex;align-items:center;gap:6px;padding:0 var(--sp-3);border-bottom:1px solid var(--border-subtle)}
+.tb{height:26px;display:inline-flex;align-items:center;gap:5px;padding:0 9px;border:1px solid var(--border-strong);border-radius:var(--r-2);background:var(--bg-surface);color:var(--text);font:12px var(--font-ui);cursor:pointer;white-space:nowrap}
+.tb:hover{background:var(--bg-hover)}
+.tb.primary{background:var(--accent-500);border-color:var(--accent-500);color:#fff}
+.tb .ico{width:13px;height:13px;display:block;color:var(--text-secondary)}
+.tb.primary .ico{color:#fff}
+.tb:disabled{color:var(--text-disabled);border-color:var(--border)}
+.tb-sep{width:1px;height:18px;background:var(--border);margin:0 3px}
+
+/* ── 页签 ───────────────────────────────────────────── */
+.tabs{height:34px;display:flex;align-items:center;gap:2px;padding:0 var(--sp-2);background:var(--bg-subtle);border-bottom:1px solid var(--border)}
+.tab{height:26px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid transparent;border-radius:var(--r-2);color:var(--text-secondary);font-size:12px;cursor:pointer}
+.tab:hover{background:var(--bg-hover);color:var(--text)}
+.tab.on{background:var(--bg-surface);border-color:var(--border-strong);color:var(--text);font-weight:600;box-shadow:var(--shadow-1)}
+
+/* ── 网格：列线加强、行线发丝 ─────────────────────────── */
+.grid{border-collapse:separate;border-spacing:0;table-layout:fixed;width:100%}
+.grid th{height:var(--h-header);padding:0 9px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);background:var(--bg-subtle);
+  border-bottom:1px solid var(--border);border-right:1px solid var(--border)}
+.grid th:last-child{border-right:0}
+.grid td{height:var(--h-row);padding:0;border-bottom:1px solid var(--border-subtle);border-right:1px solid var(--border);vertical-align:middle}
+.grid td:last-child{border-right:0}
+.grid tbody tr:last-child td{border-bottom:0}
+.grid tbody tr:hover td{background:var(--n-25)}
+
+/* ── 统一单元格控件：单框 = 值回显 + 右侧自绘 chevron，可直接键入 ── */
+.cell{position:relative;display:flex;align-items:center;gap:6px;height:100%;padding:0 9px;min-width:0;font-size:12px}
+.cell .val{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cell .val.mono{font-family:var(--font-mono);font-size:11.5px;letter-spacing:-.01em}
+.cell .ghost{color:var(--text-tertiary)}
+.cell .chev{flex:0 0 auto;width:9px;height:9px;color:var(--text-tertiary)}
+.cell.combo{cursor:pointer}
+.cell.combo:hover{background:var(--bg-hover)}
+.cell.combo.hot{background:var(--bg-hover)}
+.cell.combo.focus{box-shadow:inset 0 0 0 1px var(--accent-500);background:var(--bg-surface)}
+.cell.focus{box-shadow:inset 0 0 0 1px var(--accent-500);background:var(--bg-surface)}
+.cell.center{justify-content:center;padding:0 4px;gap:0}
+.cell .chk{width:14px;height:14px;border:1px solid var(--border-strong);border-radius:2px;background:var(--bg-surface);display:grid;place-items:center}
+.cell .chk.on{border-color:var(--accent-500);background:var(--accent-500)}
+.cell .chk svg{width:9px;height:9px;color:#fff}
+.cell .key{width:24px;height:22px;display:grid;place-items:center;border:1px solid transparent;border-radius:var(--r-2);color:var(--text-tertiary);opacity:.55;cursor:pointer}\n.cell .key:hover{opacity:1;background:var(--bg-hover);border-color:var(--border)}
+.cell .key svg{width:14px;height:14px}
+.cell .key.on{color:var(--accent-600);background:var(--accent-50);border-color:var(--accent-200);opacity:1}
+.cell .del{width:22px;height:22px;display:grid;place-items:center;border-radius:var(--r-2);color:var(--text-tertiary)}
+.cell.combo:hover .del,.cell.picker:hover .del{color:var(--text-secondary);background:var(--bg-pressed)}
+
+/* 索引字段单元格：摘要 + 右侧「…」编辑按钮 */
+.cell.picker{padding-right:5px;cursor:pointer}
+.cell.picker:hover{background:var(--bg-hover)}
+.cell.picker .more{flex:0 0 auto;width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--border);border-radius:var(--r-2);background:var(--bg-surface);color:var(--text-secondary);cursor:pointer}
+.cell.picker .more:hover{border-color:var(--accent-500);color:var(--accent-600);background:var(--accent-50)}
+.cell.picker .more svg{width:14px;height:14px}\n.cell.picker.focus{background:var(--bg-surface);box-shadow:inset 0 0 0 1px var(--accent-500)}
+
+/* ── 状态条 ─────────────────────────────────────────── */
+.status{height:28px;display:flex;align-items:center;gap:12px;padding:0 var(--sp-3);border-top:1px solid var(--border);background:var(--bg-subtle);color:var(--text-secondary);font-size:11px}
+.status .dot{width:3px;height:3px;border-radius:var(--r-full);background:var(--border-strong)}
+
+/* ── 索引字段浮层：锚定单元格，替代模态对话框 ─────────────── */
+.pop{position:absolute;z-index:20;width:344px;background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:var(--r-3);box-shadow:var(--shadow-pop);overflow:visible}
+.pop::before{content:"";position:absolute;top:-5px;left:38px;width:8px;height:8px;background:var(--bg-surface);border-left:1px solid var(--border-strong);border-top:1px solid var(--border-strong);transform:rotate(45deg)}
+.pop-head{height:26px;display:flex;align-items:center;gap:0;background:var(--bg-subtle);border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text-secondary)}
+.pop-head span{padding:0 9px;border-right:1px solid var(--border);height:100%;display:flex;align-items:center}
+.pop-head span:last-child{border-right:0}
+.pop-list{padding:0}
+.pop-row{display:flex;align-items:center;border-bottom:1px solid var(--border-subtle)}
+.pop-row:last-child{border-bottom:0}
+.pop-cell{position:relative;display:flex;align-items:center;height:29px;padding:0 9px;border-right:1px solid var(--border);min-width:0;flex:1 1 auto}
+.pop-cell .val{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop-cell .chev{flex:0 0 auto;width:9px;height:9px;color:var(--text-tertiary);margin-left:6px}
+.pop-cell.f{flex:1 1 0}
+.pop-cell.s{flex:0 0 84px}
+.pop-cell.hot{background:var(--bg-hover)}
+.pop-cell.sel{box-shadow:inset 0 0 0 1px var(--accent-500);background:var(--bg-surface)}
+.pop-del{flex:0 0 32px;height:29px;display:grid;place-items:center;color:var(--text-tertiary);background:transparent;border:0;cursor:pointer}
+.pop-del:hover{color:var(--danger-600);background:var(--danger-50)}
+.pop-del svg{width:12px;height:12px}
+.pop-foot{height:36px;border-radius:0 0 5px 5px;display:flex;align-items:center;gap:2px;padding:0 6px 0 4px;background:var(--bg-subtle);border-top:1px solid var(--border)}
+.iconbtn{width:24px;height:24px;display:grid;place-items:center;border:1px solid transparent;border-radius:var(--r-2);background:transparent;color:var(--text-secondary);cursor:pointer}
+.iconbtn:hover{background:var(--bg-hover);border-color:var(--border)}
+.iconbtn svg{width:13px;height:13px}
+.pop-foot .grow{flex:1}
+.btn-sm{height:24px;padding:0 10px;border:1px solid var(--border-strong);border-radius:var(--r-2);background:var(--bg-surface);color:var(--text);font:12px var(--font-ui);cursor:pointer}
+.btn-sm:hover{background:var(--bg-hover)}
+.btn-sm.primary{background:var(--accent-500);border-color:var(--accent-500);color:#fff}
+
+/* 候选下拉（默认值）：浮在单元格下方，宽度贴合，选中即回显 */
+.opts{position:absolute;z-index:30;min-width:0;background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:var(--r-2);box-shadow:var(--shadow-pop);padding:3px 0;overflow:hidden}
+.opts .opt{height:26px;display:flex;align-items:center;padding:0 9px;gap:8px;font-size:12px;color:var(--text);white-space:nowrap;cursor:pointer}
+.opts .opt .k{flex:1}
+.opts .opt .hint{font-size:11px;color:var(--text-tertiary)}
+.opts .opt:hover{background:var(--bg-hover)}
+.opts .opt.on{background:var(--bg-selected);color:var(--accent-700)}
+.opts .opt.mono .k{font-family:var(--font-mono);font-size:11.5px}
+.opts .sep{height:1px;margin:3px 0;background:var(--border-subtle)}
+
+/* 扩展列：自增 / 无符号 / 填充零收进浮层，列内只显示已启用的标签 */
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:1px solid var(--accent-200);border-radius:var(--r-1);background:var(--accent-50);color:var(--accent-700);font-size:11px;line-height:1;white-space:nowrap}
+.cell.combo.ext .val{display:flex;align-items:center;gap:4px}
+.cell.combo.ext .val .ghost{color:var(--text-tertiary)}
+.pop.ext .ext-list{padding:3px 0}
+.opt{height:28px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;color:var(--text);cursor:pointer}
+.opt:hover{background:var(--bg-hover)}
+.opt .k{flex:0 0 auto;min-width:44px}
+.opt .hint{margin-left:auto;font-size:11px;color:var(--text-tertiary)}
+.opt .chk{width:14px;height:14px;border:1px solid var(--border-strong);border-radius:2px;background:var(--bg-surface);display:grid;place-items:center;flex:0 0 auto}
+.opt .chk.on{border-color:var(--accent-500);background:var(--accent-500)}
+.opt .chk svg{width:9px;height:9px;color:#fff}
+.opt.off{color:var(--text-disabled);cursor:not-allowed}
+.opt.off:hover{background:transparent}
+.opt.off .hint{color:var(--text-disabled)}
+.opt.off .chk{border-color:var(--border);background:var(--bg-subtle)}
+.ext-hint{padding:7px 10px 9px;border-top:1px solid var(--border-subtle);background:var(--bg-subtle);color:var(--text-tertiary);font-size:11px;line-height:1.6}
+
+/* 扩展列浮层的上边缘箭头 */
+.pop.ext::before{left:24px;right:auto}
+
+/* ── SQL 预览：实时状态条 + DDL 高亮（复用 base.css 的 ddl-* 色） ── */
+.sql-bar{height:36px;display:flex;align-items:center;gap:10px;padding:0 var(--sp-3);border-bottom:1px solid var(--border-subtle);background:var(--bg-subtle);font-size:11px;color:var(--text-tertiary)}
+.sql-bar .live{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:var(--r-full);background:var(--accent-50);color:var(--accent-700);border:1px solid var(--accent-200);font-size:11px;font-weight:600}
+.sql-bar .live i{width:6px;height:6px;border-radius:var(--r-full);background:var(--accent-500);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-500) 16%,transparent)}
+.sql-bar .sql-meta{font-variant-numeric:tabular-nums}
+.sql-bar .grow{flex:1}
+.designer-sql{white-space:pre;overflow:auto;margin:0;padding:12px 14px;border:0;border-radius:0;background:var(--bg-surface);font:12.5px/1.75 var(--font-mono);tab-size:2}
+.ddl-kw{color:var(--accent-600);font-weight:600}
+.ddl-type{color:#7a5af8}
+.ddl-str{color:var(--ok-600)}
+.ddl-comment{color:var(--text-tertiary);font-style:italic}
+.ddl-ident{color:#b25e09}
+
+/* ── 编号批注 ───────────────────────────────────────── */
+.n{position:absolute;z-index:12;width:15px;height:15px;display:grid;place-items:center;border-radius:var(--r-full);background:var(--accent-500);color:#fff;font-size:10px;font-weight:600;line-height:1;box-shadow:0 0 0 2px #fff}
+.n.tl{top:-7px;left:-7px}
+.n.tr{top:-7px;right:-7px}
+
+/* ── 特写区 ─────────────────────────────────────────── */
+.zoom{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;width:1240px}
+.zcard{background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:var(--r-3);padding:14px 14px 16px;position:relative}
+.zcard h3{margin:0 0 3px;font-size:12px;font-weight:600}
+.zcard p{margin:0 0 12px;font-size:11px;color:var(--text-tertiary);line-height:1.6}
+.zwrap{position:relative;height:210px}
+.zwrap .grid{width:100%}
+.zwrap .pop{width:320px}
+.note{font-size:11px;color:var(--text-tertiary);margin-top:10px;line-height:1.7}
+.note b{color:var(--text-secondary);font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="doc-head">
+  <h1>表设计器 · 调整稿 v1</h1>
+  <p>令牌与网格数值沿用 <code>base.css</code> / <code>DESIGN.md</code>（表头 28 / 行 30 / 控件 26），本页只改交互与视觉一致性，不改数据契约。</p>
+  <div class="chips">
+    <span class="chip"><b>1</b>下拉统一为单框</span>
+    <span class="chip"><b>2</b>列线可见</span>
+    <span class="chip"><b>3</b>主键与索引同构</span>
+    <span class="chip"><b>4</b>单元格「…」编辑</span>
+    <span class="chip"><b>5</b>字段选择改浮层</span>
+    <span class="chip"><b>6</b>去掉无符号/填充零列</span>
+  </div>
+</div>
+
+<!-- ════════════════ ① 字段页 ════════════════ -->
+<section class="shot">
+  <div class="shot-title"><b>字段</b><span>单框下拉 + 列分割线 · 去掉无符号/填充零列</span></div>
+  <div class="frame">
+    <div class="cmdbar">
+      <button class="tb primary"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 2.5h7l3 3v8a.5.5 0 0 1-.5.5h-9.5A.5.5 0 0 1 3 13.5z"/><path d="M10 2.5V6h3.5"/></svg>保存</button>
+      <span class="tb-sep"></span>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3.5v9M3.5 8h9"/></svg>添加字段</button>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3.5v6M5.5 6.8 8 9.3l2.5-2.5M12.5 12.5h-9"/></svg>插入字段</button>
+      <button class="tb" disabled><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>删除字段</button>
+      <span class="tb-sep"></span>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 12.5V4M5 7l3-3 3 3"/></svg>上移</button>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3.5V12M5 9l3 3 3-3"/></svg>下移</button>
+    </div>
+    <div class="tabs">
+      <span class="tab on">字段</span><span class="tab">索引</span><span class="tab">外键</span><span class="tab">检查</span><span class="tab">触发器</span><span class="tab">选项</span><span class="tab">注释</span><span class="tab">SQL 预览</span>
+    </div>
+    <table class="grid">
+      <colgroup>
+        <col style="width:152px"><col style="width:146px"><col style="width:66px"><col style="width:66px"><col style="width:236px"><col style="width:54px"><col style="width:120px"><col style="width:76px"><col>
+      </colgroup>
+      <thead>
+        <tr>
+          <th>名称</th><th>类型</th><th>长度</th><th>小数位</th><th>默认值</th><th style="text-align:center">主键</th><th>扩展</th><th style="text-align:center">允许 NULL</th><th>注释</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><div class="cell"><span class="val">id</span></div></td>
+          <td><div class="cell combo"><span class="val">bigint unsigned</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key on" title="已在主键中，点击移出"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="tag">自增</span><span class="tag">无符号</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell"><span class="val">主键</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">assignment_id</span></div></td>
+          <td><div class="cell combo"><span class="val">bigint</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell"><span class="val">任务ID</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">source_schema</span></div></td>
+          <td><div class="cell combo"><span class="val">varchar</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val">1024</span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val mono">''</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell"><span class="val">来源端的schema</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">table_type</span></div></td>
+          <td><div class="cell combo"><span class="val">varchar</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val">32</span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo hot"><span class="val mono">'TABLE'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell"><span class="val">类型:TABLE/VIEW</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">source_tables</span></div></td>
+          <td><div class="cell combo"><span class="val">longtext</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell"><span class="val">来源端的table列表</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">excluded_flag</span></div></td>
+          <td><div class="cell combo"><span class="val">tinyint</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val">1</span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val mono">'0'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell"><span class="val">是否排除(0:否 1:是)</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">pre_sql_scripts</span></div></td>
+          <td><div class="cell combo"><span class="val">longtext</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val ghost">NULL（空）</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell"><span class="val">源端查询的前置执行sql脚本</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">target_schema</span></div></td>
+          <td><div class="cell combo"><span class="val">varchar</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val">200</span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val mono">''</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell"><span class="val">目的端的schema(一个)</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">target_table_type</span></div></td>
+          <td><div class="cell combo"><span class="val">varchar</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val">32</span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val mono">'TABLE'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span></div></td>
+          <td><div class="cell"><span class="val">目标端表类型:TABLE(物理表)/VIEW(视图)</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">batch_size</span></div></td>
+          <td><div class="cell combo"><span class="val">bigint</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val mono">'10000'</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell"><span class="val">处理批次大小</span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">create_time</span></div></td>
+          <td><div class="cell combo"><span class="val">timestamp</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell"><span class="val ghost"></span></div></td>
+          <td><div class="cell combo"><span class="val mono">CURRENT_TIMESTAMP</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="key" title="点击加入主键"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="5.4" cy="8" r="2.6"/><path d="M8 8h5.2M11.2 8v2.2M13.2 8v1.8"/></svg></span></div></td>
+          <td><div class="cell combo ext"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="chk"></span></div></td>
+          <td><div class="cell"><span class="val">创建时间</span></div></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- 扩展属性浮层：自增 / 无符号 / 填充零收进这里，按类型与方言决定是否可选 -->
+    <div class="pop ext" style="top:138px;left:712px;width:262px">
+      <div class="pop-head"><span style="flex:1;border-right:0">扩展属性 · id</span></div>
+      <div class="ext-list">
+        <label class="opt"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span><span class="k">自增</span><span class="hint">AUTO_INCREMENT</span></label>
+        <label class="opt"><span class="chk on"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1.5 5.2 3.8 7.5 8.5 2.8"/></svg></span><span class="k">无符号</span><span class="hint">UNSIGNED</span></label>
+        <label class="opt"><span class="chk"></span><span class="k">填充零</span><span class="hint">ZEROFILL</span></label>
+      </div>
+      <div class="ext-hint">整数类型可自增；数值类型可无符号 / 填充零。非 MySQL 协议不显示这一列。</div>
+    </div>
+    <div class="status"><span>表结构与读取基线一致</span><span class="dot"></span><span>字段 24 · 索引 4</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+  </div>
+</section>
+
+<!-- ════════════════ ② 索引页（含浮层） ════════════════ -->
+<section class="shot">
+  <div class="shot-title"><b>索引</b><span>主键同构 + 单元格「…」+ 锚定浮层</span></div>
+  <div class="frame">
+    <div class="cmdbar">
+      <button class="tb primary"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 2.5h7l3 3v8a.5.5 0 0 1-.5.5h-9.5A.5.5 0 0 1 3 13.5z"/><path d="M10 2.5V6h3.5"/></svg>保存</button>
+      <span class="tb-sep"></span>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3.5v9M3.5 8h9"/></svg>添加索引</button>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>删除索引</button>
+      <span class="tb-sep"></span>
+      <button class="tb" disabled>上移</button>
+      <button class="tb" disabled>下移</button>
+      <span style="margin-left:auto;color:var(--text-tertiary);font-size:11px">点单元格即编辑；字段单元格右侧「…」打开字段选择</span>
+    </div>
+    <div class="tabs">
+      <span class="tab">字段</span><span class="tab on">索引</span><span class="tab">外键</span><span class="tab">检查</span><span class="tab">触发器</span><span class="tab">选项</span><span class="tab">注释</span><span class="tab">SQL 预览</span>
+    </div>
+    <table class="grid" style="margin-bottom:132px">
+      <colgroup><col style="width:15%"><col style="width:41%"><col style="width:18%"><col style="width:17%"><col style="width:9%"></colgroup>
+      <thead>
+        <tr><th>名</th><th>字段（可多选，可排序）</th><th>索引类型</th><th>索引方法</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><div class="cell"><span class="val">PRIMARY</span></div></td>
+          <td style="position:relative"><div class="cell picker"><span class="val">id ASC</span><button class="more" title="编辑索引字段"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11" cy="7" r="1.25"/></svg></button></div></td>
+          <td><div class="cell combo"><span class="val">PRIMARY</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell combo"><span class="val">BTREE</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="del" title="删除该行"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">uk_assignment</span></div></td>
+          <td style="position:relative"><div class="cell picker focus"><span class="val">assignment_id ASC</span><button class="more" title="编辑索引字段"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11" cy="7" r="1.25"/></svg></button></div></td>
+          <td><div class="cell combo"><span class="val">UNIQUE</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell combo"><span class="val">BTREE</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="del"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">idx_source_connection</span></div></td>
+          <td style="position:relative"><div class="cell picker"><span class="val">source_connection_id ASC，table_type DESC</span><button class="more" title="编辑索引字段"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11" cy="7" r="1.25"/></svg></button></div></td>
+          <td><div class="cell combo"><span class="val">NORMAL</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell combo"><span class="val">BTREE</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="del"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></span></div></td>
+        </tr>
+        <tr>
+          <td><div class="cell"><span class="val">idx_target_connection</span></div></td>
+          <td style="position:relative"><div class="cell picker"><span class="val">target_connection_id ASC</span><button class="more" title="编辑索引字段"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11" cy="7" r="1.25"/></svg></button></div></td>
+          <td><div class="cell combo"><span class="val">NORMAL</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell combo"><span class="val">BTREE</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+          <td><div class="cell center"><span class="del"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></span></div></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="status"><span>有未保存的表结构草稿</span><span class="dot"></span><span>索引 4 · 主键 1</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+
+    <!-- 浮层：锚定“字段”单元格，替代模态对话框 -->
+    <div class="pop" style="top:169px;left:196px">
+      <div class="pop-head"><span style="flex:0 0 196px">字段</span><span style="flex:0 0 84px">排序</span><span style="flex:1 1 0;border-right:0"> </span></div>
+      <div class="pop-list">
+        <div class="pop-row">
+          <div class="pop-cell f sel"><span class="val">assignment_id</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+          <div class="pop-cell s"><span class="val">ASC</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+          <button class="pop-del" title="删除该字段"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7"/></svg></button>
+        </div>
+        <div class="pop-row">
+          <div class="pop-cell f hot"><span class="val">table_type</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+          <div class="pop-cell s"><span class="val">DESC</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+          <button class="pop-del" title="删除该字段"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7"/></svg></button>
+        </div>
+        <div class="pop-row">
+          <div class="pop-cell f"><span class="val ghost">选择字段…</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+          <div class="pop-cell s"><span class="val">ASC</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+          <button class="pop-del" title="删除该字段"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7"/></svg></button>
+        </div>
+      </div>
+      <div class="pop-foot">
+        <button class="iconbtn" title="上移"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 11.5v-9M3.9 5.6 7 2.5l3.1 3.1"/></svg></button>
+        <button class="iconbtn" title="下移"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 2.5v9M3.9 8.4 7 11.5l3.1-3.1"/></svg></button>
+        <button class="iconbtn" title="添加字段"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 2.5v9M2.5 7h9"/></svg></button>
+        <span class="grow"></span>
+        <button class="btn-sm">取消</button>
+        <button class="btn-sm primary">确定</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════ ③ 细节特写 ════════════════ -->
+<section class="shot">
+  <div class="shot-title"><b>细节</b><span>默认值手输 / 扩展列按类型收敛 / 索引浮层</span></div>
+  <div class="zoom">
+    <div class="zcard">
+      <h3>类型只下拉，默认值可手输</h3>
+      <p>类型列是纯下拉，避免写入非法类型；默认值是「值 + 候选」的单框，可键入任意表达式。</p>
+      <div class="zwrap" style="height:246px">
+        <table class="grid" style="width:100%">
+          <colgroup><col style="width:102px"><col style="width:100px"><col></colgroup>
+          <thead><tr><th>字段</th><th>类型</th><th>默认值</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="cell"><span class="val">create_time</span></div></td>
+              <td><div class="cell combo"><span class="val">timestamp</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+              <td><div class="cell combo focus"><span class="val mono">CURRENT_TIMESTAMP</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+            </tr>
+            <tr>
+              <td><div class="cell"><span class="val">source_schema</span></div></td>
+              <td><div class="cell combo"><span class="val">varchar</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+              <td><div class="cell combo"><span class="val mono">''</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="opts" style="top:58px;left:200px;width:144px">
+          <div class="opt"><span class="k">NULL</span><span class="hint">空</span></div>
+          <div class="opt on"><span class="k mono">CURRENT_TIMESTAMP</span><span class="hint">当前</span></div>
+          <div class="opt"><span class="k mono">CURRENT_DATE</span></div>
+          <div class="opt"><span class="k mono">CURRENT_TIME</span></div>
+          <div class="sep"></div>
+          <div class="opt"><span class="k mono">' '</span><span class="hint">空格</span></div>
+          <div class="opt"><span class="k mono">''</span><span class="hint">空串</span></div>
+        </div>
+      </div>
+      <div class="note"><b>类型不可手输</b>：只列当前方言的类型；默认值框可直接键入，候选只是快捷方式。</div>
+    </div>
+
+    <div class="zcard">
+      <h3>扩展列：按类型和方言收敛</h3>
+      <p>自增 / 无符号 / 填充零都在浮层里；类型不支持就置灰，非 MySQL 协议整列不出现。</p>
+      <div class="zwrap" style="height:246px">
+        <table class="grid" style="width:100%">
+          <colgroup><col style="width:118px"><col></colgroup>
+          <thead><tr><th>字段</th><th>扩展</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="cell"><span class="val">id</span></div></td>
+              <td><div class="cell combo ext"><span class="val"><span class="tag">自增</span><span class="tag">无符号</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+            </tr>
+            <tr>
+              <td><div class="cell"><span class="val">table_type</span></div></td>
+              <td><div class="cell combo ext focus"><span class="val"><span class="ghost">—</span></span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="pop ext" style="top:90px;left:112px;width:230px">
+          <div class="pop-head"><span style="flex:1;border-right:0">扩展属性 · table_type</span></div>
+          <div class="ext-list">
+            <label class="opt off"><span class="chk"></span><span class="k">自增</span><span class="hint">AUTO_INCREMENT</span></label>
+            <label class="opt off"><span class="chk"></span><span class="k">无符号</span><span class="hint">UNSIGNED</span></label>
+            <label class="opt off"><span class="chk"></span><span class="k">填充零</span><span class="hint">ZEROFILL</span></label>
+          </div>
+          <div class="ext-hint">varchar 不是数值类型，三项都不可选。整型才有自增，数值类型才有无符号 / 填充零。</div>
+        </div>
+      </div>
+      <div class="note"><b>SQLite / PostgreSQL 等</b>：不显示扩展列，属性不会丢，只是没有编辑入口。</div>
+    </div>
+
+    <div class="zcard">
+      <h3>索引浮层：锚定单元格，非模态</h3>
+      <p>点单元格里的「…」在下方展开，字段与排序都是下拉；确定后单元格摘要同步刷新。</p>
+      <div class="zwrap" style="padding-top:6px">
+        <div class="pop" style="position:relative;top:0;left:0;width:100%">
+          <div class="pop-head"><div class="pop-cell f" style="flex:1 1 0;border-right:1px solid var(--border)">字段</div><div class="pop-cell s" style="flex:0 0 74px">排序</div><span style="flex:0 0 32px"></span></div>
+          <div class="pop-list">
+            <div class="pop-row">
+              <div class="pop-cell f sel" style="flex:1 1 0"><span class="val">assignment_id</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+              <div class="pop-cell s" style="flex:0 0 74px"><span class="val">ASC</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+              <button class="pop-del"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7"/></svg></button>
+            </div>
+            <div class="pop-row">
+              <div class="pop-cell f" style="flex:1 1 0"><span class="val">table_type</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+              <div class="pop-cell s" style="flex:0 0 74px"><span class="val">DESC</span><svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4l3 3 3-3"/></svg></div>
+              <button class="pop-del"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 6h7"/></svg></button>
+            </div>
+          </div>
+          <div class="pop-foot">
+            <button class="iconbtn"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 11.5v-9M3.9 5.6 7 2.5l3.1 3.1"/></svg></button>
+            <button class="iconbtn"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 2.5v9M3.9 8.4 7 11.5l3.1-3.1"/></svg></button>
+            <button class="iconbtn"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 2.5v9M2.5 7h9"/></svg></button>
+            <span class="grow"></span>
+            <button class="btn-sm">取消</button>
+            <button class="btn-sm primary">确定</button>
+          </div>
+        </div>
+      </div>
+      <div class="note">索引行尾的「…」<span style="vertical-align:-2px;display:inline-grid;place-items:center;width:20px;height:20px;border:1px solid var(--border);border-radius:4px;margin:0 2px"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.25"/><circle cx="7" cy="7" r="1.25"/><circle cx="11" cy="7" r="1.25"/></svg></span>与浮层是同一个入口，键盘 Enter 也能打开。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════ ④ SQL 预览 ════════════════ -->
+<section class="shot">
+  <div class="shot-title"><b>SQL 预览</b><span>实时生成 + 语法高亮，没有「生成」按钮</span></div>
+  <div class="frame">
+    <div class="cmdbar">
+      <button class="tb primary"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 2.5h7l3 3v8a.5.5 0 0 1-.5.5h-9.5A.5.5 0 0 1 3 13.5z"/><path d="M10 2.5V6h3.5"/></svg>保存</button>
+      <span class="tb-sep"></span>
+      <button class="tb" disabled>添加字段</button>
+      <button class="tb" disabled>插入字段</button>
+      <button class="tb" disabled>删除字段</button>
+      <span class="tb-sep"></span>
+      <button class="tb" disabled>上移</button>
+      <button class="tb" disabled>下移</button>
+      <span style="margin-left:auto;color:var(--text-tertiary);font-size:11px">编辑字段结构后回到本页，SQL 自动刷新</span>
+    </div>
+    <div class="tabs">
+      <span class="tab">字段</span><span class="tab">索引</span><span class="tab">外键</span><span class="tab">检查</span><span class="tab">触发器</span><span class="tab">选项</span><span class="tab">注释</span><span class="tab on">SQL 预览</span>
+    </div>
+    <div class="sql-bar">
+      <span class="live"><i></i>实时预览</span>
+      <span class="sql-meta">已与草稿同步 · 4 处改动 · 128 ms</span>
+      <span class="grow"></span>
+      <button class="tb"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5h-7a1 1 0 0 0-1 1v7"/></svg>复制 SQL</button>
+    </div>
+    <pre class="designer-sql" style="max-height:none"><span class="ddl-comment">-- 1. 修改字段</span>
+<span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
+  <span class="ddl-kw">MODIFY COLUMN</span> <span class="ddl-ident">`id`</span> <span class="ddl-type">bigint</span> <span class="ddl-kw">unsigned</span> <span class="ddl-kw">NOT NULL</span> <span class="ddl-kw">COMMENT</span> <span class="ddl-str">'主键'</span>,
+  <span class="ddl-kw">ADD COLUMN</span> <span class="ddl-ident">`channel_size`</span> <span class="ddl-type">bigint</span> <span class="ddl-kw">NOT NULL</span> <span class="ddl-kw">DEFAULT</span> <span class="ddl-str">'100'</span> <span class="ddl-kw">COMMENT</span> <span class="ddl-str">'通道队列大小'</span>;
+
+<span class="ddl-comment">-- 2. 调整索引</span>
+<span class="ddl-kw">DROP INDEX</span> <span class="ddl-ident">`idx_target_connection`</span> <span class="ddl-kw">ON</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>;
+<span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
+  <span class="ddl-kw">ADD UNIQUE INDEX</span> <span class="ddl-ident">`uk_assignment`</span> (<span class="ddl-ident">`assignment_id`</span> <span class="ddl-kw">ASC</span>);</pre>
+    <div class="status"><span>预览与当前草稿一致</span><span class="dot"></span><span>切页签自动刷新 · 编辑后 300ms 防抖重算</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+  </div>
+</section>
+
+</body>
+</html>

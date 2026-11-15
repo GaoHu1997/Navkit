@@ -166,6 +166,7 @@ export class App {
   private deferredTabRemovals: Set<string> | null = null;
   private activeTabId: string | null = null;
   private treeNodes: TreeItem[] = [];
+  private treeLoads = new WeakMap<TreeItem, object>();
   private connections: ConnectionConfig[] = [];
   private groups: string[] = [];
   private settings!: AppSettings;
@@ -764,7 +765,7 @@ export class App {
         node.expanded = old.expanded;
         if (node.type === "connection") {
           node.children = old.children;
-          node.loaded = old.loaded;
+          node.loaded = old.loading ? false : old.loaded;
         }
       }
       restore(node.children);
@@ -939,19 +940,44 @@ export class App {
   /** 展开节点，加载子节点。 */
   private async toggleNode(node: TreeItem): Promise<void> {
     if (!node.expandable) return;
+    const connection = /^conn:[^/]+$/.test(node.id);
     if (node.expanded) {
       node.expanded = false;
+      if (connection) {
+        // A later expand must discover databases created or removed outside this tree.
+        node.loaded = false;
+        this.treeLoads.delete(node);
+        node.loading = false;
+      }
       this.tree.render();
       return;
     }
-    if (node.children.length === 0 && !node.loaded) {
+    if (node.loading) return;
+    node.expanded = true;
+    if (!node.loaded && (connection || node.children.length === 0)) {
+      const generation = {};
+      this.treeLoads.set(node, generation);
+      const current = () => this.treeLoads.get(node) === generation && this.tree.find(node.id) === node;
       node.loading = true;
       this.tree.render();
-      await this.loadChildren(node);
-      node.loading = false;
-      node.loaded = true;
+      try {
+        await this.loadChildren(node, current);
+        if (!current()) return;
+        node.loaded = true;
+      } catch {
+        if (!current()) return;
+        node.expanded = false;
+        node.loaded = false;
+      } finally {
+        if (current()) {
+          this.treeLoads.delete(node);
+          node.loading = false;
+          this.syncConnIcons();
+          this.tree.render();
+        }
+      }
+      return;
     }
-    node.expanded = true;
     this.syncConnIcons();
     this.tree.render();
   }
@@ -963,7 +989,7 @@ export class App {
   }
 
   /** 加载节点的子节点。 */
-  private async loadChildren(node: TreeItem): Promise<void> {
+  private async loadChildren(node: TreeItem, current: () => boolean = () => true): Promise<void> {
     // 分组节点统一拦截：查询分组懒加载收藏的保存查询、备份分组懒加载备份文件，
     // 其余分组（字段 / 索引 / 外键 / 触发器）的内容已由父节点（表 / 视图）在
     // 加载时构建完毕 —— 必须在下方表分支之前 return，否则 id 中的
@@ -979,6 +1005,7 @@ export class App {
         if (m) {
           try {
             const backups = await api.listBackups(m[1], m[2]);
+            if (!current()) return;
             node.children = backups.map((b) => ({
               id: `${node.id}/file/${b.name}`,
               label: b.name,
@@ -991,7 +1018,7 @@ export class App {
             }));
             node.has_children = node.children.length > 0;
           } catch {
-            node.children = [];
+            if (current()) node.children = [];
           }
         }
       }
@@ -1003,11 +1030,14 @@ export class App {
       const cfg = this.connections.find((c) => c.id === connId);
       if (!cfg) return;
       try {
-        await this.ensureConnection(connId);
+        await this.ensureConnection(connId, current);
+        if (!current()) return;
         const dbs = await api.listDatabases(connId);
+        if (!current()) return;
         if (cfg.kind === "sqlite") {
           // SQLite 直接把表列在连接下
           const tables = await api.listTables(connId, "");
+          if (!current()) return;
           node.children = tables.map(([t, type]) => ({
             id: `${node.id}/table/${t}`,
             label: t,
@@ -1027,7 +1057,8 @@ export class App {
           });
           return;
         }
-        node.children = dbs.map(([name]) => ({
+        const previous = new Map(node.children.map(child => [child.id, child]));
+        node.children = dbs.map(([name]) => previous.get(`${node.id}/db/${name}`) ?? ({
           id: `${node.id}/db/${name}`,
           label: name,
           type: namespaceType(cfg),
@@ -1039,7 +1070,9 @@ export class App {
           expanded: false,
         }));
       } catch (e) {
+        if (!current()) return;
         this.toast("error", `无法列出${namespaceName(cfg)}：${String(e)}`);
+        throw e;
       }
       return;
     }
@@ -1050,6 +1083,7 @@ export class App {
       try {
         const tables = await api.listTables(connId, dbName);
         const catalog = await this.navigationCatalog(connId, dbName, TREE_CATALOG_KINDS);
+        if (!current()) return;
         const tbl = tables
           .filter(([, ty]) => ty === "table")
           .map(([t]) => ({
@@ -1106,7 +1140,7 @@ export class App {
           group(`grp-backup`, "备份", "pict_backup", []),
         ];
       } catch (e) {
-        this.toast("error", `无法列出对象：${String(e)}`);
+        if (current()) this.toast("error", `无法列出对象：${String(e)}`);
       }
       return;
     }
@@ -1153,6 +1187,7 @@ export class App {
           expanded: false,
         }));
         const trs: TreeItem[] = await this.loadTableTriggers(connId, schema || (kind === "sqlite" ? "main" : ""), table, node.id);
+        if (!current()) return;
         const group = (suffix: string, label: string, icon: string, kids: TreeItem[]): TreeItem => ({
           id: `${node.id}/${suffix}`,
           label,
@@ -1170,7 +1205,7 @@ export class App {
           group("grp-trigger", "触发器", "trigger", trs),
         ];
       } catch {
-        node.children = [];
+        if (current()) node.children = [];
       }
     }
   }
@@ -1227,9 +1262,10 @@ export class App {
     }
   }
 
-  private async ensureConnection(connId: string): Promise<void> {
+  private async ensureConnection(connId: string, current: () => boolean = () => true): Promise<void> {
     if (this.openConnections.has(connId)) return;
     const result = await api.ensureConnection(connId);
+    if (!current()) return;
     if (!result.ok) throw new Error(result.message);
     this.openConnections.add(connId);
     this.startKeepAlive(connId);
@@ -3957,6 +3993,8 @@ export class App {
     // 树中残留的库节点既不真实也不可交互（双击会静默重连）。
     const node = this.tree.find(`conn:${connId}`);
     if (node) {
+      this.treeLoads.delete(node);
+      node.loading = false;
       node.expanded = false;
       node.loaded = false;
       node.children = [];
@@ -6396,6 +6434,8 @@ export class App {
       void this.refreshObjectScope(object.connection_id, object.schema).catch(error => this.toast("error", `刷新目录失败：${String(error)}`));
       return;
     }
+    this.treeLoads.delete(node);
+    node.loading = false;
     node.children = [];
     node.loaded = false;
     node.expanded = false;

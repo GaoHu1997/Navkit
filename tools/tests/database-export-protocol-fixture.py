@@ -61,7 +61,8 @@ def mysql_send(stream, payload, sequence):
 
 def mysql_column(name, typ=253):
     binary = typ == 252
-    return b''.join(lstr(value) for value in ['def', 'fixture', '', '', name, name]) + b'\x0c' + struct.pack('<HIBHB', 63 if binary else 45, 16384, typ, 128 if binary else 0, 0) + b'\0\0'
+    flags = 128 if binary else 32 if typ == 13 else 0
+    return b''.join(lstr(value) for value in ['def', 'fixture', '', '', name, name]) + b'\x0c' + struct.pack('<HIBHB', 63 if binary else 45, 16384, typ, flags, 0) + b'\0\0'
 
 def mysql_preparable(sql):
     """真实 MySQL 8 在 COM_STMT_PREPARE 下拒绝事务/表锁语句并返回 1295。"""
@@ -91,6 +92,8 @@ def mysql_model(sql, args):
         return ['TABLE_NAME','TABLE_TYPE'], [253,253], [('base','BASE TABLE'),('selected_view','VIEW'),('empty_view','VIEW'),('unsafe','BASE TABLE'),('mixed_view','VIEW')]
     if re.match(r'select\s+\*\s+from\s+', lower):
         name = re.findall(r'`((?:[^`]|``)*)`', sql)[-1].replace('``','`')
+        if name == 'year_values':
+            return ['id','c_year'], [8,13], [(1,0),(2,1901),(3,2026),(4,2155),(5,None)]
         rows = [(9223372036854775807,b'\0\xff\x80\x27',None,'中文'),(2,b'', '', 'second')]
         if name == 'slow': rows = rows * 200
         limit = re.search(r'\blimit\s+(\d+)\s*$', lower)
@@ -119,7 +122,7 @@ def mysql_result(stream, columns, types, rows, binary, sequence=1, slow=False):
             payload.extend(b'\0'+bitmap)
             for value, typ in zip(row, types):
                 if value is None: continue
-                payload.extend(struct.pack('<q',value) if typ == 8 else lstr(value))
+                payload.extend(struct.pack('<q',value) if typ == 8 else struct.pack('<H',value) if typ == 13 else lstr(value))
         else:
             for value in row: payload.extend(b'\xfb' if value is None else lstr(value))
         mysql_send(stream,payload,sequence); sequence += 1

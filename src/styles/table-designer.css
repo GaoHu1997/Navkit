@@ -21,7 +21,7 @@
 .table-designer .designer-grid td:nth-child(1) { min-width: 140px; }
 .table-designer .designer-grid.wide td:nth-child(2) { min-width: 180px; }
 /* 字段页：列多，用固定布局 + colgroup 列宽，输入框与默认值单元格才有稳定宽度 */
-.table-designer .designer-grid.designer-fields { table-layout: fixed; width: 100%; min-width: 1270px; }
+.table-designer .designer-grid.designer-fields { table-layout: fixed; width: 100%; min-width: 1160px; }
 .table-designer .designer-grid.designer-fields :is(td, th) { overflow: hidden; }
 .table-designer .designer-body { overflow: auto; }
 /* 类型单元格：下拉与（自定义 / 表达式）输入并排 */
@@ -104,6 +104,14 @@
 /* 字段/索引等表格：单元格即编辑框——去掉内嵌输入框的独立描边，让单元格本身成为编辑区域（参考 Navicat） */
 .table-designer .designer-grid td { padding: 0; }
 .table-designer .designer-grid th { padding: 4px 8px; }
+/* 列线加强：行线保持发丝线，纵向用 --border，列多的时候也能一眼分清边界 */
+.table-designer .designer-grid th,
+.table-designer .designer-grid td { border-right: 1px solid var(--border); }
+.table-designer .designer-grid th:last-child,
+.table-designer .designer-grid td:last-child { border-right: 0; }
+.table-designer .designer-grid th { background: var(--bg-subtle); color: var(--text-secondary); font-size: var(--fs-12); font-weight: 600; }
+.table-designer .designer-grid tbody tr:nth-child(even) td { background: var(--bg-surface); }
+.table-designer .designer-grid tbody tr:hover td { background: var(--n-25); }
 .table-designer .designer-grid td > :is(input:not([type=checkbox]), select) {
   width: 100%; min-width: 0; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 8px; box-shadow: none;
 }
@@ -111,8 +119,100 @@
 .table-designer .designer-grid td > :is(input:not([type=checkbox]), select):focus { border-color: var(--accent-500); background: var(--bg-surface); outline: none; }
 .table-designer .designer-grid td .designer-check { justify-content: center; padding: 0 4px; }
 .table-designer .designer-grid td .designer-key { margin: 0 auto; display: block; }
-/* 索引/主键字段：单元格内是一个摘要按钮，点开浮层选择字段与排序 */
-.table-designer .designer-grid .designer-picker { width: 100%; display: flex; align-items: center; justify-content: flex-start; text-align: left; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 8px; color: var(--text-primary); overflow: hidden; }
+/* 索引/主键字段：单元格是「摘要 + 右侧 … 按钮」，点任意位置都打开字段选择浮层 */
+.table-designer .designer-grid .designer-picker { width: 100%; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 8px; color: var(--text-primary); cursor: pointer; }
 .table-designer .designer-grid .designer-picker:hover { background: var(--bg-hover); }
-.table-designer .designer-grid .designer-picker .designer-picker-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-designer .designer-grid .designer-picker .designer-picker-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-designer .designer-grid .designer-picker .designer-picker-text.empty { color: var(--text-tertiary); }
+.table-designer .designer-picker-more {
+  flex: 0 0 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: var(--r-2);
+  background: var(--bg-surface); color: var(--text-secondary); cursor: pointer;
+}
+.table-designer .designer-picker-more:hover,
+.table-designer .designer-picker-more.open { border-color: var(--accent-500); color: var(--accent-600); background: var(--accent-50); }
+.table-designer .designer-picker-more:disabled { opacity: .45; cursor: not-allowed; }
 .table-designer .designer-pk-clear { margin-left: 8px; }
+
+/* 默认值：一个框承担回显与手输，右侧箭头只给候选（不再并列第二个输入框） */
+.table-designer .designer-default-cell { display: flex; align-items: center; height: 100%; width: 100%; }
+.table-designer .designer-grid td .designer-default-cell .designer-default-input {
+  flex: 1 1 auto; min-width: 0; width: auto; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 2px 0 8px; box-shadow: none;
+}
+.table-designer .designer-grid td .designer-default-cell .designer-default-input:hover { background: transparent; }
+.table-designer .designer-grid td .designer-default-cell .designer-default-input:focus { border-color: var(--accent-500); background: var(--bg-surface); }
+.table-designer .designer-default-pick {
+  flex: 0 0 22px; height: 22px; margin-right: 4px; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--r-1);
+  background: transparent; color: var(--text-tertiary); cursor: pointer;
+}
+.table-designer .designer-default-pick:hover { background: var(--bg-pressed); color: var(--text-secondary); }
+.table-designer .designer-default-pick.open { background: var(--accent-50); border-color: var(--accent-200); color: var(--accent-600); }
+.table-designer .designer-default-pick:disabled { opacity: .4; cursor: not-allowed; }
+
+/* 扩展列：自增 / 无符号 / 填充零只在浮层里改，单元格只显示已启用的标签 */
+.table-designer .designer-ext {
+  display: flex; align-items: center; gap: 4px; width: 100%; height: 30px; padding: 0 6px 0 8px;
+  border: 0; background: transparent; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; overflow: hidden;
+}
+.table-designer .designer-ext:hover { background: var(--bg-hover); }
+.table-designer .designer-ext:disabled { cursor: not-allowed; }
+.table-designer .designer-ext-text { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px; overflow: hidden; }
+.table-designer .designer-ext-text.empty { color: var(--text-tertiary); }
+.table-designer .designer-ext-tag {
+  flex: 0 0 auto; height: 18px; display: inline-flex; align-items: center; padding: 0 5px; border: 1px solid var(--accent-200);
+  border-radius: var(--r-1); background: var(--accent-50); color: var(--accent-700); font-size: 11px; line-height: 1;
+}
+.table-designer .designer-ext-chevron { flex: 0 0 auto; display: grid; place-items: center; color: var(--text-tertiary); }
+
+/* 索引行尾的删除按钮：与其它单元格同高，hover 才变危险色 */
+.table-designer .designer-grid td.designer-op { padding: 0; text-align: center; }
+.table-designer .designer-row-remove {
+  width: 24px; height: 24px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: var(--r-2);
+  background: transparent; color: var(--text-tertiary); cursor: pointer;
+}
+.table-designer .designer-row-remove:hover { color: var(--danger-600); background: var(--danger-50); }
+.table-designer .designer-row-remove:disabled { opacity: .4; cursor: not-allowed; }
+
+/* 锚定浮层（默认值候选 / 扩展属性 / 索引字段）：非模态，点外部或 Esc 关闭 */
+.popover {
+  position: fixed; z-index: 1200; min-width: 180px; max-height: min(64vh, 460px); display: flex; flex-direction: column;
+  background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--r-3); box-shadow: var(--shadow-pop); overflow: hidden;
+}
+.popover-body { overflow: auto; padding: 3px 0; }
+.popover-option {
+  width: 100%; height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 0; background: transparent;
+  color: var(--text); font: 12px var(--font-ui); text-align: left; cursor: pointer; white-space: nowrap;
+}
+.popover-option:hover { background: var(--bg-hover); }
+.popover-option.current { background: var(--bg-selected); color: var(--accent-700); }
+.popover-option-value { font-family: var(--font-mono); font-size: 11.5px; }
+.popover-hint { margin: 0; padding: 6px 10px 8px; border-top: 1px solid var(--border-subtle); background: var(--bg-subtle); color: var(--text-tertiary); font-size: 11px; line-height: 1.6; }
+.popover-check { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; font-size: 12px; cursor: pointer; }
+.popover-check:hover { background: var(--bg-hover); }
+.popover-check input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent-500); }
+.popover-check-title { flex: 0 0 auto; min-width: 42px; }
+.popover-check-tag { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+.popover-check.disabled { color: var(--text-disabled); cursor: not-allowed; }
+.popover-check.disabled:hover { background: transparent; }
+.popover.index-cols .popover-body { padding: 0; display: flex; flex-direction: column; }
+.popover-index-cols { padding: 6px; max-height: 220px; overflow: auto; }
+.popover-footer { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--border-subtle); background: var(--bg-subtle); }
+.popover-footer .btn.primary { background: var(--accent-500); border-color: var(--accent-500); color: #fff; }
+.table-designer .designer-index-col-row select { height: 26px; }
+.table-designer .designer-index-col-row .designer-mini { height: 24px; }
+
+/* SQL 预览：实时状态条 + DDL 高亮，没有「生成」按钮 */
+.table-designer .designer-sql-bar {
+  display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 8px; margin-bottom: 8px;
+  border: 1px solid var(--border-subtle); border-radius: var(--r-2); background: var(--bg-subtle); color: var(--text-tertiary); font-size: 11px;
+}
+.table-designer .designer-sql-bar .btn { margin-left: auto; height: 22px; }
+.table-designer .designer-sql-live {
+  display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: var(--r-full);
+  border: 1px solid var(--accent-200); background: var(--accent-50); color: var(--accent-700); font-size: 11px; font-weight: 600;
+}
+.table-designer .designer-sql-live i { width: 6px; height: 6px; border-radius: var(--r-full); background: currentColor; }
+.table-designer .designer-sql-live.loading { border-color: var(--border-strong); background: var(--bg-surface); color: var(--text-secondary); }
+.table-designer .designer-sql-live.error { border-color: var(--danger-100); background: var(--danger-50); color: var(--danger-600); }
+.table-designer .designer-sql-live.idle { border-color: var(--border); background: var(--bg-surface); color: var(--text-tertiary); }
+.table-designer .designer-sql-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-designer .designer-sql.error { color: var(--danger-600); }

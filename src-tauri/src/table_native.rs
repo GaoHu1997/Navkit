@@ -863,8 +863,10 @@ async fn read_mysql_owned(pool: sqlx::MySqlPool, kind: DbKind, binding: Binding,
     conn.close_on_drop();
     let result:Result<Stored>=async {
         mysql_mode(&mut conn).await?;
+        // TiDB 的 READ ONLY 只是 noop 占位（默认 1235），按服务端版本降级为普通事务。
+        let (version,comment):(String,String)=crate::sql_history::query_as("SELECT @@version, @@version_comment").fetch_one(&mut *conn).await?;
         // START TRANSACTION 不在 MySQL 预处理语句白名单内，服务端返回 1295；必须走文本协议。
-        (&mut *conn).execute("START TRANSACTION READ ONLY").await?;
+        (&mut *conn).execute(if crate::db::mysql_read_only_unsupported(&version,&comment){"START TRANSACTION"}else{"START TRANSACTION READ ONLY"}).await?;
         // 打开源表持有事务期 MDL，随后所有 SHOW/目录查询使用同一连接。
         crate::sql_history::query(&format!("SELECT 1 FROM {} LIMIT 0",full(&kind,&binding.namespace,&table)?)).fetch_all(&mut *conn).await?;
         mysql_snapshot(&mut conn,&kind,&binding,&table,read_only).await

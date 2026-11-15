@@ -18,6 +18,7 @@ use futures::TryStreamExt;
 #[path = "transfer_output.rs"] mod transfer_output;
 #[path = "transfer_sql_batch.rs"] mod transfer_sql_batch;
 #[path = "transfer_export_cursor.rs"] mod transfer_export_cursor;
+#[path = "transfer_json_row.rs"] mod transfer_json_row;
 #[path = "transfer_sql_reader.rs"] mod transfer_sql_reader;
 #[path = "transfer_restore_stream.rs"] mod transfer_restore_stream;
 #[path = "transfer_import_batch.rs"] mod transfer_import_batch;
@@ -492,7 +493,11 @@ async fn dump_database_to_stage(
         w.flush()?;
         // 表起点必须在结构 DDL 之前：跳过整表时要连结构一起撤回。
         let table_start = stage.file_clone()?.metadata()?.len();
-        let full = qualified(&kind, schema, name);
+        // MySQL SHOW CREATE TABLE emits a target-relative CREATE statement. Keep
+        // DROP/INSERT target-relative too; otherwise a restore selected for B can
+        // drop A.table before the unqualified CREATE/INSERT reaches B.table.
+        let archive_schema = if kind.is_mysql_family() { "" } else { schema };
+        let full = qualified(&kind, archive_schema, name);
         let is_view = *ty != crate::models::ObjectType::Table;
 
         if include_structure {
@@ -524,7 +529,7 @@ async fn dump_database_to_stage(
             // try_clone 与原 writer 共享文件位置；先排空结构缓冲，再由游标接续写入。
             w.flush()?;
             let before = stage.file_clone()?.metadata()?.len();
-            let rows = match transfer_export_cursor::append_dump_data(db, kind, schema, name, &stage).await {
+            let rows = match transfer_export_cursor::append_dump_data_to_schema(db, kind, schema, name, &stage, if kind.is_mysql_family() { Some("") } else { None }).await {
                 Ok(rows) => rows,
                 Err(error) if skip_incompatible_tables
                     && error.downcast_ref::<UnsupportedExportValue>().is_some()
@@ -1572,7 +1577,13 @@ async fn execute_import_batches(db: &Db, prefix: &[(String, bool)], feeder: &mut
                     let use_batch = if enable_batch && rows.len() >= 32 {
                         match batch_allowed {
                             Some(allowed) => allowed,
-                            None => { let allowed = $gate(&mut *tx, mapper).await?; batch_allowed = Some(allowed); allowed }
+                            None => {
+                                // Prefix DDL may implicitly end a MySQL transaction;
+                                // admit only an existing table with no prefix mutation.
+                                let allowed = if mapper.kind.id() == "mysql" && !prefix.is_empty() { false }
+                                    else { $gate(&mut *tx, mapper).await? };
+                                batch_allowed = Some(allowed); allowed
+                            }
                         }
                     } else { false };
                     let stmts = if use_batch { transfer_import_batch::statements(mapper, &rows, limits)? }
@@ -1607,7 +1618,7 @@ async fn execute_import_batches(db: &Db, prefix: &[(String, bool)], feeder: &mut
     }
     match db {
         Db::Sqlite(p) => run_tx!(p, transfer_import_batch::sqlite_can_batch),
-        Db::Mysql(p) => run_tx!(p, transfer_import_batch::no_batch),
+        Db::Mysql(p) => run_tx!(p, transfer_import_batch::mysql_can_batch),
         Db::Postgres(p) => run_tx!(p, transfer_import_batch::no_batch),
         Db::Mssql(_) | Db::ClickHouse(_) | Db::Odbc(_) => {
             let mut count = 0u64;
@@ -1677,6 +1688,8 @@ async fn execute_prepared_script(db: &Db, script: &mut PreparedScript, task: Opt
 }
 
 async fn run_import_data(db: &Db, kind: &DbKind, opts: &ImportOptions, mapping: &[ImportColumnMapping], task: Option<&TaskControl>) -> Result<u64> {
+    // Each native protocol gate must prove exact target metadata and semantics;
+    // ineligible tables retain row execution without replaying a failed batch.
     run_import_data_with_policy(db, kind, opts, mapping, task, true).await
 }
 
@@ -1890,7 +1903,7 @@ async fn fetch_rows_sql(db: &Db, kind: &DbKind, schema: &str, table: &str, sql: 
 /// 流式导出写入器：有界序列化写入临时文件，完整成功后无覆盖发布目标。
 pub(crate) enum ExportSink {
     Csv { out: FileEncoder, delim: char, columns: usize },
-    Json { out: FileEncoder, first: bool, names: Vec<String> },
+    Json { out: FileEncoder, first: bool, names: Vec<String>, order: Vec<usize> },
     Sql { out: FileEncoder, kind: DbKind, prefix: String, types: Vec<String>, buffer: Vec<u8>, batch: Option<transfer_sql_batch::Assembler> },
 }
 
@@ -1908,6 +1921,10 @@ impl ExportSink {
     }
 
     fn create(stage: &StagedOutput, format: &str, kind: &DbKind, schema: &str, table: &str, names: &[String], types: &[String], delimiter: &str, has_header: bool, encoding: &str) -> Result<Self> {
+        Self::create_with_sql_schema(stage, format, kind, schema, table, names, types, delimiter, has_header, encoding, None)
+    }
+
+    fn create_with_sql_schema(stage: &StagedOutput, format: &str, kind: &DbKind, schema: &str, table: &str, names: &[String], types: &[String], delimiter: &str, has_header: bool, encoding: &str, sql_schema: Option<&str>) -> Result<Self> {
         validate_names(names)?;
         if !types.is_empty() && types.len() != names.len() { bail!("导出类型与列数不一致"); }
         if !names.iter().try_fold(0u64, |sum, name| u64::try_from(name.len()).ok().and_then(|bytes| sum.checked_add(bytes))).is_some_and(|bytes| bytes <= TransferLimits::default().max_record_bytes) { bail!("导出表头超过单条记录上限"); }
@@ -1930,15 +1947,16 @@ impl ExportSink {
             }
             "json" => {
                 out.write_all(b"[\n")?;
-                Ok(ExportSink::Json { out, first: true, names: names.to_vec() })
+                Ok(ExportSink::Json { out, first: true, names: names.to_vec(), order: transfer_json_row::column_order(names) })
             }
             "sql" => {
                 let full = qualified(kind, schema, table);
+                let sql_target = sql_schema.map(|target_schema| qualified(kind, target_schema, table)).unwrap_or_else(|| full.clone());
                 let cols = names.iter().map(|n| quote_ident(kind, n)).collect::<Vec<_>>().join(", ");
                 if kind.protocol() == crate::models::Protocol::Mssql && types.iter().any(|ty| ty.eq_ignore_ascii_case("rowversion") || ty.eq_ignore_ascii_case("timestamp")) {
                     out.write_all("-- SQL Server rowversion 为服务器生成的只读值；下方保留原始 0xHEX，恢复归档数据时该目标列须为 BINARY(8)，不能显式写入真实 rowversion 列。\r\n".as_bytes())?;
                 }
-                let prefix = format!("INSERT INTO {} ({}) VALUES (", full, cols);
+                let prefix = format!("INSERT INTO {} ({}) VALUES (", sql_target, cols);
                 let batch = transfer_sql_batch::current().map(|(policy, metrics)| transfer_sql_batch::Assembler::new(prefix.trim_end_matches('(').to_owned(), encoding, policy, metrics)).transpose()?;
                 Ok(ExportSink::Sql { out, kind: kind.clone(), prefix, types: if types.is_empty() { vec!["TEXT".into(); names.len()] } else { types.to_vec() }, buffer: Vec::with_capacity(1024), batch })
             }
@@ -1967,15 +1985,11 @@ impl ExportSink {
                     count += 1;
                 }
             }
-            ExportSink::Json { out, first, names } => {
+            ExportSink::Json { out, first, names, order } => {
                 for row in rows {
-                    let mut obj = serde_json::Map::new();
-                    for (i, name) in names.iter().enumerate() {
-                        obj.insert(name.clone(), serde_json::Value::from(row.get(i).cloned().flatten()));
-                    }
                     if *first { *first = false; } else { out.write_all(b",\n")?; }
                     let record = LimitedRecordWriter { inner: out, bytes: 0, max_bytes: limits.max_record_bytes };
-                    serde_json::to_writer(record, &serde_json::Value::Object(obj))?;
+                    transfer_json_row::write(record, names, row, order)?;
                     count += 1;
                 }
             }
@@ -2131,6 +2145,14 @@ mod transfer_sql_cycle_bench;
 #[cfg(test)]
 #[path = "transfer_preview_bench.rs"]
 mod transfer_preview_bench;
+
+#[cfg(test)]
+#[path = "transfer_json_bench.rs"]
+mod transfer_json_bench;
+
+#[cfg(test)]
+#[path = "transfer_round4_live_tests.rs"]
+mod transfer_round4_live_tests;
 
 #[cfg(test)]
 mod import_conflict_tests {

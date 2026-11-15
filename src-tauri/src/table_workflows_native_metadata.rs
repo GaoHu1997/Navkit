@@ -3,16 +3,56 @@ use crate::{models::{ColumnInfo,IndexInfo,ForeignKeyInfo,TableSchema}, design::T
 fn ident(k:&DbKind,s:&str)->String{db::quote_ident(k,s)}
 fn columns(rows:&[Record])->Result<Vec<ColumnInfo>>{rows.iter().map(|r|Ok(ColumnInfo{name:get(r,"name")?.into(),data_type:get(r,"type")?.into(),nullable:get(r,"nullable")?=="1",default:opt(r,"default")?,primary_key:false,auto_increment:get(r,"auto")?=="1",comment:opt(r,"comment")?,length:None,precision:None,scale:None})).collect()}
 fn json_names(r:&Record,k:&str)->Result<Vec<String>>{Ok(serde_json::from_str(get(r,k)?)?)}
+/// “关系不存在”是能力探测的唯一可继续信号：权限/语法错误必须原样上抛。
+fn missing_relation(e:&anyhow::Error)->bool{
+    e.downcast_ref::<sqlx::Error>().and_then(|e|e.as_database_error()).is_some_and(|d|matches!(d.code().as_deref(),Some("42S02")|Some("42P01")))
+}
+/// MySQL 协议族方言能力。MySQL 8 有 `@@server_uuid` 与 `information_schema.INNODB_TABLES`；
+/// MariaDB 只有 `@@server_id` 与 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID` 且没有触发器；
+/// OceanBase 等没有可证明的物理表 ID，读取时降级并记录限制。
+struct MysqlEvidence{tidb:bool,server_uuid:bool}
+impl MysqlEvidence{
+    async fn probe(s:&mut Session)->Result<Self>{
+        let server=s.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
+        Ok(Self{tidb:db::mysql_read_only_unsupported(&server,""),server_uuid:!s.rows("SHOW VARIABLES LIKE 'server_uuid'").await?.is_empty()})
+    }
+}
+/// 物理表 ID 的三个目录来源，按“真实存在且能给出该表 ID”逐个尝试：
+/// 只依据表是否存在选择来源不够（TiDB 可能保留空的 INNODB_* 兼容表），必须拿到唯一行。
+fn mysql_table_id_sqls(ns:&str,tn:&str,raw:&str)->[String;3]{[
+    format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.INNODB_TABLES WHERE NAME={}",db::quote_literal(raw)),
+    format!("SELECT CAST(ID AS CHAR) AS id FROM information_schema.INNODB_SYS_TABLES WHERE NAME={}",db::quote_literal(raw)),
+    format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.TIDB_TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}"),
+]}
+/// PostgreSQL 协议族方言能力。PG 12+ 有 `attgenerated`，10+ 有 `attidentity`/`pg_sequence`/`relispartition`，
+/// 11+ 有 `indnkeyatts`，9.5+ 有 `relrowsecurity`；openGauss/GaussDB/KWDB 等按实际列降级，
+/// 不按版本文本猜能力，避免同一内核的不同发行版分支误判。
+#[derive(Clone,Copy)]
+struct PgEvidence{attgenerated:bool,attidentity:bool,attcompression:bool,indnkeyatts:bool,sequences:bool,relrowsecurity:bool,relforcerowsecurity:bool,relreplident:bool,relispartition:bool}
+impl PgEvidence{
+    async fn probe(s:&mut Session)->Result<Self>{
+        let columns=s.rows("SELECT c.relname AS relation,a.attname AS column FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='pg_catalog' AND c.relname IN ('pg_class','pg_attribute','pg_index') AND a.attnum>0 AND NOT a.attisdropped").await?;
+        let has=|relation:&str,column:&str|columns.iter().any(|r|get(r,"relation").ok()==Some(relation)&&get(r,"column").ok()==Some(column));
+        let sequences=match s.rows("SELECT 1 AS probe FROM pg_catalog.pg_sequence LIMIT 0").await{Ok(_)=>true,Err(e) if missing_relation(&e)=>false,Err(e)=>return Err(e)};
+        Ok(Self{attgenerated:has("pg_attribute","attgenerated"),attidentity:has("pg_attribute","attidentity"),attcompression:has("pg_attribute","attcompression"),indnkeyatts:has("pg_index","indnkeyatts"),sequences,relrowsecurity:has("pg_class","relrowsecurity"),relforcerowsecurity:has("pg_class","relforcerowsecurity"),relreplident:has("pg_class","relreplident"),relispartition:has("pg_class","relispartition")})
+    }
+}
 pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)->Result<Stored>{
     let k=s.kind();let ns=db::quote_literal(&b.namespace);let tn=db::quote_literal(table);let full=db::qualified(&k,&b.namespace,table);
+    let mut limitations:Vec<String>=Vec::new();
     let (meta,ddl,mut cols,mut indexes,foreign_keys,objects,options)=if k.is_mysql_family(){
-        let identity=s.rows("SELECT @@server_uuid AS server, @@hostname AS host, @@port AS port, DATABASE() AS db, @@sql_mode AS mode, @@lower_case_table_names AS names, @@session.character_set_client AS charset_client, @@session.collation_connection AS collation_connection").await?;
+        let evidence=MysqlEvidence::probe(s).await?;
+        // MySQL 8 用 @@server_uuid；MariaDB/TiDB/OceanBase 缺少该变量时退到 @@server_id，仍缺则留空，
+        // 身份由 host/port/db/sql_mode 等其余列共同构成，不能因方言缺一个兼容变量就拒绝读取。
+        let server=if evidence.server_uuid{"@@server_uuid"}else if !s.rows("SHOW VARIABLES LIKE 'server_id'").await?.is_empty(){"CAST(@@server_id AS CHAR)"}else{"''"};
+        let identity=s.rows(&format!("SELECT {server} AS server, @@hostname AS host, @@port AS port, DATABASE() AS db, @@sql_mode AS mode, @@lower_case_table_names AS names, @@session.character_set_client AS charset_client, @@session.collation_connection AS collation_connection")).await?;
         ensure!(identity.len()==1&&get(&identity[0],"db")?==b.namespace,"TABLE_NAMESPACE_CHANGED");
-        // SHOW GRANTS 本身不会把无 TRIGGER 权限误报为空触发器目录。
-        let grants=s.rows("SHOW GRANTS FOR CURRENT_USER").await?;
+        // SHOW GRANTS 本身不会把无 TRIGGER 权限误报为空触发器目录；TiDB 没有触发器，
+        // 其 TRIGGERS 目录恒为空是方言事实，不要求 TRIGGER 权限才能发布完整定义。
+        let grants=s.rows("SHOW GRANTS").await?;
         let schema_scope=format!("{}.*",ident(&k,&b.namespace));let table_scope=full.clone();
         let visible=grants.iter().flat_map(|r|r.values().flatten()).any(|g|{let upper=g.to_ascii_uppercase();let privilege=upper.split(" ON ").next().unwrap_or("");(privilege.contains("ALL PRIVILEGES")||privilege.split([',',' ']).any(|p|p=="TRIGGER"))&&(g.contains(" ON *.* TO ")||g.contains(&format!(" ON {schema_scope} TO "))||g.contains(&format!(" ON {table_scope} TO ")))});
-        ensure!(visible,"TABLE_TRIGGER_VISIBILITY_UNPROVEN: 需要可证明的直接 TRIGGER/ALL 权限；角色授权目录未认证，不能发布空触发器");
+        if evidence.tidb{limitations.push("TiDB 不支持触发器；触发器目录按方言事实为空".into());}else{ensure!(visible,"TABLE_TRIGGER_VISIBILITY_UNPROVEN: 需要可证明的直接 TRIGGER/ALL 权限；角色授权目录未认证，不能发布空触发器");}
         let table_rows=s.rows(&format!("SELECT TABLE_TYPE AS kind, ENGINE AS engine, TABLE_COLLATION AS collation, ROW_FORMAT AS row_format, CREATE_OPTIONS AS extra, TABLE_COMMENT AS comment, CAST(CREATE_TIME AS CHAR) AS created FROM information_schema.TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}")).await?;
         ensure!(table_rows.len()==1&&get(&table_rows[0],"kind")?=="BASE TABLE","TABLE_BASE_TABLE_REQUIRED");let mut tr=table_rows[0].clone();tr.insert("session_sql_mode".into(),Some(get(&identity[0],"mode")?.into()));
         mysql_session_environment(&mut tr,&identity[0])?;
@@ -31,21 +71,52 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
         let mut raw_triggers=Vec::new();let mut triggers=Vec::new();for r in triggerrows{let mut r=r;let name=get(&r,"name")?.to_string();let raw=s.rows(&format!("SHOW CREATE TRIGGER {}",db::qualified(&k,&b.namespace,&name))).await?;ensure!(raw.len()==1,"TABLE_TRIGGER_DEFINITION_UNKNOWN");let statement=get(&raw[0],"SQL Original Statement")?.to_string();r.insert("definition".into(),Some(statement.clone()));triggers.push(TriggerInfo{name,timing:Some(get(&r,"timing")?.into()),event:Some(get(&r,"event")?.into()),statement});raw_triggers.push(r);}
         let options=TableOptionsDesign{engine:Some(get(&tr,"engine")?.into()),charset:Some(get(&tr,"collation")?.split('_').next().ok_or_else(||anyhow!("TABLE_CHARSET_UNKNOWN"))?.into()),collation:Some(get(&tr,"collation")?.into()),row_format:Some(get(&tr,"row_format")?.into()),..Default::default()};
         let objects=ConstraintSet{checks,triggers,completeness:"complete".into(),limitations:vec![],table_definition:Some(ddl.clone())};
-        let innodb=s.rows(&format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.INNODB_TABLES WHERE NAME={}",db::quote_literal(&format!("{}/{}",b.namespace,table)))).await?;ensure!(innodb.len()==1,"TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN: 需要真实 InnoDB TABLE_ID；分区/特殊文件名/非 InnoDB 未认证");
-        let physical=crate::object_catalog::revision(&identity);let id=crate::object_catalog::revision(&(&physical,get(&innodb[0],"id")?));
+        // 物理表 ID 是“表未被 DROP+CREATE 重建”的证据；方言没有该证据时降级为目录身份并保留限制。
+        let physical=crate::object_catalog::revision(&identity);
+        let mut table_id=None;
+        for sql in mysql_table_id_sqls(&ns,&tn,&format!("{}/{}",b.namespace,table)){
+            match s.rows(&sql).await{
+                Ok(rows) if rows.len()==1=>{table_id=Some(get(&rows[0],"id")?.to_string());break;}
+                Ok(_)=>continue,
+                Err(e) if missing_relation(&e)=>continue,
+                Err(e)=>return Err(e),
+            }
+        }
+        let id=if let Some(table_id)=table_id{crate::object_catalog::revision(&(&physical,table_id))}else{
+            // 原生 MySQL 有 @@server_uuid 时仍要求真实 InnoDB TABLE_ID：非 InnoDB/分区表不能靠降级蒙混。
+            ensure!(!evidence.server_uuid,"TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN: 需要真实 InnoDB/TiDB TABLE_ID；分区/特殊文件名/非 InnoDB 未认证");
+            limitations.push("当前 MySQL 方言未提供可证明的物理表 ID；DROP+CREATE 重建只能靠定义与目录版本检测".into());crate::object_catalog::revision(&(&physical,b.namespace.clone(),table.to_string()))};
         (NativeMetadata{identity:id,physical,columns:cr,indexes:ix,constraints:fkrows,triggers:raw_triggers,table:tr,sequences:vec![]},ddl,cols,indexes.into_values().collect(),fks.into_values().collect(),objects,options)
     }else{
+        let evidence=PgEvidence::probe(s).await?;
+        // 缺失的列用常量占位，保证同一份读取在 PG 9.x/openGauss 系仍能完成；能力缺口记录到 limitations。
+        let (rls,force_rls,partition,replica)=(
+            if evidence.relrowsecurity{"c.relrowsecurity::text"}else{"'false'::text"},
+            if evidence.relforcerowsecurity{"c.relforcerowsecurity::text"}else{"'false'::text"},
+            if evidence.relispartition{"c.relispartition::text"}else{"'false'::text"},
+            if evidence.relreplident{"c.relreplident::text"}else{"''::text"},
+        );
+        if !(evidence.relrowsecurity&&evidence.relforcerowsecurity&&evidence.relispartition&&evidence.relreplident){limitations.push("当前 PG 方言缺少部分 pg_class 列（RLS/分区/replica identity），清空与复制的相应保护按未知处理".into());}
         let identity=s.rows("SELECT current_database() AS db,(SELECT oid::text FROM pg_database WHERE datname=current_database()) AS dboid,inet_server_addr()::text AS addr,inet_server_port()::text AS port,pg_postmaster_start_time()::text AS started").await?;ensure!(identity.len()==1,"TABLE_PHYSICAL_IDENTITY_UNKNOWN");
-        let tbl=s.rows(&format!("SELECT c.oid::text AS oid,c.relfilenode::text AS filenode,c.relkind::text AS kind,c.relpersistence::text AS persistence,c.relrowsecurity::text AS rls,c.relforcerowsecurity::text AS force_rls,c.relispartition::text AS partition,c.relreplident::text AS replica,(SELECT amname FROM pg_am WHERE oid=c.relam) AS access_method,c.reloptions::text AS options,c.reltablespace::text AS tablespace,(SELECT count(*)::text FROM pg_inherits WHERE inhrelid=c.oid OR inhparent=c.oid) AS inherits,(SELECT count(*)::text FROM pg_rewrite WHERE ev_class=c.oid AND rulename<>'_RETURN') AS rules,obj_description(c.oid,'pg_class') AS comment,pg_get_userbyid(c.relowner) AS owner FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname={ns} AND c.relname={tn}")).await?;
+        let tbl=s.rows(&format!("SELECT c.oid::text AS oid,c.relfilenode::text AS filenode,c.relkind::text AS kind,c.relpersistence::text AS persistence,{rls} AS rls,{force_rls} AS force_rls,{partition} AS partition,{replica} AS replica,(SELECT amname FROM pg_am WHERE oid=c.relam) AS access_method,c.reloptions::text AS options,c.reltablespace::text AS tablespace,(SELECT count(*)::text FROM pg_inherits WHERE inhrelid=c.oid OR inhparent=c.oid) AS inherits,(SELECT count(*)::text FROM pg_rewrite WHERE ev_class=c.oid AND rulename<>'_RETURN') AS rules,obj_description(c.oid,'pg_class') AS comment,pg_get_userbyid(c.relowner) AS owner FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname={ns} AND c.relname={tn}")).await?;
         ensure!(tbl.len()==1&&["r","p"].contains(&get(&tbl[0],"kind")?),"TABLE_BASE_TABLE_REQUIRED");let tr=tbl[0].clone();let oid=get(&tr,"oid")?;
-        let cr=s.rows(&format!("SELECT a.attname AS name,format_type(a.atttypid,a.atttypmod) AS type,(NOT a.attnotnull)::int::text AS nullable,CASE WHEN a.attgenerated='' THEN pg_get_expr(ad.adbin,ad.adrelid) END AS \"default\",(a.attidentity<>'' OR COALESCE(pg_get_expr(ad.adbin,ad.adrelid) LIKE 'nextval(%',false))::int::text AS auto,col_description(a.attrelid,a.attnum) AS comment,a.attidentity::text AS identity,a.attgenerated::text AS generated,CASE WHEN a.attgenerated<>'' THEN pg_get_expr(ad.adbin,ad.adrelid) END AS expression,a.attcollation::text AS collation,a.attstorage::text AS storage,to_jsonb(a)->>'attcompression' AS compression,a.attnum::text AS ordinal,t.typtype::text AS typekind,t.typname AS typename,(SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)::text FROM pg_enum e WHERE e.enumtypid=t.oid) AS enum_labels FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum WHERE a.attrelid={oid}::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum")).await?;ensure!(!cr.is_empty(),"TABLE_COLUMNS_UNKNOWN");let cols=columns(&cr)?;
-        let constraints=s.rows(&format!("SELECT conname AS name,contype::text AS kind,pg_get_constraintdef(oid,false) AS definition,condeferrable::text AS deferred,condeferred::text AS initially,convalidated::text AS validated,connoinherit::text AS noinherit,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(conkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=conrelid AND a.attnum=u.id) AS columns,(SELECT relname FROM pg_class WHERE oid=confrelid) AS ref_table,(SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=confrelid) AS ref_schema,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(confkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=confrelid AND a.attnum=u.id) AS ref_columns,confupdtype::text AS on_update,confdeltype::text AS on_delete FROM pg_constraint WHERE conrelid={oid}::oid ORDER BY conname")).await?;
-        let ix=s.rows(&format!("SELECT ci.relname AS name,i.indisprimary::int::text AS primary,i.indisunique::int::text AS unique,i.indisvalid::int::text AS valid,i.indisready::int::text AS ready,am.amname AS method,pg_get_indexdef(i.indexrelid) AS definition,obj_description(i.indexrelid,'pg_class') AS comment,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(i.indkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=u.id WHERE u.n<=i.indnkeyatts) AS columns,(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR i.indnatts<>i.indnkeyatts)::int::text AS complex FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am am ON am.oid=ci.relam WHERE i.indrelid={oid}::oid ORDER BY ci.relname")).await?;
+        let default_expr=if evidence.attgenerated{"CASE WHEN a.attgenerated='' THEN pg_get_expr(ad.adbin,ad.adrelid) END"}else{"pg_get_expr(ad.adbin,ad.adrelid)"};
+        let auto=if evidence.attidentity{"(a.attidentity<>'' OR COALESCE(pg_get_expr(ad.adbin,ad.adrelid) LIKE 'nextval(%',false))::int::text"}else{"(COALESCE(pg_get_expr(ad.adbin,ad.adrelid) LIKE 'nextval(%',false))::int::text"};
+        let identity_column=if evidence.attidentity{"a.attidentity::text"}else{"''::text"};
+        let generated_column=if evidence.attgenerated{"a.attgenerated::text"}else{"''::text"};
+        let expression=if evidence.attgenerated{"CASE WHEN a.attgenerated<>'' THEN pg_get_expr(ad.adbin,ad.adrelid) END"}else{"NULL::text"};
+        // 不用 to_jsonb(a)->>'attcompression'：openGauss 等 9.x 内核没有 to_jsonb，且列本身也可能不存在。
+        let compression=if evidence.attcompression{"a.attcompression::text"}else{"NULL::text"};
+        let cr=s.rows(&format!("SELECT a.attname AS name,format_type(a.atttypid,a.atttypmod) AS type,(NOT a.attnotnull)::int::text AS nullable,{default_expr} AS \"default\",{auto} AS auto,col_description(a.attrelid,a.attnum) AS comment,{identity_column} AS identity,{generated_column} AS generated,{expression} AS expression,a.attcollation::text AS collation,a.attstorage::text AS storage,{compression} AS compression,a.attnum::text AS ordinal,t.typtype::text AS typekind,t.typname AS typename,(SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)::text FROM pg_enum e WHERE e.enumtypid=t.oid) AS enum_labels FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum WHERE a.attrelid={oid}::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum")).await?;ensure!(!cr.is_empty(),"TABLE_COLUMNS_UNKNOWN");let cols=columns(&cr)?;
+        let constraints=s.rows(&format!("SELECT conname AS name,contype::text AS kind,pg_get_constraintdef(oid) AS definition,condeferrable::text AS deferred,condeferred::text AS initially,convalidated::text AS validated,connoinherit::text AS noinherit,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(conkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=conrelid AND a.attnum=u.id) AS columns,(SELECT relname FROM pg_class WHERE oid=confrelid) AS ref_table,(SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=confrelid) AS ref_schema,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(confkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=confrelid AND a.attnum=u.id) AS ref_columns,confupdtype::text AS on_update,confdeltype::text AS on_delete FROM pg_constraint WHERE conrelid={oid}::oid ORDER BY conname")).await?;
+        let index_keys=if evidence.indnkeyatts{"WHERE u.n<=i.indnkeyatts"}else{""};
+        let index_complex=if evidence.indnkeyatts{"(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR i.indnatts<>i.indnkeyatts)::int::text"}else{"(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)::int::text"};
+        let ix=s.rows(&format!("SELECT ci.relname AS name,i.indisprimary::int::text AS primary,i.indisunique::int::text AS unique,i.indisvalid::int::text AS valid,i.indisready::int::text AS ready,am.amname AS method,pg_get_indexdef(i.indexrelid) AS definition,obj_description(i.indexrelid,'pg_class') AS comment,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(i.indkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=u.id {index_keys}) AS columns,{index_complex} AS complex FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am am ON am.oid=ci.relam WHERE i.indrelid={oid}::oid ORDER BY ci.relname")).await?;
         let mut indexes=Vec::new();for r in &ix{indexes.push(IndexInfo{name:get(r,"name")?.into(),columns:opt(r,"columns")?.map(|v|serde_json::from_str(&v)).transpose()?.unwrap_or_default(),unique:get(r,"unique")?=="1",primary:get(r,"primary")?=="1",method:Some(get(r,"method")?.into())});}
         let mut checks=Vec::new();let mut fks=Vec::new();for r in &constraints{match get(r,"kind")?{"c"=>checks.push(ConstraintInfo{name:get(r,"name")?.into(),definition:get(r,"definition")?.into(),generated_name:false}),"f"=>fks.push(ForeignKeyInfo{name:get(r,"name")?.into(),columns:json_names(r,"columns")?,ref_table:get(r,"ref_table")?.into(),ref_schema:Some(get(r,"ref_schema")?.into()),ref_columns:json_names(r,"ref_columns")?,on_update:Some(action(get(r,"on_update")?)?.into()),on_delete:Some(action(get(r,"on_delete")?)?.into())}),_=>{}}}
-        let triggerrows=s.rows(&format!("SELECT t.tgname AS name,pg_get_triggerdef(t.oid,false) AS definition,t.tgenabled::text AS enabled,t.tgfoid::text AS function,t.tgconstraint::text AS constraint,pg_get_functiondef(t.tgfoid) AS function_definition,obj_description(t.oid,'pg_trigger') AS comment FROM pg_trigger t WHERE t.tgrelid={oid}::oid AND NOT t.tgisinternal ORDER BY t.tgname")).await?;
+        let triggerrows=s.rows(&format!("SELECT t.tgname AS name,pg_get_triggerdef(t.oid) AS definition,t.tgenabled::text AS enabled,t.tgfoid::text AS function,t.tgconstraint::text AS constraint,pg_get_functiondef(t.tgfoid) AS function_definition,obj_description(t.oid,'pg_trigger') AS comment FROM pg_trigger t WHERE t.tgrelid={oid}::oid AND NOT t.tgisinternal ORDER BY t.tgname")).await?;
         let triggers=triggerrows.iter().map(|r|Ok(TriggerInfo{name:get(r,"name")?.into(),timing:None,event:None,statement:get(r,"definition")?.into()})).collect::<Result<Vec<_>>>()?;
-        let seq=s.rows(&format!("SELECT a.attname AS column,n.nspname AS schema,c.relname AS name,format_type(q.seqtypid,NULL) AS type,q.seqstart::text AS start,q.seqincrement::text AS increment,q.seqmax::text AS max,q.seqmin::text AS min,q.seqcache::text AS cache,q.seqcycle::text AS cycle,a.attidentity::text AS identity FROM pg_depend d JOIN pg_class c ON c.oid=d.objid AND c.relkind='S' JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_sequence q ON q.seqrelid=c.oid JOIN pg_attribute a ON a.attrelid=d.refobjid AND a.attnum=d.refobjsubid WHERE d.refobjid={oid}::oid AND d.deptype IN ('a','i') ORDER BY a.attnum")).await?;
+        let seq=if evidence.sequences{s.rows(&format!("SELECT a.attname AS column,n.nspname AS schema,c.relname AS name,format_type(q.seqtypid,NULL) AS type,q.seqstart::text AS start,q.seqincrement::text AS increment,q.seqmax::text AS max,q.seqmin::text AS min,q.seqcache::text AS cache,q.seqcycle::text AS cycle,{identity_column} AS identity FROM pg_depend d JOIN pg_class c ON c.oid=d.objid AND c.relkind='S' JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_sequence q ON q.seqrelid=c.oid JOIN pg_attribute a ON a.attrelid=d.refobjid AND a.attnum=d.refobjsubid WHERE d.refobjid={oid}::oid AND d.deptype IN ('a','i') ORDER BY a.attnum")).await?}else{limitations.push("当前 PG 方言没有 pg_sequence，序列元数据未读取；复制表不会重建序列".into());Vec::new()};
         let options_text=opt(&tr,"options")?.unwrap_or_default();let fillfactor=options_text.trim_matches(['{','}']).split(',').find_map(|v|v.strip_prefix("fillfactor=")).map(str::parse).transpose()?;
         let options=TableOptionsDesign{fillfactor,..Default::default()};let ddl=crate::object_catalog::revision(&(&cr,&constraints,&ix,&tr,&triggerrows,&seq));
         let objects=ConstraintSet{checks,triggers,completeness:"complete".into(),limitations:vec![],table_definition:Some(serde_json::to_string(&(&cr,&constraints,&ix,&tr,&triggerrows,&seq))?)};
@@ -61,7 +132,7 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
     let base=crate::object_catalog::revision(&(&ddl,&meta.columns,&meta.indexes,&meta.constraints,&meta.triggers,&meta.table,&meta.sequences));
     let revision=crate::object_catalog::revision(&(&base,&meta.identity,&meta.physical,b));design.base_revision=Some(revision.clone());design.source_fingerprint=Some(b.fingerprint.clone());
     let cap=FeatureCapability{supported:!readonly,reason:readonly.then(||"保存连接为只读".into())};
-    let capabilities=TableCapabilities{checks:cap.clone(),triggers:cap.clone(),options:cap.clone(),rebuild:cap.clone(),clear:clear_capability(&k,&meta.table,readonly),copy_structure:cap.clone(),copy_data:cap,supported_options:if k.is_mysql_family(){vec!["charset","collation","row_format"]}else{vec!["fillfactor"]}.into_iter().map(str::to_string).collect(),limitations:if k.is_mysql_family(){vec!["DDL 隐式提交；失败可能部分保存，保留草稿并报告未验证".into(),"直接 TRIGGER 权限必须可证明；角色授权需单独认证".into(),"仅认证 InnoDB 真实 TABLE_ID；非 InnoDB 及更换引擎在发送 DDL 前拒绝".into()]}else{vec!["清空拒绝 RLS/FORCE RLS 或缺失策略元数据，不能用同角色可见行数证明物理清空".into(),"复制对 RLS/分区/继承/规则/排除约束及自定义类型逐项拒绝；普通表完整支持".into()]}};
+    let capabilities=TableCapabilities{checks:cap.clone(),triggers:cap.clone(),options:cap.clone(),rebuild:cap.clone(),clear:clear_capability(&k,&meta.table,readonly),copy_structure:cap.clone(),copy_data:cap,supported_options:if k.is_mysql_family(){vec!["charset","collation","row_format"]}else{vec!["fillfactor"]}.into_iter().map(str::to_string).collect(),limitations:{let mut v=if k.is_mysql_family(){vec!["DDL 隐式提交；失败可能部分保存，保留草稿并报告未验证".to_string(),"直接 TRIGGER 权限必须可证明；角色授权需单独认证".to_string(),"仅认证 InnoDB/TiDB 真实 TABLE_ID；非 InnoDB 及更换引擎在发送 DDL 前拒绝".to_string()]}else{vec!["清空拒绝 RLS/FORCE RLS 或缺失策略元数据，不能用同角色可见行数证明物理清空".to_string(),"复制对 RLS/分区/继承/规则/排除约束及自定义类型逐项拒绝；普通表完整支持".to_string()]};v.extend(limitations);v}};
     let hidden=meta.columns.iter().map(|c|Ok((get(c,"name")?.into(),if opt(c,"generated")?.is_some_and(|v|!v.is_empty()){3}else{0}))).collect::<Result<_>>()?;
     Ok(Stored{public:TableDesignSnapshot{schema,objects,options,design,revision,source_fingerprint:b.fingerprint.clone(),owner_id:b.owner.clone(),completeness:"complete".into(),capabilities},ddl,indexes:vec![],columns:hidden,rowid:None,sequence:None,base,kind:k,native:Some(meta)})
 }
@@ -114,5 +185,13 @@ fn default_expression(part:&str)->Result<Option<String>>{
     #[test]fn mysql_primary_key_metadata_uses_real_ordinal_and_rejects_partial_rows(){let row=|name:&str,seq:&str|{let mut r=Record::new();r.insert("Key_name".into(),Some("PRIMARY".into()));r.insert("Seq_in_index".into(),Some(seq.into()));r.insert("Column_name".into(),Some(name.into()));r};let sorted=ordered_mysql_indexes(vec![row("b","2"),row("a","1")]).unwrap();assert_eq!(get(&sorted[0],"Column_name").unwrap(),"a");assert_eq!(get(&sorted[1],"Column_name").unwrap(),"b");assert!(ordered_mysql_indexes(vec![row("b","2")]).is_err());}
     #[test]fn mysql_default_metadata_keeps_bit_charset_literals_and_function_precision(){
         for (column,expected) in [("flag bit(4) DEFAULT b'1010'","b'1010'"),("label varchar(30) DEFAULT _utf8mb4'中文'","_utf8mb4'中文'"),("created timestamp(6) DEFAULT CURRENT_TIMESTAMP(6)","CURRENT_TIMESTAMP(6)"),("amount int DEFAULT -12","-12"),("label text DEFAULT 'src literal' COMMENT 'kept'","'src literal'")]{assert_eq!(default_expression(column).unwrap().as_deref(),Some(expected));}
+    }
+    #[test]fn mysql_table_id_sqls_cover_each_dialect_catalog(){
+        let sqls=mysql_table_id_sqls("`db`","`t`","db/t");
+        assert!(sqls[0].contains("information_schema.INNODB_TABLES WHERE NAME='db/t'"));
+        assert!(sqls[1].contains("information_schema.INNODB_SYS_TABLES WHERE NAME='db/t'"));
+        assert!(sqls[2].contains("information_schema.TIDB_TABLES")&&sqls[2].contains("TABLE_SCHEMA=`db`")&&sqls[2].contains("TABLE_NAME=`t`"));
+        // 没有 server_uuid 的方言（TiDB/MariaDB）降级必须由 limitations 说明，不能伪造表 ID。
+        assert!(!MysqlEvidence{tidb:false,server_uuid:false}.server_uuid);
     }
 }

@@ -6,7 +6,7 @@
 
 | 计划 | 内容 | 进入条件 |
 |---|---|---|
-| — | 当前无未开工计划；[可用内存预算方案](<../active/navkit-adaptive-diff-memory-budget.md>)已获授权进入实施 | — |
+| — | 当前无未开工计划；第四轮已开工，见 [active](../active/navkit-round4-regression-performance.md) | — |
 
 ## 归档备忘（下一步候选，未立项）
 

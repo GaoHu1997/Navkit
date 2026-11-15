@@ -18,15 +18,25 @@ impl Session {
     crate::sql_history::scope(__sql_history_context, async {match db{Db::Mysql(p)=>Ok(Self::Mysql(p.acquire().await?,None)),Db::Postgres(p)=>Ok(Self::Pg(p.acquire().await?)),_=>Err(anyhow!("TABLE_NATIVE_ADAPTER_UNSUPPORTED"))}
     }).await
 }
-    async fn setup(&mut self)->Result<()>{if let Self::Mysql(c,mode)=self{let old:String=crate::sql_history::query_scalar("SELECT @@session.sql_mode").fetch_one(&mut **c).await?;*mode=Some(old.clone());if !old.split(',').any(|v|v=="NO_BACKSLASH_ESCAPES"){let wanted=if old.is_empty(){"NO_BACKSLASH_ESCAPES".into()}else{format!("{old},NO_BACKSLASH_ESCAPES")};crate::sql_history::query("SET SESSION sql_mode=?").bind(wanted).execute(&mut **c).await?;}}Ok(())}
+    /// `SET SESSION` 走文本协议：TiDB 等方言对绑定参数的 SET 支持不一致，sql_mode 值来自服务端且已转义。
+    async fn setup(&mut self)->Result<()>{if let Self::Mysql(c,mode)=self{let old:String=crate::sql_history::query_scalar("SELECT @@session.sql_mode").fetch_one(&mut **c).await?;*mode=Some(old.clone());if !old.split(',').any(|v|v=="NO_BACKSLASH_ESCAPES"){let wanted=if old.is_empty(){"NO_BACKSLASH_ESCAPES".into()}else{format!("{old},NO_BACKSLASH_ESCAPES")};(&mut **c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&wanted)).as_str()).await?;}}Ok(())}
     pub(crate) async fn rows(&mut self,sql:&str)->Result<Vec<Record>>{
         macro_rules! read {($conn:expr,$extra:ty)=>{{let rows=crate::sql_history::query(sql).fetch_all(&mut **$conn).await?;let mut out=Vec::new();for row in rows{let mut r=Record::new();for (i,c) in row.columns().iter().enumerate(){let v=if row.try_get_raw(i)?.is_null(){None}else if let Ok(s)=row.try_get::<String,_>(i){Some(s)}else if let Ok(bytes)=row.try_get::<Vec<u8>,_>(i){Some(String::from_utf8(bytes).map_err(|_|anyhow!("TABLE_METADATA_UTF8_INVALID: {}",c.name()))?)}else if let Ok(n)=row.try_get::<i64,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<i32,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<$extra,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<bool,_>(i){Some(if n{"1"}else{"0"}.into())}else if let Ok(n)=row.try_get::<chrono::NaiveDateTime,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<chrono::DateTime<chrono::Utc>,_>(i){Some(n.naive_utc().to_string())}else{return Err(anyhow!("TABLE_METADATA_DECODE_FAILED: {}",c.name()));};ensure!(r.insert(c.name().to_string(),v).is_none(),"TABLE_METADATA_DUPLICATE_FIELD");}out.push(r);}Ok(out)}};}
         match self{Self::Mysql(c,_)=>read!(c,u64),Self::Pg(c)=>read!(c,i16)}
     }
+    /// MySQL 协议族的只读快照事务。
+    ///
+    /// TiDB 只把 `START TRANSACTION READ ONLY` 当 noop 兼容占位（默认 1235），
+    /// 该方言降级为普通事务；一致性仍由 MVCC 快照保证，本路径只发 SELECT/SHOW。
+    async fn begin_read(&mut self)->Result<()>{
+        let server=self.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
+        if db::mysql_read_only_unsupported(&server,""){return self.execute("START TRANSACTION").await.map(|_|());}
+        self.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").await?;self.execute("START TRANSACTION READ ONLY").await?;Ok(())
+    }
     /// MySQL 侧走文本协议：START TRANSACTION / LOCK TABLES / UNLOCK TABLES 不在服务端预处理白名单内（1295）。
     pub(crate) async fn execute(&mut self,sql:&str)->Result<u64>{match self{Self::Mysql(c,_)=>Ok((&mut **c).execute(sql).await?.rows_affected()),Self::Pg(c)=>Ok(crate::sql_history::query(sql).execute(&mut **c).await?.rows_affected())}}
     pub(crate) async fn scalar(&mut self,sql:&str)->Result<String>{let r=self.rows(sql).await?;ensure!(r.len()==1&&r[0].len()==1,"TABLE_METADATA_SCALAR_REQUIRED");r[0].values().next().unwrap().clone().ok_or_else(||anyhow!("TABLE_METADATA_NULL_SCALAR"))}
-    pub(crate) async fn release(self,destroy:bool)->Result<()>{match self{Self::Mysql(mut c,mode)=>{if destroy{c.close_on_drop();c.close().await?;}else{if let Some(mode)=mode{if let Err(e)=crate::sql_history::query("SET SESSION sql_mode=?").bind(&mode).execute(&mut *c).await{c.close_on_drop();let _=c.close().await;return Err(e.into());}}c.return_to_pool().await;}},Self::Pg(mut c)=>{if destroy{c.close_on_drop();c.close().await?;}else{c.return_to_pool().await;}}}Ok(())}
+    pub(crate) async fn release(self,destroy:bool)->Result<()>{match self{Self::Mysql(mut c,mode)=>{if destroy{c.close_on_drop();c.close().await?;}else{if let Some(mode)=mode{if let Err(e)=(&mut *c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&mode)).as_str()).await{c.close_on_drop();let _=c.close().await;return Err(e.into());}}c.return_to_pool().await;}},Self::Pg(mut c)=>{if destroy{c.close_on_drop();c.close().await?;}else{c.return_to_pool().await;}}}Ok(())}
     async fn digest(&mut self,before:&Stored,table:&str)->Result<(u64,String)>{
         let kind=self.kind();let full=db::qualified(&kind,&before.public.schema.database,table);
         let mut fields=Vec::new();
@@ -47,7 +57,7 @@ pub(crate) async fn read_owned(db:Arc<Db>,b:Binding,table:String,readonly:bool,o
     let __sql_history_context = crate::sql_history::db_context(db.as_ref());
     crate::sql_history::scope(__sql_history_context, async {
     crate::sql_history::spawn(async move{let _lease=ordinary;let mut s=Session::acquire(&db).await.map_err(AppError::from)?;let pg=matches!(s,Session::Pg(_));
-        let result:Result<Stored>=async{s.setup().await?;if pg{s.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY").await?;}else{ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");s.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").await?;s.execute("START TRANSACTION READ ONLY").await?;}
+        let result:Result<Stored>=async{s.setup().await?;if pg{s.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY").await?;}else{ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");s.begin_read().await?;}
             // MySQL MDL 在事务存续期间固定对象，防止 SHOW CREATE 与目录混代。
             s.rows(&format!("SELECT * FROM {} LIMIT 0",db::qualified(&s.kind(),&b.namespace,&table))).await?;snapshot(&mut s,&b,&table,readonly).await}.await;
         let rollback=s.execute("ROLLBACK").await;let destroy=rollback.is_err();s.release(destroy).await.map_err(|e|unknown(format!("TABLE_METADATA_CLOSE_UNKNOWN: {e:#}")))?;rollback.map_err(|e|unknown(format!("TABLE_METADATA_ROLLBACK_UNKNOWN: {e:#}")))?;result.map_err(AppError::from)

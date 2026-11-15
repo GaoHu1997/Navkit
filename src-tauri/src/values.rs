@@ -405,7 +405,11 @@ pub fn my_row_values(row: &sqlx::mysql::MySqlRow, count: usize) -> Vec<Option<St
             }
             // 按列的静态类型一次性分派（等价 dbx 的分类解码），未知类型回退到下方阶梯。
             match ty {
-                "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" | "YEAR" => return row.try_get::<Option<i64>, _>(i).ok().flatten().map(|x| x.to_string()),
+                "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => return row.try_get::<Option<i64>, _>(i).ok().flatten().map(|x| x.to_string()),
+                // YEAR is a distinct unsigned two-byte MySQL protocol type. SQLx's
+                // signed integer compatibility intentionally excludes it, so do not
+                // return early on the failed i64 decode and lose the generic u64 path.
+                "YEAR" => return row.try_get::<Option<u64>, _>(i).ok().flatten().map(|x| x.to_string()),
                 "FLOAT" => return row.try_get::<Option<f32>, _>(i).ok().flatten().map(|x| format_float(x as f64)),
                 "DOUBLE" => return row.try_get::<Option<f64>, _>(i).ok().flatten().map(format_float),
                 "DECIMAL" => return row.try_get::<Option<sqlx::types::BigDecimal>, _>(i).ok().flatten().map(|x| x.to_string()),

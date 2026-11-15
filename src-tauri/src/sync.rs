@@ -110,15 +110,32 @@ pub fn map_type(source: &str, target: &DbKind) -> String {
     }
     ty.into()
 }
+/// Map metadata for synchronization, retaining a source type only when the source
+/// and target are the exact same MySQL engine id and the complete type string is
+/// known-safe for the target dialect. Cross-engine mappings intentionally continue
+/// through the canonical map_type path.
+fn source_aware_type(source: &str, source_kind: &DbKind, target_kind: &DbKind) -> Result<String> {
+    if source_kind.id() == target_kind.id() && target_kind.is_mysql_family() {
+        return validate_target_type(source, target_kind).map_err(|error| {
+            anyhow!("源列类型元数据不安全或未知，拒绝原样复制 {}: {}", source, error)
+        });
+    }
+    Ok(map_type(source, target_kind))
+}
+
 pub fn validate_target_type(raw: &str, target: &DbKind) -> Result<String> {
     let t = raw.trim().to_ascii_uppercase();
-    let (base, params) = if let Some(i) = t.find('(') {
-        if !t.ends_with(')') { bail!("目标列类型无效: {}", raw); }
-        (&t[..i], Some(&t[i+1..t.len()-1]))
-    } else { (t.as_str(), None) };
+    // Only a final, standalone MySQL UNSIGNED modifier is accepted; parse and
+    // validate everything before it rather than copying arbitrary metadata SQL.
+    let unsigned = target.is_mysql_family() && t.ends_with(" UNSIGNED");
+    let declaration = if unsigned { &t[..t.len() - " UNSIGNED".len()] } else { t.as_str() };
+    let (base, params) = if let Some(i) = declaration.find('(') {
+        if !declaration.ends_with(')') { bail!("目标列类型无效: {}", raw); }
+        (&declaration[..i], Some(&declaration[i+1..declaration.len()-1]))
+    } else { (declaration, None) };
     let allowed: &[&str] = match target.protocol() {
         Protocol::Sqlite => &["INTEGER", "INT", "BIGINT", "REAL", "TEXT", "BLOB", "NUMERIC", "DECIMAL", "VARCHAR", "CHAR", "BOOLEAN", "DATE", "DATETIME"],
-        Protocol::Mysql => &["TINYINT", "SMALLINT", "INT", "INTEGER", "BIGINT", "REAL", "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "BOOLEAN", "CHAR", "VARCHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT", "BINARY", "VARBINARY", "BLOB", "LONGBLOB", "DATE", "TIME", "DATETIME", "TIMESTAMP", "JSON"],
+        Protocol::Mysql => &["TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT", "REAL", "FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "BOOLEAN", "CHAR", "VARCHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT", "BINARY", "VARBINARY", "BLOB", "LONGBLOB", "DATE", "TIME", "DATETIME", "TIMESTAMP", "YEAR", "JSON"],
         Protocol::Postgres => &["SMALLINT", "INT", "INTEGER", "BIGINT", "REAL", "DOUBLE PRECISION", "DECIMAL", "NUMERIC", "BOOLEAN", "CHAR", "VARCHAR", "TEXT", "BYTEA", "DATE", "TIME", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE", "UUID", "JSON", "JSONB"],
         Protocol::Mssql => &["TINYINT", "SMALLINT", "INT", "BIGINT", "REAL", "FLOAT", "DECIMAL", "NUMERIC", "BIT", "CHAR", "VARCHAR", "NVARCHAR", "NCHAR", "TEXT", "NTEXT", "BINARY", "VARBINARY", "DATE", "TIME", "DATETIME", "DATETIME2", "SMALLDATETIME", "UNIQUEIDENTIFIER"],
         Protocol::Clickhouse => &["INT8", "INT16", "INT32", "INT64", "UINT8", "UINT16", "UINT32", "UINT64", "FLOAT32", "FLOAT64", "DECIMAL", "BOOLEAN", "BOOL", "STRING", "FIXEDSTRING", "DATE", "DATETIME", "DATETIME64", "UUID"],
@@ -126,15 +143,20 @@ pub fn validate_target_type(raw: &str, target: &DbKind) -> Result<String> {
         _ => bail!("目标数据库不支持同步"),
     };
     if !allowed.contains(&base) { bail!("不支持或不安全的目标列类型: {}", raw); }
+    let mysql_integer = target.is_mysql_family() && ["TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT"].contains(&base);
+    if unsigned && !mysql_integer && !["DECIMAL", "NUMERIC"].contains(&base) { bail!("该类型不接受 UNSIGNED: {}", raw); }
+    let mysql_year = target.is_mysql_family() && base == "YEAR";
     if let Some(p) = params {
         let param_bases = ["CHAR", "VARCHAR", "NCHAR", "NVARCHAR", "BINARY", "VARBINARY", "DECIMAL", "NUMERIC", "NUMBER", "DATETIME", "DATETIME2", "TIMESTAMP", "TIME", "DATETIME64", "FIXEDSTRING"];
-        if !param_bases.contains(&base) { bail!("该类型不接受长度/精度参数: {}", raw); }
+        if !param_bases.contains(&base) && !mysql_integer && !mysql_year { bail!("该类型不接受长度/精度参数: {}", raw); }
         if p.eq_ignore_ascii_case("max") {
             if target.protocol() != Protocol::Mssql || !["VARCHAR", "NVARCHAR", "VARBINARY", "BINARY"].contains(&base) { bail!("该类型不接受 MAX 参数: {}", raw); }
             return Ok(t);
         }
         let nums = p.split(',').map(|x| x.trim().parse::<u32>().map_err(|_| anyhow!("类型长度/精度必须是整数"))).collect::<Result<Vec<_>>>()?;
         if nums.is_empty() || nums.len() > 2 || nums.iter().any(|n| *n > 65535) || (nums.len() == 2 && nums[1] > nums[0]) { bail!("类型长度/精度超出范围"); }
+        if mysql_integer && (nums.len() != 1 || nums[0] == 0 || nums[0] > 255) { bail!("整数显示宽度只能为 1 至 255"); }
+        if mysql_year && (nums.len() != 1 || nums[0] != 4) { bail!("YEAR 仅接受四位年份显示宽度"); }
         if ["CHAR", "VARCHAR", "NCHAR", "NVARCHAR", "BINARY", "VARBINARY", "FIXEDSTRING"].contains(&base) && (nums.len() != 1 || nums[0] == 0) { bail!("字符串长度必须大于零"); }
         let decimal_max = if target.is_mysql_family() { 65 } else if target.protocol() == Protocol::Mssql { 38 } else if target.protocol() == Protocol::Clickhouse { 76 } else { 1000 };
         if ["DECIMAL", "NUMERIC", "NUMBER"].contains(&base) && (nums[0] == 0 || nums[0] > decimal_max || nums.get(1).is_some_and(|s| target.is_mysql_family() && *s > 30)) { bail!("数值精度超出目标范围"); }
@@ -148,7 +170,10 @@ pub async fn type_mapping(source: &Db, source_kind: &DbKind, schema: &str, table
     if !supported(source_kind) || !supported(target_kind) { bail!("同步支持 SQLite、MySQL/PostgreSQL 协议族、SQL Server、ClickHouse 与 ODBC 关系型数据源；Redis、Elasticsearch、Kafka 等非关系型不支持"); }
     validate_sqlite_namespace(source, schema, table).await?;
     let schema = crate::schema::table_schema(source, source_kind.clone(), schema, table).await?;
-    Ok(schema.columns.iter().map(|c| SyncTypeMapping { source: c.name.clone(), source_type: c.data_type.clone(), target_type: map_type(&c.data_type, target_kind) }).collect())
+    schema.columns.iter().map(|c| Ok(SyncTypeMapping {
+        source: c.name.clone(), source_type: c.data_type.clone(),
+        target_type: source_aware_type(&c.data_type, source_kind, target_kind)?,
+    })).collect::<Result<Vec<_>>>()
 
     }).await
 }
@@ -458,7 +483,7 @@ async fn synchronize_inner(source: &Db, source_kind: &DbKind, target: &Db, targe
     let mut cols = Vec::new();
     for m in &mapping {
         let c = source_schema.columns.iter().find(|c| c.name == m.source).ok_or_else(|| anyhow!("源列不存在: {}", m.source))?;
-        let ty = match &m.target_type { Some(t) => validate_target_type(t, target_kind)?, None => map_type(&c.data_type, target_kind) };
+        let ty = match &m.target_type { Some(t) => validate_target_type(t, target_kind)?, None => source_aware_type(&c.data_type, source_kind, target_kind)? };
         cols.push((m, c, ty));
     }
     let exists = crate::schema::list_tables(target, target_kind.clone(), &opts.target_schema).await?.iter().any(|(n, _)| n == &opts.target_table);
@@ -1243,6 +1268,89 @@ mod heterogeneous_tests {
         assert_eq!(map_type("WEIRD_TYPE", &sqlite), "TEXT");
         assert_eq!(map_type("WEIRD_TYPE", &pg), "TEXT");
         assert_eq!(map_type("WEIRD_TYPE", &mysql), "LONGTEXT");
+    }
+
+    #[test]
+    fn d10_same_mysql_engine_preserves_validated_metadata() {
+        for id in ["mysql", "mariadb", "tidb", "oceanbase"] {
+            let kind = DbKind::of(id);
+            for (source, expected) in [
+                ("int", "INT"),
+                ("int unsigned", "INT UNSIGNED"),
+                ("int(11)", "INT(11)"),
+                ("bigint(20) unsigned", "BIGINT(20) UNSIGNED"),
+                ("tinyint(1)", "TINYINT(1)"),
+                ("smallint unsigned", "SMALLINT UNSIGNED"),
+                ("mediumint(8) unsigned", "MEDIUMINT(8) UNSIGNED"),
+                ("decimal(12,2)", "DECIMAL(12,2)"),
+                ("decimal(12,2) unsigned", "DECIMAL(12,2) UNSIGNED"),
+                ("datetime", "DATETIME"),
+                ("datetime(0)", "DATETIME(0)"),
+                ("datetime(3)", "DATETIME(3)"),
+                ("datetime(6)", "DATETIME(6)"),
+                ("timestamp(4)", "TIMESTAMP(4)"),
+                ("time(2)", "TIME(2)"),
+                ("year", "YEAR"),
+                ("year(4)", "YEAR(4)"),
+                (" varchar(32) ", "VARCHAR(32)"),
+            ] {
+                assert_eq!(source_aware_type(source, &kind, &kind).unwrap(), expected, "{id}: {source}");
+                assert_eq!(validate_target_type(expected, &kind).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn d10_cross_engine_mapping_remains_canonical() {
+        let ids = ["mysql", "mariadb", "tidb", "oceanbase", "postgresql", "sqlite", "sqlserver", "clickhouse", "oracle"];
+        for source_id in ids {
+            for target_id in ids {
+                let source_kind = DbKind::of(source_id);
+                let target_kind = DbKind::of(target_id);
+                if source_id == target_id && target_kind.is_mysql_family() { continue; }
+                for ty in ["INT", "INT(11) UNSIGNED", "DECIMAL(12,2)", "DATETIME(3)", "VARCHAR(32)", "BLOB", "YEAR", "WEIRD_TYPE"] {
+                    assert_eq!(source_aware_type(ty, &source_kind, &target_kind).unwrap(), map_type(ty, &target_kind), "{source_id} -> {target_id}: {ty}");
+                }
+            }
+        }
+        let mysql = DbKind::of("mysql");
+        let mariadb = DbKind::of("mariadb");
+        assert_eq!(source_aware_type("INT UNSIGNED", &mysql, &mariadb).unwrap(), "BIGINT");
+        assert_eq!(source_aware_type("DECIMAL(12,2)", &mariadb, &mysql).unwrap(), "DECIMAL(65,20)");
+        assert_eq!(source_aware_type("DATETIME", &mysql, &mariadb).unwrap(), "DATETIME(6)");
+    }
+
+    #[test]
+    fn d10_same_engine_rejects_unknown_unsafe_or_invalid_metadata() {
+        let mysql = DbKind::of("mysql");
+        for raw in [
+            "", "WEIRD_TYPE", "ENUM('a','b')", "POINT", "SERIAL",
+            "INT; DROP TABLE victim", "INT -- comment", "INT/*comment*/",
+            "INT UNSIGNED UNSIGNED", "INT UNSIGNED ZEROFILL", "UNSIGNED INT",
+            "INT(11) UNSIGNED NOT NULL", "INT(11) UNSIGNED; SELECT 1",
+            "INT(11)) UNSIGNED", "INT((11)) UNSIGNED", "INT(11)/*x*/ UNSIGNED",
+            "INT()", "INT(0)", "INT(256)", "INT(-1)", "INT(11,2)", "INT(MAX)",
+            "YEAR(2)", "YEAR(4,0)", "YEAR UNSIGNED", "DATE UNSIGNED",
+            "VARCHAR(12) UNSIGNED", "JSON UNSIGNED", "DATETIME(3) UNSIGNED",
+            "DECIMAL(0,0)", "DECIMAL(66,2)", "DECIMAL(12,13)", "DECIMAL(65,31)",
+            "DECIMAL(12,2,0)", "DECIMAL(12,2); DROP TABLE victim",
+            "DATETIME(7)", "DATETIME(3,1)", "DATETIME(3) DEFAULT NOW()",
+        ] {
+            assert!(validate_target_type(raw, &mysql).is_err(), "validator accepted: {raw}");
+            assert!(source_aware_type(raw, &mysql, &mysql).is_err(), "metadata accepted: {raw}");
+        }
+    }
+
+    #[test]
+    fn d10_mysql_type_extensions_remain_dialect_scoped() {
+        let mysql = DbKind::of("mysql");
+        assert_eq!(validate_target_type("int(255) unsigned", &mysql).unwrap(), "INT(255) UNSIGNED");
+        assert_eq!(validate_target_type("decimal(65,30) unsigned", &mysql).unwrap(), "DECIMAL(65,30) UNSIGNED");
+        for id in ["sqlite", "postgresql", "sqlserver", "clickhouse", "oracle"] {
+            for raw in ["MEDIUMINT", "YEAR", "YEAR(4)", "INT(11)", "INT UNSIGNED", "DECIMAL(12,2) UNSIGNED"] {
+                assert!(validate_target_type(raw, &DbKind::of(id)).is_err(), "{id} accepted MySQL type: {raw}");
+            }
+        }
     }
 
     #[test]
