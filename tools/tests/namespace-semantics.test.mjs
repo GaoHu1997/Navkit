@@ -90,7 +90,9 @@ test('真实App加载树以namespaceType建节点，菜单与详情入口使用�
 
 test('真实目录读取失败呈现对应命名空间错误，不生成main节点', async () => {
   const h = harness('postgresql', { listDatabases: async () => { throw Error('catalog permission denied'); } });
-  const root = { id: 'conn:own', children: [] }; await h.app.loadChildren(root);
+  // loadChildren 在呈现错误后向调用方（toggleNode）重抛异常，由其收起节点；直接调用需显式接受。
+  const root = { id: 'conn:own', children: [] };
+  await assert.rejects(h.app.loadChildren(root), /catalog permission denied/);
   assert.equal(root.children.length, 0); assert.match(h.messages[0][1], /无法列出模式.*catalog permission denied/);
 });
 
