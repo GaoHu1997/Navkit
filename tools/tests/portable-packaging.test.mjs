@@ -10,7 +10,7 @@ const root = resolve(import.meta.dirname, '../..');
 test('portable packaging updates executable without deleting connections, encryption key or backups', () => {
   const source = readFileSync(join(root, 'build.ps1'), 'utf8');
   const start = source.indexOf('$outDir = Join-Path $PSScriptRoot "dist-portable"');
-  const end = source.indexOf('# WebView2', start);
+  const end = source.indexOf('$readmePath = Join-Path', start);
   assert.ok(start >= 0 && end > start);
   const block = source.slice(start, end).replace('$outDir = Join-Path $PSScriptRoot "dist-portable"', '$outDir = $PortableDir');
   assert.doesNotMatch(block, /Remove-Item/i);

@@ -7,6 +7,10 @@ fn json_names(r:&Record,k:&str)->Result<Vec<String>>{Ok(serde_json::from_str(get
 fn missing_relation(e:&anyhow::Error)->bool{
     e.downcast_ref::<sqlx::Error>().and_then(|e|e.as_database_error()).is_some_and(|d|matches!(d.code().as_deref(),Some("42S02")|Some("42P01")))
 }
+/// “列不存在”(42703) 表示该方言没有这个 catalog 列；与权限/语法错误区分开。
+fn undefined_column(e:&anyhow::Error)->bool{
+    e.downcast_ref::<sqlx::Error>().and_then(|e|e.as_database_error()).is_some_and(|d|d.code().as_deref()==Some("42703"))
+}
 /// MySQL 协议族方言能力。MySQL 8 有 `@@server_uuid` 与 `information_schema.INNODB_TABLES`；
 /// MariaDB 只有 `@@server_id` 与 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID` 且没有触发器；
 /// OceanBase 等没有可证明的物理表 ID，读取时降级并记录限制。
@@ -24,18 +28,36 @@ fn mysql_table_id_sqls(ns:&str,tn:&str,raw:&str)->[String;3]{[
     format!("SELECT CAST(ID AS CHAR) AS id FROM information_schema.INNODB_SYS_TABLES WHERE NAME={}",db::quote_literal(raw)),
     format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.TIDB_TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}"),
 ]}
+/// openGauss/GaussDB 才有 `pg_database.datcompatibility`；普通 PostgreSQL 查询会报 42703，按 None 处理。
+const PG_COMPATIBILITY_SQL:&str="SELECT datcompatibility::text AS mode FROM pg_catalog.pg_database WHERE datname=current_database()";
 /// PostgreSQL 协议族方言能力。PG 12+ 有 `attgenerated`，10+ 有 `attidentity`/`pg_sequence`/`relispartition`，
 /// 11+ 有 `indnkeyatts`，9.5+ 有 `relrowsecurity`；openGauss/GaussDB/KWDB 等按实际列降级，
 /// 不按版本文本猜能力，避免同一内核的不同发行版分支误判。
 #[derive(Clone,Copy)]
-struct PgEvidence{attgenerated:bool,attidentity:bool,attcompression:bool,indnkeyatts:bool,sequences:bool,relrowsecurity:bool,relforcerowsecurity:bool,relreplident:bool,relispartition:bool}
+pub(crate) struct PgEvidence{attgenerated:bool,attidentity:bool,attcompression:bool,indnkeyatts:bool,sequences:bool,relrowsecurity:bool,relforcerowsecurity:bool,relreplident:bool,relispartition:bool,mysql_compat:bool}
 impl PgEvidence{
-    async fn probe(s:&mut Session)->Result<Self>{
+    pub(crate) async fn probe(s:&mut Session)->Result<Self>{
         let columns=s.rows("SELECT c.relname AS relation,a.attname AS column FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='pg_catalog' AND c.relname IN ('pg_class','pg_attribute','pg_index') AND a.attnum>0 AND NOT a.attisdropped").await?;
         let has=|relation:&str,column:&str|columns.iter().any(|r|get(r,"relation").ok()==Some(relation)&&get(r,"column").ok()==Some(column));
         let sequences=match s.rows("SELECT 1 AS probe FROM pg_catalog.pg_sequence LIMIT 0").await{Ok(_)=>true,Err(e) if missing_relation(&e)=>false,Err(e)=>return Err(e)};
-        Ok(Self{attgenerated:has("pg_attribute","attgenerated"),attidentity:has("pg_attribute","attidentity"),attcompression:has("pg_attribute","attcompression"),indnkeyatts:has("pg_index","indnkeyatts"),sequences,relrowsecurity:has("pg_class","relrowsecurity"),relforcerowsecurity:has("pg_class","relforcerowsecurity"),relreplident:has("pg_class","relreplident"),relispartition:has("pg_class","relispartition")})
+        let compat=match s.rows(PG_COMPATIBILITY_SQL).await{Ok(rows)=>rows.first().and_then(|r|opt(r,"mode").ok().flatten()).unwrap_or_default(),Err(e) if undefined_column(&e)=>String::new(),Err(e)=>return Err(e)};
+        Ok(Self{attgenerated:has("pg_attribute","attgenerated"),attidentity:has("pg_attribute","attidentity"),attcompression:has("pg_attribute","attcompression"),indnkeyatts:has("pg_index","indnkeyatts"),sequences,relrowsecurity:has("pg_class","relrowsecurity"),relforcerowsecurity:has("pg_class","relforcerowsecurity"),relreplident:has("pg_class","relreplident"),relispartition:has("pg_class","relispartition"),mysql_compat:db::pg_mysql_compat_mode(&compat)})
     }
+}
+/// 索引元数据：现代层（unnest/ORDINALITY + indnkeyatts 可用时按 key 列截断）。
+fn pg_index_sql(e:&PgEvidence,oid:&str)->String{
+    let index_keys=if e.indnkeyatts{"WHERE u.n<=i.indnkeyatts"}else{""};
+    let index_complex=if e.indnkeyatts{"(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR i.indnatts<>i.indnkeyatts)::int::text"}else{"(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)::int::text"};
+    format!("SELECT ci.relname AS name,i.indisprimary::int::text AS primary,i.indisunique::int::text AS unique,i.indisvalid::int::text AS valid,i.indisready::int::text AS ready,am.amname AS method,pg_get_indexdef(i.indexrelid) AS definition,obj_description(i.indexrelid,'pg_class') AS comment,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(i.indkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=u.id {index_keys}) AS columns,{index_complex} AS complex FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am am ON am.oid=ci.relam WHERE i.indrelid={oid}::oid ORDER BY ci.relname")
+}
+/// 索引元数据兼容层：不依赖 `unnest ... WITH ORDINALITY` 与 `indnkeyatts`，只用 string_to_array + generate_series
+/// （PG 9.x 系、openGauss/GaussDB 老内核都能跑）；负值系统属性（如 tableoid）按 >=0 过滤。
+fn pg_index_compat_sql(oid:&str)->String{
+    format!("SELECT ci.relname AS name,i.indisprimary::int::text AS primary,i.indisunique::int::text AS unique,i.indisvalid::int::text AS valid,i.indisready::int::text AS ready,am.amname AS method,pg_get_indexdef(i.indexrelid) AS definition,obj_description(i.indexrelid,'pg_class') AS comment,(SELECT json_agg(a.attname ORDER BY pos.n)::text FROM generate_series(1,array_length(string_to_array(i.indkey::text,' '),1)) AS pos(n) LEFT JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=(string_to_array(i.indkey::text,' '))[pos.n]::int2 AND a.attnum>0 WHERE (string_to_array(i.indkey::text,' '))[pos.n]::int2>=0) AS columns,(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)::int::text AS complex FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am am ON am.oid=ci.relam WHERE i.indrelid={oid}::oid ORDER BY ci.relname")
+}
+/// 列元数据最后兜底层：标准 information_schema，任何兼容 PG 的内核都应提供。
+fn pg_columns_information_schema(ns:&str,tn:&str)->String{
+    format!("SELECT c.column_name AS name,CASE WHEN c.data_type='USER-DEFINED' THEN c.udt_name ELSE c.data_type END AS type,CASE WHEN c.is_nullable='YES' THEN '1' ELSE '0' END AS nullable,c.column_default AS \"default\",'0' AS auto,NULL::text AS comment,''::text AS identity,''::text AS generated,NULL::text AS expression,NULL::text AS collation,NULL::text AS compression,c.ordinal_position::text AS ordinal,'b'::text AS typekind,c.udt_name AS typename,NULL::text AS enum_labels FROM information_schema.columns c WHERE c.table_schema={ns} AND c.table_name={tn} ORDER BY c.ordinal_position")
 }
 pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)->Result<Stored>{
     let k=s.kind();let ns=db::quote_literal(&b.namespace);let tn=db::quote_literal(table);let full=db::qualified(&k,&b.namespace,table);
@@ -91,7 +113,11 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
             limitations.push("当前 MySQL 方言未提供可证明的物理表 ID；DROP+CREATE 重建只能靠定义与目录版本检测".into());crate::object_catalog::revision(&(&physical,b.namespace.clone(),table.to_string()))};
         (NativeMetadata{identity:id,physical,columns:cr,indexes:ix,constraints:fkrows,triggers:raw_triggers,table:tr,sequences:vec![]},ddl,cols,indexes.into_values().collect(),fks.into_values().collect(),objects,options)
     }else{
-        let evidence=PgEvidence::probe(s).await?;
+        // 同一物理会话内复用探测结果（保存表设计会对每步 DDL 反复 snapshot）。
+        let evidence=match s.pg_evidence(){Some(e)=>e,None=>{let e=PgEvidence::probe(s).await?;s.set_pg_evidence(e);e}};
+        // openGauss/GaussDB 的 B(MySQL) 兼容模式：标识符用反引号、`||` 可能被当逻辑 OR，
+        // 按 PG 语义拼出的 SQL 在这里是错的；表设计读写明确拒绝，避免生成错误或危险 SQL。
+        ensure!(!evidence.mysql_compat,"TABLE_PG_MYSQL_COMPAT_MODE_UNSUPPORTED: 该数据库是 openGauss/GaussDB 的 B(MySQL) 兼容模式，标识符引号与拼接语义与 PostgreSQL 不同，表设计未认证；请改用 A/PG 兼容库，或使用查询/导出功能");
         // 缺失的列用常量占位，保证同一份读取在 PG 9.x/openGauss 系仍能完成；能力缺口记录到 limitations。
         let (rls,force_rls,partition,replica)=(
             if evidence.relrowsecurity{"c.relrowsecurity::text"}else{"'false'::text"},
@@ -110,11 +136,26 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
         let expression=if evidence.attgenerated{"CASE WHEN a.attgenerated<>'' THEN pg_get_expr(ad.adbin,ad.adrelid) END"}else{"NULL::text"};
         // 不用 to_jsonb(a)->>'attcompression'：openGauss 等 9.x 内核没有 to_jsonb，且列本身也可能不存在。
         let compression=if evidence.attcompression{"a.attcompression::text"}else{"NULL::text"};
-        let cr=s.rows(&format!("SELECT a.attname AS name,format_type(a.atttypid,a.atttypmod) AS type,(NOT a.attnotnull)::int::text AS nullable,{default_expr} AS \"default\",{auto} AS auto,col_description(a.attrelid,a.attnum) AS comment,{identity_column} AS identity,{generated_column} AS generated,{expression} AS expression,a.attcollation::text AS collation,a.attstorage::text AS storage,{compression} AS compression,a.attnum::text AS ordinal,t.typtype::text AS typekind,t.typname AS typename,(SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)::text FROM pg_enum e WHERE e.enumtypid=t.oid) AS enum_labels FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum WHERE a.attrelid={oid}::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum")).await?;ensure!(!cr.is_empty(),"TABLE_COLUMNS_UNKNOWN");let cols=columns(&cr)?;
+        let columns_sql=format!("SELECT a.attname AS name,format_type(a.atttypid,a.atttypmod) AS type,(NOT a.attnotnull)::int::text AS nullable,{default_expr} AS \"default\",{auto} AS auto,col_description(a.attrelid,a.attnum) AS comment,{identity_column} AS identity,{generated_column} AS generated,{expression} AS expression,a.attcollation::text AS collation,a.attstorage::text AS storage,{compression} AS compression,a.attnum::text AS ordinal,t.typtype::text AS typekind,t.typname AS typename,(SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)::text FROM pg_enum e WHERE e.enumtypid=t.oid) AS enum_labels FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum WHERE a.attrelid={oid}::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum");
+        // 最后一层兜底：pg_catalog 被意外拒绝/未预料内核时退到标准 information_schema（只丢 identity/generated 细节）。
+        let cr=match s.rows(&columns_sql).await{
+            Ok(rows)=>rows,
+            Err(primary)=>match s.rows(&pg_columns_information_schema(&ns,&tn)).await{
+                Ok(rows)=>{limitations.push(format!("列元数据主查询失败，已降级 information_schema（identity/generated 细节不可用）：{primary}"));rows}
+                Err(_)=>return Err(primary),
+            },
+        };
+        ensure!(!cr.is_empty(),"TABLE_COLUMNS_UNKNOWN");let cols=columns(&cr)?;
         let constraints=s.rows(&format!("SELECT conname AS name,contype::text AS kind,pg_get_constraintdef(oid) AS definition,condeferrable::text AS deferred,condeferred::text AS initially,convalidated::text AS validated,connoinherit::text AS noinherit,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(conkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=conrelid AND a.attnum=u.id) AS columns,(SELECT relname FROM pg_class WHERE oid=confrelid) AS ref_table,(SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=confrelid) AS ref_schema,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(confkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=confrelid AND a.attnum=u.id) AS ref_columns,confupdtype::text AS on_update,confdeltype::text AS on_delete FROM pg_constraint WHERE conrelid={oid}::oid ORDER BY conname")).await?;
-        let index_keys=if evidence.indnkeyatts{"WHERE u.n<=i.indnkeyatts"}else{""};
-        let index_complex=if evidence.indnkeyatts{"(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR i.indnatts<>i.indnkeyatts)::int::text"}else{"(i.indexprs IS NOT NULL OR i.indpred IS NOT NULL)::int::text"};
-        let ix=s.rows(&format!("SELECT ci.relname AS name,i.indisprimary::int::text AS primary,i.indisunique::int::text AS unique,i.indisvalid::int::text AS valid,i.indisready::int::text AS ready,am.amname AS method,pg_get_indexdef(i.indexrelid) AS definition,obj_description(i.indexrelid,'pg_class') AS comment,(SELECT json_agg(a.attname ORDER BY u.n)::text FROM unnest(i.indkey) WITH ORDINALITY u(id,n) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=u.id {index_keys}) AS columns,{index_complex} AS complex FROM pg_index i JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am am ON am.oid=ci.relam WHERE i.indrelid={oid}::oid ORDER BY ci.relname")).await?;
+        // 现代层用 unnest(...) WITH ORDINALITY + indnkeyatts；老内核（PG 9.x 系、部分 openGauss/GaussDB）
+        // 缺 ORDINALITY 或 indnkeyatts 时降级为 string_to_array + generate_series 的兼容查询。
+        let ix=match s.rows(&pg_index_sql(&evidence,oid)).await{
+            Ok(rows)=>rows,
+            Err(primary)=>match s.rows(&pg_index_compat_sql(oid)).await{
+                Ok(rows)=>{limitations.push(format!("索引元数据主查询失败，已降级兼容查询：{primary}"));rows}
+                Err(_)=>return Err(primary),
+            },
+        };
         let mut indexes=Vec::new();for r in &ix{indexes.push(IndexInfo{name:get(r,"name")?.into(),columns:opt(r,"columns")?.map(|v|serde_json::from_str(&v)).transpose()?.unwrap_or_default(),unique:get(r,"unique")?=="1",primary:get(r,"primary")?=="1",method:Some(get(r,"method")?.into())});}
         let mut checks=Vec::new();let mut fks=Vec::new();for r in &constraints{match get(r,"kind")?{"c"=>checks.push(ConstraintInfo{name:get(r,"name")?.into(),definition:get(r,"definition")?.into(),generated_name:false}),"f"=>fks.push(ForeignKeyInfo{name:get(r,"name")?.into(),columns:json_names(r,"columns")?,ref_table:get(r,"ref_table")?.into(),ref_schema:Some(get(r,"ref_schema")?.into()),ref_columns:json_names(r,"ref_columns")?,on_update:Some(action(get(r,"on_update")?)?.into()),on_delete:Some(action(get(r,"on_delete")?)?.into())}),_=>{}}}
         let triggerrows=s.rows(&format!("SELECT t.tgname AS name,pg_get_triggerdef(t.oid) AS definition,t.tgenabled::text AS enabled,t.tgfoid::text AS function,t.tgconstraint::text AS constraint,pg_get_functiondef(t.tgfoid) AS function_definition,obj_description(t.oid,'pg_trigger') AS comment FROM pg_trigger t WHERE t.tgrelid={oid}::oid AND NOT t.tgisinternal ORDER BY t.tgname")).await?;
@@ -202,5 +243,28 @@ fn default_expression(part:&str)->Result<Option<String>>{
         assert!(sqls[2].contains("information_schema.TIDB_TABLES")&&sqls[2].contains("TABLE_SCHEMA=`db`")&&sqls[2].contains("TABLE_NAME=`t`"));
         // 没有 server_uuid 的方言（TiDB/MariaDB）降级必须由 limitations 说明，不能伪造表 ID。
         assert!(!MysqlEvidence{tidb:false,server_uuid:false}.server_uuid);
+    }
+    fn pg_full_evidence()->PgEvidence{PgEvidence{attgenerated:true,attidentity:true,attcompression:true,indnkeyatts:true,sequences:true,relrowsecurity:true,relforcerowsecurity:true,relreplident:true,relispartition:true,mysql_compat:false}}
+    #[test]fn pg_index_layers_keep_modern_and_compat_separate(){
+        let modern=pg_index_sql(&pg_full_evidence(),"42");
+        assert!(modern.contains("ORDINALITY")&&modern.contains("indnkeyatts"));
+        let compat=pg_index_compat_sql("42");
+        // 兼容层必须完全避开老内核不支持的语法。
+        assert!(!compat.contains("ORDINALITY")&&!compat.contains("indnkeyatts")&&!compat.contains("to_jsonb"));
+        assert!(compat.contains("string_to_array")&&compat.contains("generate_series"));
+    }
+    #[test]fn pg_columns_fallback_uses_information_schema_only(){
+        let sql=pg_columns_information_schema("'db'","'t'");
+        assert!(sql.contains("information_schema.columns"));
+        assert!(!sql.contains("attgenerated")&&!sql.contains("attidentity")&&!sql.contains("pg_sequence")&&!sql.contains("to_jsonb"));
+        // 别名必须与 columns() 读取的字段一致。
+        for alias in ["AS name","AS type","AS nullable","AS \"default\"","AS auto","AS comment","AS generated"]{assert!(sql.contains(alias),"{alias}");}
+    }
+    #[test]fn mysql_compat_mode_refusal_is_wired_into_snapshot(){
+        let source=include_str!("table_workflows_native_metadata.rs");
+        // B 模式必须由探测得到并直接拒绝，而不是继续按 PG 语义读或写。
+        assert!(source.contains("mysql_compat:db::pg_mysql_compat_mode(&compat)"));
+        assert!(source.contains("ensure!(!evidence.mysql_compat"));
+        assert!(source.contains("TABLE_PG_MYSQL_COMPAT_MODE_UNSUPPORTED"));
     }
 }

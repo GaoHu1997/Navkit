@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     一键构建 NavKit 绿色版（免安装单文件 exe）。
 
@@ -91,17 +91,8 @@ foreach ($relative in @("data", "data\logs", "data\cache")) {
 }
 Write-Host "  原地更新，已有连接、密钥、收藏和备份保持不变" -ForegroundColor DarkGray
 
-# WebView2 在线引导程序：缺少运行时时可联网安装，不是离线运行时。
-$webview2 = Join-Path $outDir "MicrosoftEdgeWebview2Setup.exe"
-$wvUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
-try {
-    Write-Host "  下载 WebView2 在线引导程序 ..." -ForegroundColor DarkGray
-    Invoke-WebRequest -Uri $wvUrl -OutFile $webview2 -UseBasicParsing -TimeoutSec 180
-    Write-Host "  WebView2 引导程序已就绪" -ForegroundColor DarkGray
-} catch {
-    Write-Warning "无法下载 WebView2 引导程序（需要联网时手动运行官方安装包）：$wvUrl"
-    if (Test-Path $webview2) { Remove-Item $webview2 -Force }
-}
+# 便携包只保留运行必需的 navkit.exe、data\ 与使用说明，不再内置 WebView2 引导程序
+# （安装包已通过 embedBootstrapper 内嵌；Win10/11 通常已自带 WebView2 运行时），以减小体积。
 
 $readmePath = Join-Path $outDir "README-portable.txt"
 $src = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "assets") -Filter *.txt | Select-Object -First 1

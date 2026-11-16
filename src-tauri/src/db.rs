@@ -396,6 +396,13 @@ pub fn mysql_noop_lock_unsupported(version: &str, comment: &str) -> bool {
     mysql_noop_dialect(version, comment)
 }
 
+/// openGauss/GaussDB 的 `pg_database.datcompatibility`：A=Oracle、B=MySQL、PG=PostgreSQL。
+/// B/MYSQL 模式下标识符用反引号、`||` 可能被当作逻辑 OR，与 PostgreSQL 语义不同；
+/// 按 PG 语义生成并执行的 SQL（引号、拼接）在这类库里会出错，必须先识别再决定是否允许。
+pub fn pg_mysql_compat_mode(mode: &str) -> bool {
+    matches!(mode.trim().to_ascii_uppercase().as_str(), "B" | "M" | "MYSQL")
+}
+
 /// 用列名 + 类型构造 ResultColumn。
 fn make_columns(names: &[String], types: &[String]) -> Vec<crate::models::ResultColumn> {
     names
@@ -973,6 +980,10 @@ mod protocol_dispatch_tests;
 #[cfg(test)]
 #[path = "mysql_dialect_tests.rs"]
 mod mysql_dialect_tests;
+
+#[cfg(test)]
+#[path = "pg_dialect_tests.rs"]
+mod pg_dialect_tests;
 
 /// 按分号切分 SQL（尊重字符串字面量与注释）。
 pub fn split_statements(sql: &str) -> Vec<String> {

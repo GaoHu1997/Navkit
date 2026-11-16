@@ -10,19 +10,23 @@ use crate::{db::{self,Db}, models::{DbKind,MultiResult}, execution::{self,Bindin
 pub(crate) type Record=BTreeMap<String,Option<String>>;
 pub(crate) fn get<'a>(r:&'a Record,k:&str)->Result<&'a str>{r.get(k).and_then(|v|v.as_deref()).ok_or_else(||anyhow!("TABLE_METADATA_REQUIRED: {k}"))}
 pub(crate) fn opt(r:&Record,k:&str)->Result<Option<String>>{r.get(k).cloned().ok_or_else(||anyhow!("TABLE_METADATA_FIELD_MISSING: {k}"))}
-pub(crate) enum Session {Mysql(sqlx::pool::PoolConnection<sqlx::MySql>,Option<String>),Pg(sqlx::pool::PoolConnection<sqlx::Postgres>)}
+pub(crate) enum Session {Mysql(sqlx::pool::PoolConnection<sqlx::MySql>,Option<String>),Pg(sqlx::pool::PoolConnection<sqlx::Postgres>,Option<metadata::PgEvidence>)}
 impl Session {
     pub(crate) fn kind(&self)->DbKind{DbKind::of(if matches!(self,Self::Mysql(..)){"mysql"}else{"postgresql"})}
     pub(crate) async fn acquire(db:&Db)->Result<Self>{
     let __sql_history_context = crate::sql_history::db_context(db);
-    crate::sql_history::scope(__sql_history_context, async {match db{Db::Mysql(p)=>Ok(Self::Mysql(p.acquire().await?,None)),Db::Postgres(p)=>Ok(Self::Pg(p.acquire().await?)),_=>Err(anyhow!("TABLE_NATIVE_ADAPTER_UNSUPPORTED"))}
+    crate::sql_history::scope(__sql_history_context, async {match db{Db::Mysql(p)=>Ok(Self::Mysql(p.acquire().await?,None)),Db::Postgres(p)=>Ok(Self::Pg(p.acquire().await?,None)),_=>Err(anyhow!("TABLE_NATIVE_ADAPTER_UNSUPPORTED"))}
     }).await
 }
+    /// PG 方言能力探测结果按物理会话缓存：同一 owned 会话里保存表设计会多次 snapshot
+    /// （before/每步 DDL 后/after），重复探测 pg_catalog 没有意义。
+    pub(crate) fn pg_evidence(&self)->Option<metadata::PgEvidence>{match self{Self::Pg(_,e)=>*e,_=>None}}
+    pub(crate) fn set_pg_evidence(&mut self,e:metadata::PgEvidence){if let Self::Pg(_,slot)=self{*slot=Some(e);}}
     /// `SET SESSION` 走文本协议：TiDB 等方言对绑定参数的 SET 支持不一致，sql_mode 值来自服务端且已转义。
     async fn setup(&mut self)->Result<()>{if let Self::Mysql(c,mode)=self{let old:String=crate::sql_history::query_scalar("SELECT @@session.sql_mode").fetch_one(&mut **c).await?;*mode=Some(old.clone());if !old.split(',').any(|v|v=="NO_BACKSLASH_ESCAPES"){let wanted=if old.is_empty(){"NO_BACKSLASH_ESCAPES".into()}else{format!("{old},NO_BACKSLASH_ESCAPES")};(&mut **c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&wanted)).as_str()).await?;}}Ok(())}
     pub(crate) async fn rows(&mut self,sql:&str)->Result<Vec<Record>>{
         macro_rules! read {($conn:expr,$extra:ty)=>{{let rows=crate::sql_history::query(sql).fetch_all(&mut **$conn).await?;let mut out=Vec::new();for row in rows{let mut r=Record::new();for (i,c) in row.columns().iter().enumerate(){let v=if row.try_get_raw(i)?.is_null(){None}else if let Ok(s)=row.try_get::<String,_>(i){Some(s)}else if let Ok(bytes)=row.try_get::<Vec<u8>,_>(i){Some(String::from_utf8(bytes).map_err(|_|anyhow!("TABLE_METADATA_UTF8_INVALID: {}",c.name()))?)}else if let Ok(n)=row.try_get::<i64,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<i32,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<$extra,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<bool,_>(i){Some(if n{"1"}else{"0"}.into())}else if let Ok(n)=row.try_get::<chrono::NaiveDateTime,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<chrono::DateTime<chrono::Utc>,_>(i){Some(n.naive_utc().to_string())}else{return Err(anyhow!("TABLE_METADATA_DECODE_FAILED: {}",c.name()));};ensure!(r.insert(c.name().to_string(),v).is_none(),"TABLE_METADATA_DUPLICATE_FIELD");}out.push(r);}Ok(out)}};}
-        match self{Self::Mysql(c,_)=>read!(c,u64),Self::Pg(c)=>read!(c,i16)}
+        match self{Self::Mysql(c,_)=>read!(c,u64),Self::Pg(c,_)=>read!(c,i16)}
     }
     /// MySQL 协议族的只读快照事务。
     ///
@@ -34,17 +38,18 @@ impl Session {
         self.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").await?;self.execute("START TRANSACTION READ ONLY").await?;Ok(())
     }
     /// MySQL 侧走文本协议：START TRANSACTION / LOCK TABLES / UNLOCK TABLES 不在服务端预处理白名单内（1295）。
-    pub(crate) async fn execute(&mut self,sql:&str)->Result<u64>{match self{Self::Mysql(c,_)=>Ok((&mut **c).execute(sql).await?.rows_affected()),Self::Pg(c)=>Ok(crate::sql_history::query(sql).execute(&mut **c).await?.rows_affected())}}
+    pub(crate) async fn execute(&mut self,sql:&str)->Result<u64>{match self{Self::Mysql(c,_)=>Ok((&mut **c).execute(sql).await?.rows_affected()),Self::Pg(c,_)=>Ok(crate::sql_history::query(sql).execute(&mut **c).await?.rows_affected())}}
     pub(crate) async fn scalar(&mut self,sql:&str)->Result<String>{let r=self.rows(sql).await?;ensure!(r.len()==1&&r[0].len()==1,"TABLE_METADATA_SCALAR_REQUIRED");r[0].values().next().unwrap().clone().ok_or_else(||anyhow!("TABLE_METADATA_NULL_SCALAR"))}
-    pub(crate) async fn release(self,destroy:bool)->Result<()>{match self{Self::Mysql(mut c,mode)=>{if destroy{c.close_on_drop();c.close().await?;}else{if let Some(mode)=mode{if let Err(e)=(&mut *c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&mode)).as_str()).await{c.close_on_drop();let _=c.close().await;return Err(e.into());}}c.return_to_pool().await;}},Self::Pg(mut c)=>{if destroy{c.close_on_drop();c.close().await?;}else{c.return_to_pool().await;}}}Ok(())}
+    pub(crate) async fn release(self,destroy:bool)->Result<()>{match self{Self::Mysql(mut c,mode)=>{if destroy{c.close_on_drop();c.close().await?;}else{if let Some(mode)=mode{if let Err(e)=(&mut *c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&mode)).as_str()).await{c.close_on_drop();let _=c.close().await;return Err(e.into());}}c.return_to_pool().await;}},Self::Pg(mut c,_)=>{if destroy{c.close_on_drop();c.close().await?;}else{c.return_to_pool().await;}}}Ok(())}
     async fn digest(&mut self,before:&Stored,table:&str)->Result<(u64,String)>{
         let kind=self.kind();let full=db::qualified(&kind,&before.public.schema.database,table);
         let mut fields=Vec::new();
-        for c in &before.public.schema.columns{let n=db::quote_ident(&kind,&c.name);fields.push(if kind.is_mysql_family(){format!("CASE WHEN {n} IS NULL THEN 'N' ELSE CONCAT('V',HEX(CAST({n} AS BINARY))) END")}else{format!("CASE WHEN {n} IS NULL THEN 'N' ELSE 'V'||encode(convert_to({n}::text,'UTF8'),'hex') END COLLATE \"C\"")});}
+        // PG 分支改用 concat() 而非 `||`：openGauss B 模式未开 pipes_as_concat 时 `||` 会被当逻辑 OR。
+        for c in &before.public.schema.columns{let n=db::quote_ident(&kind,&c.name);fields.push(if kind.is_mysql_family(){format!("CASE WHEN {n} IS NULL THEN 'N' ELSE CONCAT('V',HEX(CAST({n} AS BINARY))) END")}else{format!("CASE WHEN {n} IS NULL THEN 'N' ELSE concat('V',encode(convert_to({n}::text,'UTF8'),'hex')) END COLLATE \"C\"")});}
         let sql=format!("SELECT {} FROM {full} ORDER BY {}",fields.join(","),(1..=fields.len()).map(|i|i.to_string()).collect::<Vec<_>>().join(","));
         let mut hash=Sha256::new();let mut count=0u64;
         macro_rules! stream {($c:expr)=>{{let mut rows=crate::sql_history::query(&sql).fetch(&mut **$c);while let Some(row)=rows.try_next().await?{for i in 0..fields.len(){let s:String=row.try_get(i)?;hash.update((s.len() as u64).to_le_bytes());hash.update(s.as_bytes());}count+=1;}}};}
-        match self{Self::Mysql(c,_)=>stream!(c),Self::Pg(c)=>stream!(c)}hash.update(count.to_le_bytes());Ok((count,format!("{:x}",hash.finalize())))
+        match self{Self::Mysql(c,_)=>stream!(c),Self::Pg(c,_)=>stream!(c)}hash.update(count.to_le_bytes());Ok((count,format!("{:x}",hash.finalize())))
     }
 }
 #[derive(Clone,serde::Serialize)] pub(crate) struct NativeMetadata {
@@ -56,7 +61,7 @@ pub(crate) fn operation_steps(b:&Stored,o:&workflow::TableOperation)->Result<Vec
 pub(crate) async fn read_owned(db:Arc<Db>,b:Binding,table:String,readonly:bool,ordinary:OrdinaryLease)->CmdResult<Stored>{
     let __sql_history_context = crate::sql_history::db_context(db.as_ref());
     crate::sql_history::scope(__sql_history_context, async {
-    crate::sql_history::spawn(async move{let _lease=ordinary;let mut s=Session::acquire(&db).await.map_err(AppError::from)?;let pg=matches!(s,Session::Pg(_));
+    crate::sql_history::spawn(async move{let _lease=ordinary;let mut s=Session::acquire(&db).await.map_err(AppError::from)?;let pg=matches!(s,Session::Pg(..));
         let result:Result<Stored>=async{s.setup().await?;if pg{s.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY").await?;}else{ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");s.begin_read().await?;}
             // MySQL MDL 在事务存续期间固定对象，防止 SHOW CREATE 与目录混代。
             s.rows(&format!("SELECT * FROM {} LIMIT 0",db::qualified(&s.kind(),&b.namespace,&table))).await?;snapshot(&mut s,&b,&table,readonly).await}.await;
@@ -131,7 +136,7 @@ pub(crate) async fn run(db:Arc<Db>,entry:Arc<Entry>,ordinary:OrdinaryLease,work:
     let (result,confirmed)=execution::supervise(entry.clone(),async move{let _lease=ordinary;let started=Instant::now();let mut s=match tokio::select!{biased;_=working.wait_stop()=>Err(anyhow!("TABLE_STOPPED_BEFORE_SEND")),s=Session::acquire(&db)=>s}{Ok(s)=>s,Err(e)=>return(Err(AppError::from(e)),true)};
         if working.stopping()||!working.start(){let _=s.release(false).await;return(Err(AppError::coded("EXECUTION_CANCELLED_BEFORE_SEND","发送前已停止")),true);}
         if let Err(e)=s.setup().await{let close=s.release(true).await;return(Err(unknown(format!("TABLE_SESSION_SETUP_UNKNOWN: {e:#}; close={close:?}"))),false);}
-        let pg=matches!(s,Session::Pg(_));let mut receipts=Vec::new();let mut verified=None;
+        let pg=matches!(s,Session::Pg(..));let mut receipts=Vec::new();let mut verified=None;
         let target=match s.scalar(if pg{"SELECT pg_backend_pid()::text"}else{"SELECT CAST(CONNECTION_ID() AS CHAR)"}).await{Ok(n)=>n,Err(e)=>{let _=s.release(true).await;return(Err(AppError::from(e)),false)}};
         let (result,_)=execution::drive(async{let r=apply(&mut s,&working.binding,&working,&work,&mut receipts).await?;verified=Some(r);Ok(MultiResult{sets:vec![],messages:vec![],elapsed_ms:0,spool_id:None})},&working,||async{
             match db.as_ref(){Db::Postgres(p)=>{let mut c=sqlx::PgConnection::connect_with(&p.connect_options()).await?;let r=crate::sql_history::query_scalar::<_,bool>("SELECT pg_cancel_backend($1)").bind(target.parse::<i32>()?).fetch_one(&mut c).await;let close=c.close().await;ensure!(r?,"TABLE_CANCEL_NOT_ACKNOWLEDGED");close?;},Db::Mysql(p)=>{let id:u64=target.parse()?;let mut c=sqlx::MySqlConnection::connect_with(&p.connect_options()).await?;let r=crate::sql_history::query(&format!("KILL QUERY {id}")).execute(&mut c).await;let close=c.close().await;r?;close?;},_=>unreachable!()}Ok(())

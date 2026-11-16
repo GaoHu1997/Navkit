@@ -145,6 +145,10 @@ async fn pg_section(pool: &sqlx::PgPool, connection: &str, catalog: Option<&str>
         _ => "SELECT c.oid::text AS oid,c.relname AS name,pg_get_userbyid(c.relowner) AS owner,NULL::text AS signature,NULL::text AS parent,NULL::bool AS enabled,c.relkind::text AS summary FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind::text=ANY(string_to_array($2,',')) ORDER BY c.relname,c.oid LIMIT 2001",
     };
     let filter = match kind { "function"=>"f", "procedure"=>"p", "table"=>"r,p", "view"=>"v", "materialized_view"=>"m", "sequence"=>"S", "trigger"=>"t", _=>unreachable!() };
+    // openGauss/GaussDB 等内核没有 pg_sequence 目录（42883/42P01），序列属性改用标准 information_schema.sequences。
+    // 只探测一次，避免每个序列重复失败。
+    let has_pg_sequence = kind == "sequence"
+        && crate::sql_history::query("SELECT 1 AS probe FROM pg_catalog.pg_sequence LIMIT 0").execute(pool).await.is_ok();
     let rows = crate::sql_history::query(sql).bind(schema).bind(filter).fetch_all(pool).await?;
     let mut out = Vec::new();
     for row in rows {
@@ -156,7 +160,12 @@ async fn pg_section(pool: &sqlx::PgPool, connection: &str, catalog: Option<&str>
         if let Some(summary) = row.try_get::<Option<String>,_>("summary")? { properties.insert("summary".into(),summary); }
         if kind == "sequence" {
             let oid: String = row.try_get("oid")?;
-            let seq = crate::sql_history::query("SELECT seqstart::text AS start,seqincrement::text AS increment,seqmin::text AS min,seqmax::text AS max,seqcache::text AS cache,seqcycle::text AS cycle FROM pg_catalog.pg_sequence WHERE seqrelid=$1::bigint::oid").bind(oid.parse::<i64>()?).fetch_one(pool).await?;
+            let seq = if has_pg_sequence {
+                crate::sql_history::query("SELECT seqstart::text AS start,seqincrement::text AS increment,seqmin::text AS min,seqmax::text AS max,seqcache::text AS cache,seqcycle::text AS cycle FROM pg_catalog.pg_sequence WHERE seqrelid=$1::bigint::oid").bind(oid.parse::<i64>()?).fetch_one(pool).await?
+            } else {
+                // information_schema.sequences 没有 cache 列，用默认值 '1' 占位（读回时不伪造具体 cache）。
+                crate::sql_history::query("SELECT COALESCE(s.start_value::text,'1') AS start,COALESCE(s.increment::text,'1') AS increment,COALESCE(s.minimum_value::text,'1') AS min,COALESCE(s.maximum_value::text,'9223372036854775807') AS max,'1' AS cache,COALESCE(s.cycle_option::text,'NO') AS cycle FROM information_schema.sequences s WHERE s.sequence_schema=$1 AND s.sequence_name=$2").bind(schema).bind(name.as_str()).fetch_one(pool).await?
+            };
             for key in ["start","increment","min","max","cache","cycle"] { properties.insert(key.into(), seq.try_get::<String,_>(key)?); }
             let dependencies: Vec<String> = crate::sql_history::query_scalar("SELECT n.nspname || '.' || c.relname || '.' || a.attname FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_class c ON c.oid=d.refobjid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=d.refobjsubid WHERE d.objid=$1::bigint::oid AND d.deptype IN ('a','i') ORDER BY n.nspname,c.relname,a.attname").bind(oid.parse::<i64>()?).fetch_all(pool).await?;
             properties.insert("owned_by".into(), serde_json::to_string(&dependencies)?);

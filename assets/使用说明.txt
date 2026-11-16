@@ -4,8 +4,8 @@ NavKit — 数据库管理工具 绿色版
 使用方法
 --------
 1. 双击 navkit.exe 运行。
-2. 若系统缺少 Microsoft Edge WebView2 运行时，双击 MicrosoftEdgeWebview2Setup.exe
-   联网安装一次（仅此一次），之后无需重复安装；此文件不是离线运行时。
+2. 若系统缺少 Microsoft Edge WebView2 运行时，请从微软官网安装「WebView2 Runtime」
+   （Windows 10/11 通常已自带，无需手动安装）。便携包为减小体积不再内置安装程序。
 
 便携特性
 --------

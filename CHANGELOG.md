@@ -8,6 +8,53 @@
 
 ---
 
+## [1.0.1] — 2026-11-16
+
+`1.0.0` 之后的第一个补丁版本，集中在 **ER 关系图重做**、**软件更新弹窗**、**表格设计器交互** 三个方向的改进，
+并补齐 openGauss / GaussDB 兼容性修复与降级路径。
+
+### 新增与改进
+
+- **ER 关系图核心重做（移植 dbx 关系图能力）**：ELK layered（Sugiyama）布局替代自研最长路径分层，
+  交叉最小化 + 节点平衡 + `NETWORK_SIMPLEX` 分层；`elkjs` 动态 `import` 按需加载（独立 chunk）不拖慢启动；
+  新增布局方向选择（LR/TB/RL/BT），大图（>400 节点或 >1200 边）自动退回连通分量聚簇网格布局；布局结果持久化。
+- **虚拟外键自动匹配**：无物理外键时按命名约定（`user_id` / `userId` / `order_uuid`）+ 类型签名推断关系，
+  单复数容错，物理外键优先、四元组去重；匹配面板支持逐条确认 / 忽略与多目标冲突标记，按「连接 + 库」持久化；
+  推断边用虚线样式与物理外键区分。
+- **边避障路由**：正交走廊枚举绕开中间表卡片，按障碍物边界动态生成通道；路由失败回退三段式正交折线。
+- **ER 工具栏**：按钮禁止换行，空间不足时横向滚动。
+- **软件更新弹窗重做**：打开即自动检查更新，移除手动「检查更新」按钮；收敛为
+  checking / latest / available / downloading / ready / error 六状态机，版本 chip 对比与更新说明按行渲染为列表。
+- **表格设计器**：「选项」页默认值候选改为弹层选择、索引方法类型对齐、SQL 预览高亮。
+
+### 修复
+
+- **openGauss 索引查询**：openGauss 7.0（9.2.4 内核）没有 `to_jsonb(record)`（42883），
+  PG 索引查询改用 `to_json(x)->>'indnkeyatts'`（PG 9.x / 10 / 11+ / openGauss 均可用），并保留 PG 10 的 `indnatts` 回退。
+- **openGauss / GaussDB B(MySQL) 兼容模式拒绝**：B/MYSQL 模式下标识符用反引号、`||` 可能被当作逻辑 OR，
+  按 PG 语义生成的 SQL 会出错；表设计读写明确拒绝（`TABLE_PG_MYSQL_COMPAT_MODE_UNSUPPORTED`），A/PG 模式正常；
+  表数据摘要的 PG 分支改用 `concat()` 而非 `||`。
+- **PG 元数据分层降级**：索引元数据现代层用 `unnest ... WITH ORDINALITY` + `indnkeyatts`，
+  失败时降级 `string_to_array` + `generate_series` 兼容层（PG 9.x 系与老 openGauss/GaussDB 可跑）；
+  列元数据 `pg_catalog` 失败时退到标准 `information_schema.columns`；对象目录序列属性在缺少 `pg_sequence` 时改用 `information_schema.sequences`。
+- **TiDB 表结构保存明确拒绝**：TiDB 的 `GET_LOCK` / `LOCK TABLES` 是 noop 兼容功能，不能提供保存所需的服务端锁；
+  读取、预览仍可用，并移除旧版 `table_native` 实现。
+- **传输 / 同步**：协议与批量导入相关调整；命名空间错误测试适配 `loadChildren` 重抛行为。
+
+### 工程与发布
+
+- **免安装便携包精简**：移除内置的 WebView2 在线引导程序（约 1.9 MB；安装包已通过 `embedBootstrapper` 内嵌，
+  Win10/11 通常已自带运行时），便携包只保留 `NavKit.exe`、`data\` 与使用说明，减小下载体积。
+- `README` 界面截图更新为当前版本；移除一次性的表设计器截图脚本。
+- `package-lock.json` 补齐 `elkjs`，与 `pnpm-lock.yaml` 保持同步。
+
+### 已知限制
+
+- 与 1.0.0 基本一致，详见 [`docs/completed/PRODUCT-STATE.md`](<docs/completed/PRODUCT-STATE.md>)。
+- macOS 包未做 Apple 公证与签名；驱动按需下载需要网络。
+
+---
+
 ## [1.0.0] — 2026-11-14
 
 首个正式版（General Availability）。相较 `1.0.0-pre`，本版本集中在**数据管线可靠性**、**差异比较**、

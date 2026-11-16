@@ -157,9 +157,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage, "$stage/data" | Out-Null
           Copy-Item "$rel/navkit.exe" "$stage/NavKit.exe"
           Copy-Item "assets/使用说明.txt" "$stage/README-portable.txt"
-          try {
-            Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$stage/MicrosoftEdgeWebview2Setup.exe" -UseBasicParsing -TimeoutSec 180
-          } catch { Write-Warning "WebView2 bootstrapper download failed: $_" }
+          # 免安装包只保留运行必需的 NavKit.exe、data\ 与使用说明：不再内置 WebView2 引导程序
+          # （安装包已通过 webviewInstallMode=embedBootstrapper 内嵌，Win10/11 通常也已自带运行时），避免体积膨胀。
           Compress-Archive -Path "$stage/*" -DestinationPath "dist-release/NavKit-$ver-windows-$env:ARCH-portable.zip" -Force
           Copy-Item "$rel/navkit.exe" "dist-release/NavKit-$ver-windows-$env:ARCH-portable.exe" -Force
           $setup = Get-ChildItem "$rel/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'setup' } | Select-Object -First 1

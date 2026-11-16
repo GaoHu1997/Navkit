@@ -258,6 +258,10 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 - MySQL 协议族：MySQL 8 用 `@@server_uuid` + `information_schema.INNODB_TABLES`；MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID`。TiDB 没有触发器，其空目录按方言事实处理；TiDB 的 `GET_LOCK`/`LOCK TABLES` 是 noop 兼容功能，**表结构保存明确拒绝**（读取、预览仍可用）。
 - PostgreSQL 协议族：`attgenerated`/`attidentity`/`attcompression`/`indnkeyatts`/`pg_sequence`/`relrowsecurity` 等版本相关列逐个探测，缺失时降级并在设计器 limitations 中标注；解构约束/索引改用所有版本都接受的单参数 `pg_get_*`。
   - openGauss 7.0.0-RC3（9.2.4 内核）实测没有 `to_jsonb(record)`（42883），索引键列改用 `to_json(x)->>'indnkeyatts'`：openGauss 与 PG 11+ 直接取到 `indnkeyatts`，PG 10 取不到时回退 `indnatts`（PG 10 无 INCLUDE，语义等价）。`WITH ORDINALITY` 实测支持，无需替换 `generate_subscripts`。
+  - 索引元数据分两层：现代层用 `unnest ... WITH ORDINALITY` + `indnkeyatts`；失败时降级 `string_to_array` + `generate_series` 兼容层（不依赖 ORDINALITY/indnkeyatts，PG 9.x 系与老 openGauss/GaussDB 可跑）。
+  - 列元数据带最后兜底：`pg_catalog` 查询失败时退到标准 `information_schema.columns`，只丢 identity/generated 细节并在 limitations 说明。
+  - openGauss/GaussDB 的 B(MySQL) 兼容模式（`pg_database.datcompatibility` = B/M）标识符用反引号、`||` 可能被当逻辑 OR，按 PG 语义生成 SQL 会出错，**表设计读写明确拒绝**（`TABLE_PG_MYSQL_COMPAT_MODE_UNSUPPORTED`），A/PG 模式正常。表数据摘要的 PG 分支改用 `concat()` 而非 `||`。
+  - 对象目录的序列属性：探测 `pg_sequence` 是否存在，缺失时改用 `information_schema.sequences`（openGauss/GaussDB 无 `pg_sequence`）。同一 owned 会话内 PG 方言能力探测结果会缓存，保存表设计时不再对每步 DDL 重复探测。
 - Doris/StarRocks/SelectDB/Databend/Manticore、CockroachDB/Redshift/Cloudberry/QuestDB 的表目录/DDL 与 MySQL/PostgreSQL 不兼容，表设计入口明确拒绝，不把 1054/1146/42703 裸抛给界面。
 
 目录共 101 个条目（34 个 ODBC）。其余 90+ 类型仅提供图标与协议探测，**未做厂商实库认证**，
