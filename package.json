@@ -1,7 +1,7 @@
 {
   "name": "navkit",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "NavKit 数据库管理工具 (Tauri 2 + Rust + 原生 TypeScript)",
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "test:schedule-layout": "pnpm run build && node tools/tests/schedule-column-widths-browser.mjs",
     "test:release:native": "node tools/tests/release-native-smoke.mjs",
     "test:backup-dialog": "node tools/tests/backup-dialog-browser.mjs",
+    "test:dict-layout": "node tools/tests/data-dictionary-layout-browser.mjs",
     "test:workflows": "node --test tools/tests/database-workflows.test.mjs tools/tests/namespace-semantics.test.mjs tools/tests/data-grid-controls.test.mjs tools/tests/table-designer.test.mjs tools/tests/object-browser.test.mjs tools/tests/tree-drag-sort.test.mjs tools/tests/table-designer-metadata.test.mjs tools/tests/batch-execution-service.test.mjs tools/tests/batch-execution-dom.test.mjs",
     "test:rust": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --lib --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance",
     "test:sync": "cargo test --no-fail-fast --manifest-path src-tauri/Cargo.toml --test e2e_sync_diff_incremental --test e2e_sync_regressions --test transfer_sync_acceptance -- --nocapture",
