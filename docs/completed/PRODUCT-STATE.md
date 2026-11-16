@@ -31,7 +31,8 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 - 导出重查全量：`rerunnable_read` + `export_query_requery`（仅可安全重跑的单条只读语句；超配额经 `ensure_complete` 明确拒绝）；前端服务器分页模式导出走重查并提示结果可能不同。
 - 表数据 Keyset：`keyset_for_page` 接入 `page_table`（单列唯一主键 + 锚点时启用，锚点已定位故忽略 OFFSET）；新增 `PageRequest.after` / `PageResult.next_after`；前端仅“下一页”携带锚点，跳页/末页回退 OFFSET。
 - 已看页缓存（回翻不重查）：前端 `serverPageCache` 保存已看页，命中直接显示不访问数据库；固定上限淘汰最旧页，重新执行/清空结果/切库时整体作废。
-- 测试：后端 `query_pagination::` 25 单元、`requery_tests::` 3 + `page_tests::` 8（真实 SQLite）、真实 MySQL 端到端 1 项（分页执行、用户 LIMIT 包装、Keyset `id>500` 定位）；前端 `npm run build` 通过 + `query-result-host`/`execution-controller`/`query-execution`/`data-grid-filter-sort` 128 项通过。PostgreSQL 与桌面 E2E 尚未运行（⏳）；完整 `test:ui` 未跑。
+- 安全边界（2026-11-16 合并后加固）：分页与导出共用递归只读判定，拒绝写 CTE/嵌套写 CTE/`SELECT INTO`；Keyset 两接口绑定当前 namespace 并每次重新验证单列唯一主键与真实列类型；导出重查遇活跃手动事务返回 `EXPORT_REQUERY_TRANSACTION_ACTIVE` 而非重跑。
+- 测试：后端 `query_pagination::` 25 单元、`requery_tests::` 5 + `page_tests::` 8 + `query_keyset_resolution_tests::` 2（真实 SQLite），合并后 `query_pagination/requery/page/keyset/stream_preview_bench` 筛选 **49 passed / 1 ignored**；前端 `sql-completion-execution` 76 项（含 20 项分页专项）、查询相关 309 项全通过；真实 MySQL 端到端 1 项（分页执行、用户 LIMIT 包装、`id>500` 定位）。PostgreSQL 与桌面 E2E 尚未运行（⏳）；完整 `test:ui` 未跑。
 
 ### 2026-11-14 公开 recipe 预览完成判定修复（最新）
 
@@ -363,6 +364,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 16. **第四轮遗留**：D11 含 `CREATE DATABASE/USE` 的 SQL 文件仍未接入受控管理脚本授权，通用路径继续拒绝；D9 只对 localhost 认证/连接错误做了明确分类，没有自动 IPv4/IPv6 回退；TiDB/SQL Server/达梦/PostgreSQL 等现场项未复验。MySQL 导入批写只对精确 `mysql` 8.0/InnoDB/无副作用普通表自动启用，其他协议仍逐行。全驱动矩阵是源码能力清单，运行证据均为 not-run，不能当作厂商实库通过。
 17. **MySQL取消实库回归**：🚧 [execution_tests.rs](../../src-tauri/src/execution_tests.rs#L553) 的100ms SLEEP取消用例两次实际Unknown、期望TimedOut；根因未确认，不能将模拟通过写成厂商取消通过。独立重跑后该UUID会话为0、库删除，不替代回执时刻资源证据。保留 [mysql-cancel-unknown-20261115.md](../active/mysql-cancel-unknown-20261115.md#L1) 诊断范围与验收标准。
+18. **查询页服务器分页边界**：单页补齐额外受 32 MiB 内存预算约束，超限、无完整 spool、单行读取返回 0 时明确报错并提示减小每页行数，不把截断当尾页、不跳过不可见行；用户写了 LIMIT 的查询分页范围不超过该 LIMIT；SQL Server/ODBC/JDBC 暂不前置服务器分页，回退原全量路径并显示原因；UDF/函数业务副作用不能由 SQL 文本证明，导出重查只保证语句文本层面只读。
 
 ## 七、文档来源合并记录
 
@@ -393,3 +395,5 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | active/navkit-round4-regression-performance.md | 并入 §五 ROUND4-FIX-01、§六 第 16 条；D7/YEAR/D10/D5/D9 与全驱动矩阵、MySQL/SQLite 性能结论归档；D11 仍标 🚧，过程文档保留在 active 以对应未完成缺口 |
 | active/query-streaming-backend.md | §三 合并独立流式后端、成功终态导出门、MySQL 回环/生命周期回归与真实边界；前端未开工项放 planned/query-streaming-frontend.md |
 | active/stream-preview-eval-20261115.md | §三合并真实MySQL固定亿行表五档服务性能、LIMIT200对照、缓存/资源/验证边界；§五归档测试与跑批；§六单列取消实库回归失败，当前诊断保留active，详细实验与逐轮证据在artifacts |
+| active/query-server-pagination-and-keyset.md | 2026-11-16 并入 §三 查询服务器分页/导出重查/表数据 Keyset/已看页缓存/安全加固（递归只读、namespace 绑定、事务拒绝），§五归档测试入口，§六 第 18 条边界；过程原件按生命周期删除，分支 `feature/query-server-pagination` 已合并并删除 |
+| perf/stream-preview-eval-20261115（分支） | 2026-11-16 合并进 main：新增 3 项 Rust 基准/回归测试、隔离基准与证据工具及门控、MySQL 取消 Unknown 诊断文档；工具改为显式环境配置与实际 Git 基线，证据与报告默认不读写当前 docs |
