@@ -2,6 +2,6 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const script = fileURLToPath(new URL('./stream-preview-bench.py',import.meta.url));
-const result = spawnSync('python',[script,...process.argv.slice(2)],{stdio:'inherit',windowsHide:true});
+const result = spawnSync(process.env.NAVKIT_PYTHON || 'python',[script,...process.argv.slice(2)],{stdio:'inherit',windowsHide:true});
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;

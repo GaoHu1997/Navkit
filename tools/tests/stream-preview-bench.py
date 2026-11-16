@@ -1,4 +1,5 @@
 """隔离进程/造表管理；不使用Python数据库驱动，不在Python中计查询性能。"""
+import argparse
 import csv
 import ctypes
 import hashlib
@@ -20,29 +21,50 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 ROOT = Path(__file__).resolve().parents[2]
+parser = argparse.ArgumentParser(description='显式授权的本机 MySQL 隔离基准；默认不读取其他 fixture 的凭据。')
+parser.add_argument('binary', nargs='?', help='当前工作树内新鲜 release 测试二进制')
+parser.add_argument('stages', nargs='?', default='10000,100000,1000000,10000000,100000000')
+parser.add_argument('--check-env', action='store_true', help='仅检查配置和实际 Git 基线，不连接数据库或创建文件')
+args = parser.parse_args()
+
+def required_env(name):
+    value = os.environ.get(name)
+    if not value:
+        parser.error(f'必须显式设置 {name}；不会读取本机 fixture 或使用默认数据库凭据')
+    return value
+
+password = required_env('NAVKIT_MYSQL_PASSWORD')
+host = required_env('NAVKIT_MYSQL_HOST')
+user = required_env('NAVKIT_MYSQL_USER')
+port_text = required_env('NAVKIT_MYSQL_PORT')
+if host not in ['127.0.0.1', 'localhost', '::1']:
+    parser.error('NAVKIT_MYSQL_HOST 仅允许 loopback：127.0.0.1 / localhost / ::1')
+if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+    parser.error('NAVKIT_MYSQL_PORT 必须为 1..65535 的整数')
+port = int(port_text)
+mysql_request = os.environ.get('NAVKIT_MYSQL_CLIENT') or 'mysql'
+mysql = shutil.which(mysql_request)
+if not mysql:
+    parser.error('找不到 MySQL 客户端；请设置 NAVKIT_MYSQL_CLIENT 或将 mysql 加入 PATH')
+BASELINE = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+expected_baseline = os.environ.get('NAVKIT_STREAM_BENCH_EXPECTED_BASELINE')
+if expected_baseline and expected_baseline != BASELINE:
+    parser.error('实际 Git 基线与 NAVKIT_STREAM_BENCH_EXPECTED_BASELINE 不匹配')
+if args.check_env:
+    print(json.dumps({'mode': 'configuration_only', 'baseline': BASELINE, 'host': host, 'port': port,
+                      'mysqlClient': mysql, 'credentialSource': 'explicit_environment'}))
+    sys.exit(0)
+if not args.binary:
+    parser.error('必须提供当前工作树内的 release 测试二进制；可先使用 --check-env')
+binary = Path(args.binary).resolve()
+assert binary.is_relative_to(ROOT) and binary.is_file(), '需要当前worktree中新鲜release测试exe'
+stages = list(map(int, args.stages.split(',')))
+assert stages and all(n in [10_000,100_000,1_000_000,10_000_000,100_000_000] for n in stages)
+assert all(a < b for a,b in zip(stages,stages[1:])), '规模必须严格递增'
 EVIDENCE = ROOT / 'artifacts/stream-preview-eval-20261115'
 EVIDENCE.mkdir(parents=True, exist_ok=True)
-BASELINE = '3b67b6120b1a0dc539bef5655ea06a031a9f9508'
 HIDDEN = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
 now = lambda: datetime.now(timezone.utc).isoformat()
-assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip() == BASELINE
-binary = Path(sys.argv[1]).resolve()
-assert binary.is_relative_to(ROOT) and binary.is_file(), '需要当前worktree中新鲜release测试exe'
-stages = list(map(int,sys.argv[2].split(','))) if len(sys.argv)>2 else [10_000,100_000,1_000_000,10_000_000,100_000_000]
-assert all(n in [10_000,100_000,1_000_000,10_000_000,100_000_000] for n in stages)
-assert all(a < b for a,b in zip(stages,stages[1:])), '规模必须严格递增'
-fixture_path = Path('D:/github/tauri-navicat/tools/acceptance/e2e/desktop14-runner-e2c772c4.mjs')
-password = os.environ.get('NAVKIT_MYSQL_PASSWORD')
-if password is None:
-    match = re.search(r"'-p([^']+)'",fixture_path.read_text(encoding='utf-8'))
-    assert match, '授权fixture凭据未找到'
-    password = match[1]
-assert password, '授权fixture密码为空'
-host = os.environ.get('NAVKIT_MYSQL_HOST','127.0.0.1')
-assert host in ['127.0.0.1','localhost','::1'], '仅允许loopback'
-port = int(os.environ.get('NAVKIT_MYSQL_PORT','3306'))
-user = os.environ.get('NAVKIT_MYSQL_USER','root')
-mysql = os.environ.get('NAVKIT_MYSQL_CLIENT','C:/Program Files/MySQL/MySQL Server 8.0/bin/mysql.exe')
 namespace = 'navkit_stream_bench_' + uuid.uuid4().hex
 assert re.fullmatch(r'navkit_stream_bench_[0-9a-f]{32}',namespace)
 q = '`' + namespace + '`'
@@ -52,6 +74,7 @@ manifest_path = EVIDENCE / f'manifest-{tag}.json'
 env = {**os.environ, 'MYSQL_PWD':password,'NAVKIT_MYSQL_PASSWORD':password,'NAVKIT_MYSQL_HOST':host,
        'NAVKIT_MYSQL_PORT':str(port),'NAVKIT_MYSQL_USER':user,'NAVKIT_STREAM_BENCH':'1',
        'NAVKIT_STREAM_BENCH_DATABASE':namespace,'NAVKIT_STREAM_BENCH_OUTPUT':str(records_file),
+       'NAVKIT_STREAM_BENCH_BASELINE':BASELINE,
        'NAVKIT_SPOOL_ISOLATION':'0'}
 redact = lambda value: str(value).replace(password,'[redacted]')
 
@@ -68,10 +91,15 @@ def memory():
     assert ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)), '读取系统内存失败'
     return {'total':status.total,'free':status.available}
 
-cpu = subprocess.run(['pwsh','-NoProfile','-Command','(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'],
-                     capture_output=True,text=True,creationflags=HIDDEN,timeout=30).stdout.strip()
+cpu = platform.processor()
+if os.name == 'nt' and shutil.which('pwsh'):
+    try:
+        cpu = subprocess.run(['pwsh','-NoProfile','-Command','(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'],
+                             capture_output=True,text=True,creationflags=HIDDEN,timeout=30).stdout.strip() or cpu
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # 元数据探测失败不冒充CPU数据，也不阻断已授权基准。
 report = {'baseline':BASELINE,'binary':str(binary),'binarySha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
-          'started':now(),'namespace':namespace,'host':host,'port':port,'fixtureSource':str(fixture_path),'stages':stages,
+          'started':now(),'namespace':namespace,'host':host,'port':port,'credentialSource':'explicit_environment','stages':stages,
           'machine':{'platform':platform.platform(),'arch':platform.machine(),'cpu':cpu or platform.processor(),
                      'logicalCpus':os.cpu_count(),'totalRamBytes':memory()['total'],'freeRamBytesAtStart':memory()['free'],
                      'freeDiskBytesAtStart':shutil.disk_usage(ROOT).free},

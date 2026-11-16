@@ -79,14 +79,76 @@ fn has_semantic_comment(sql: &str) -> bool {
     false
 }
 
-fn set_expr_has_into(body: &SetExpr) -> bool {
+/// 递归检查查询体与每个 WITH 项，不以最外层 SELECT 掩盖写入 CTE。
+/// 函数的业务副作用仍无法由 SQL 文本证明；这里只证明 AST 中没有写语句/SELECT INTO。
+fn query_read_only(query: &sqlparser::ast::Query) -> Result<(), &'static str> {
+    if let Some(with) = &query.with {
+        for cte in &with.cte_tables { query_read_only(&cte.query)?; }
+    }
+    if !query.locks.is_empty() || !query.pipe_operators.is_empty() {
+        return Err("含锁定查询或管道语句，不能安全分页/重新执行导出");
+    }
+    read_only_body(&query.body)
+}
+
+fn read_only_body(body: &SetExpr) -> Result<(), &'static str> {
     match body {
-        SetExpr::Select(select) => select.into.is_some(),
-        SetExpr::Query(query) => set_expr_has_into(query.body.as_ref()),
-        SetExpr::SetOperation { left, right, .. } => {
-            set_expr_has_into(left.as_ref()) || set_expr_has_into(right.as_ref())
+        SetExpr::Select(select) => {
+            if select.into.is_some() { return Err("含 SELECT INTO，不能分页/重新执行导出"); }
+            for table in &select.from { read_only_table(table)?; }
+            for projection in &select.projection {
+                match projection {
+                    sqlparser::ast::SelectItem::UnnamedExpr(expr)
+                    | sqlparser::ast::SelectItem::ExprWithAlias { expr, .. } => read_only_expr(expr)?,
+                    _ => {},
+                }
+            }
+            for expr in [&select.selection, &select.prewhere, &select.having, &select.qualify].into_iter().flatten() {
+                read_only_expr(expr)?;
+            }
+            Ok(())
         }
-        _ => false,
+        SetExpr::Query(query) => query_read_only(query),
+        SetExpr::SetOperation { left, right, .. } => { read_only_body(left)?; read_only_body(right) }
+        SetExpr::Values(values) => {
+            for row in &values.rows { for expr in row.iter() { read_only_expr(expr)?; } }
+            Ok(())
+        }
+        SetExpr::Table(_) => Ok(()),
+        _ => Err("含写入语句或写入 CTE，不能分页/重新执行导出"),
+    }
+}
+
+fn read_only_table(table: &sqlparser::ast::TableWithJoins) -> Result<(), &'static str> {
+    fn factor(table: &sqlparser::ast::TableFactor) -> Result<(), &'static str> {
+        match table {
+            sqlparser::ast::TableFactor::Derived { subquery, .. } => query_read_only(subquery),
+            sqlparser::ast::TableFactor::NestedJoin { table_with_joins, .. } => read_only_table(table_with_joins),
+            _ => Ok(()),
+        }
+    }
+    factor(&table.relation)?;
+    for join in &table.joins { factor(&join.relation)?; }
+    Ok(())
+}
+
+fn read_only_expr(expr: &sqlparser::ast::Expr) -> Result<(), &'static str> {
+    use sqlparser::ast::Expr;
+    match expr {
+        Expr::Subquery(query) | Expr::Exists { subquery: query, .. } => query_read_only(query),
+        Expr::InSubquery { expr, subquery, .. } => { read_only_expr(expr)?; query_read_only(subquery) }
+        Expr::BinaryOp { left, right, .. } | Expr::AnyOp { left, right, .. } | Expr::AllOp { left, right, .. }
+        | Expr::IsDistinctFrom(left, right) | Expr::IsNotDistinctFrom(left, right) => {
+            read_only_expr(left)?; read_only_expr(right)
+        }
+        Expr::Nested(expr) | Expr::UnaryOp { expr, .. } | Expr::Cast { expr, .. }
+        | Expr::IsNull(expr) | Expr::IsNotNull(expr) | Expr::IsTrue(expr) | Expr::IsNotTrue(expr)
+        | Expr::IsFalse(expr) | Expr::IsNotFalse(expr) | Expr::IsUnknown(expr) | Expr::IsNotUnknown(expr) => read_only_expr(expr),
+        Expr::InList { expr, list, .. } => {
+            read_only_expr(expr)?; for value in list { read_only_expr(value)?; } Ok(())
+        }
+        Expr::Between { expr, low, high, .. } => { read_only_expr(expr)?; read_only_expr(low)?; read_only_expr(high) }
+        _ => Ok(()),
     }
 }
 
@@ -122,8 +184,8 @@ pub fn plan_query_page(kind: &DbKind, sql: &str, limit: u64, offset: u64) -> Pag
             return PagePlan::Unsupported("LIMIT ... BY 不走通用分页");
         }
     }
-    if set_expr_has_into(query.body.as_ref()) {
-        return PagePlan::Unsupported("含 SELECT INTO，不能分页执行");
+    if let Err(reason) = query_read_only(query) {
+        return PagePlan::Unsupported(reason);
     }
     let has_top_limit = query.limit_clause.is_some() || query.fetch.is_some();
     // `to_string` 重新生成语句，杜绝尾随注释把 LIMIT 吞掉的隐患；
@@ -154,7 +216,8 @@ pub fn analyze_keyset(kind: &DbKind, sql: &str) -> Option<KeysetShape> {
     if trimmed.is_empty() || has_semantic_comment(trimmed) { return None; }
     let statements = Parser::parse_sql(dialect.as_ref(), trimmed).ok()?;
     let [Statement::Query(query)] = statements.as_slice() else { return None; };
-    if query.limit_clause.is_some() || query.fetch.is_some() { return None; }
+    if query.with.is_some() || query_read_only(query).is_err()
+        || query.limit_clause.is_some() || query.fetch.is_some() { return None; }
     let SetExpr::Select(select) = query.body.as_ref() else { return None; };
     if select.distinct.is_some() || select.group_by != sqlparser::ast::GroupByExpr::Expressions(Vec::new(), Vec::new())
         || select.having.is_some() || !select.lateral_views.is_empty() { return None; }
@@ -193,6 +256,7 @@ pub fn analyze_keyset(kind: &DbKind, sql: &str) -> Option<KeysetShape> {
 /// 谓词并入原 WHERE（而不是外层子查询），才能让数据库用唯一键索引定位；
 /// `after` 已是安全字面量（由 `keyset_predicate` 生成），不再二次拼接用户输入。
 pub fn plan_keyset_page(kind: &DbKind, sql: &str, predicate: &str, limit: u64) -> Option<String> {
+    analyze_keyset(kind, sql)?;
     let limit = limit.clamp(1, MAX_PAGE_ROWS);
     let dialect = dialect_for(kind)?;
     let mut statements = Parser::parse_sql(dialect.as_ref(), sql.trim()).ok()?;
@@ -210,9 +274,9 @@ pub fn plan_keyset_page(kind: &DbKind, sql: &str, predicate: &str, limit: u64) -
         })?;
     select.selection = Some(match select.selection.take() {
         Some(existing) => sqlparser::ast::Expr::BinaryOp {
-            left: Box::new(existing),
+            left: Box::new(sqlparser::ast::Expr::Nested(Box::new(existing))),
             op: sqlparser::ast::BinaryOperator::And,
-            right: Box::new(extra),
+            right: Box::new(sqlparser::ast::Expr::Nested(Box::new(extra))),
         },
         None => extra,
     });
@@ -246,12 +310,7 @@ pub fn rerunnable_read(kind: &DbKind, sql: &str) -> Result<(), &'static str> {
         return Err("仅支持单条只读语句的重新查询导出");
     };
     match statement {
-        Statement::Query(query) => {
-            if set_expr_has_into(query.body.as_ref()) {
-                return Err("含 SELECT INTO，不能重新执行导出");
-            }
-            Ok(())
-        }
+        Statement::Query(query) => query_read_only(query),
         _ => Err("仅只读 SELECT/WITH 查询可重新执行导出"),
     }
 }
@@ -524,6 +583,51 @@ mod tests {
         assert!(sql.contains("\"id\" > 100"), "应包含锚点谓词: {sql}");
         assert!(sql.to_uppercase().contains("LIMIT 50"), "应限页: {sql}");
         assert!(!sql.to_uppercase().contains("OFFSET"), "锚点定位不应带 OFFSET: {sql}");
+    }
+
+    #[test]
+    fn recursive_read_check_accepts_read_only_with_and_rejects_write_ctes() {
+        for sql in [
+            "WITH x AS (SELECT 1 AS id) SELECT id FROM x",
+            "WITH x AS (WITH y AS (SELECT 1 AS id) SELECT id FROM y) SELECT id FROM x",
+            "WITH RECURSIVE x(id) AS (VALUES (1) UNION ALL SELECT id+1 FROM x WHERE id<3) SELECT id FROM x",
+        ] {
+            assert!(rerunnable_read(&postgres(), sql).is_ok(), "pure read WITH: {sql}");
+            assert!(matches!(plan_query_page(&postgres(), sql, 10, 0), PagePlan::Page(_)), "pure read page: {sql}");
+        }
+        for sql in [
+            "WITH x AS (DELETE FROM t RETURNING id) SELECT id FROM x",
+            "WITH x AS (UPDATE t SET id=2 RETURNING id) SELECT id FROM x",
+            "WITH x AS (INSERT INTO t(id) VALUES(1) RETURNING id) SELECT id FROM x",
+            "WITH x AS (WITH y AS (DELETE FROM t RETURNING id) SELECT id FROM y) SELECT id FROM x",
+            "WITH x AS (SELECT id INTO copied FROM t) SELECT id FROM x",
+            "SELECT * FROM (WITH x AS (DELETE FROM t RETURNING id) SELECT id FROM x) AS nested",
+        ] {
+            assert!(rerunnable_read(&postgres(), sql).is_err(), "write AST must be rejected: {sql}");
+            assert!(matches!(plan_query_page(&postgres(), sql, 10, 0), PagePlan::Unsupported(_)), "write AST must not page: {sql}");
+            assert!(analyze_keyset(&postgres(), sql).is_none(), "write AST must not keyset: {sql}");
+        }
+    }
+
+    #[test]
+    fn keyset_does_not_infer_real_table_key_for_a_cte_shadow() {
+        assert!(analyze_keyset(&postgres(), "WITH items AS (SELECT 1 AS id UNION ALL SELECT 1 AS id) SELECT id FROM items ORDER BY id").is_none());
+    }
+
+    #[test]
+    fn keyset_where_or_is_explicitly_nested() {
+        let sql = plan_keyset_page(&sqlite(), "SELECT id FROM t WHERE a=1 OR b=2 ORDER BY id", "\"id\" > 5", 20).unwrap();
+        assert!(sql.contains("(a = 1 OR b = 2) AND (\"id\" > 5)"), "OR must not bypass anchor: {sql}");
+    }
+
+    #[tokio::test]
+    async fn keyset_where_or_keeps_rows_and_anchor_in_real_sqlite() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER); INSERT INTO t VALUES(1,1,0),(2,0,2),(3,1,0),(4,0,2),(5,0,0)").execute(&pool).await.unwrap();
+        let sql = plan_keyset_page(&sqlite(), "SELECT id FROM t WHERE a=1 OR b=2 ORDER BY id", "\"id\" > 2", 20).unwrap();
+        let ids: Vec<i64> = sqlx::query_scalar(&sql).fetch_all(&pool).await.unwrap();
+        assert_eq!(ids, vec![3,4], "low ids must not return via the left side of OR");
+        pool.close().await;
     }
 
     #[test]

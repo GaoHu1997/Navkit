@@ -733,33 +733,133 @@ pub struct QueryKeysetView {
     pub numeric: Option<bool>,
 }
 
+/// 元数据读取只查询目录，不执行用户 SQL；两条 Keyset API 共用同一真实对象解析。
+async fn keyset_target(
+    state: &AppState, connection_id: &str, sql: &str, namespace: Option<&str>,
+) -> CmdResult<Option<(ConnectionConfig, crate::query_pagination::KeysetShape, bool)>> {
+    let cfg = saved_config(state, connection_id)?;
+    let Some(mut shape) = crate::query_pagination::analyze_keyset(&cfg.kind, sql) else { return Ok(None); };
+    if namespace.is_some_and(|value| value.len() > 1024 || value.contains('\0')) {
+        return Err(AppError::coded("EXECUTION_CONTEXT_INVALID", "Keyset 命名空间无效"));
+    }
+    // 旧调用未传 namespace 时：MySQL 沿用保存默认库；PG 使用实际 search_path，不能把 database 当 schema。
+    let selected = namespace.or_else(|| cfg.kind.is_mysql_family().then_some(cfg.database.as_str()));
+    let (_key, db) = query_db(state, &cfg.id, selected).await?;
+    let Some(schema) = resolve_keyset_schema(db.as_ref(), &cfg.kind, &shape).await? else { return Ok(None); };
+    shape.schema = schema;
+    let meta = crate::schema::table_schema_for_page(db.as_ref(), cfg.kind.clone(), &shape.schema, &shape.table)
+        .await.map_err(AppError::from)?;
+    let pks = crate::design::ordered_primary_key(&meta).map_err(AppError::from)?;
+    if pks.len() != 1 || pks[0] != shape.column { return Ok(None); }
+    let Some(column) = meta.columns.iter().find(|column| column.name == shape.column) else { return Ok(None); };
+    let numeric = crate::schema::is_numeric_type(&column.data_type);
+    Ok(Some((cfg, shape, numeric)))
+}
+
+/// 解析与实际 SQL 相同的对象；拒绝视图，避免用另一个同名实体表的主键作证明。
+async fn resolve_keyset_schema(
+    db: &db::Db, kind: &DbKind, shape: &crate::query_pagination::KeysetShape,
+) -> CmdResult<Option<String>> {
+    match db {
+        db::Db::Mysql(pool) => {
+            let schema = if shape.schema.is_empty() {
+                crate::sql_history::query_scalar::<_, Option<String>>("SELECT DATABASE()")
+                    .fetch_one(pool).await.map_err(AppError::from)?.unwrap_or_default()
+            } else { shape.schema.clone() };
+            let exists: i64 = crate::sql_history::query_scalar(
+                "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND TABLE_TYPE='BASE TABLE'")
+                .bind(&schema).bind(&shape.table).fetch_one(pool).await.map_err(AppError::from)?;
+            Ok((exists == 1).then_some(schema))
+        }
+        db::Db::Postgres(pool) => {
+            let name = if shape.schema.is_empty() { crate::db::quote_ident(kind, &shape.table) }
+                else { format!("{}.{}", crate::db::quote_ident(kind, &shape.schema), crate::db::quote_ident(kind, &shape.table)) };
+            let row = crate::sql_history::query_scalar::<_, String>(
+                "SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=pg_catalog.to_regclass($1) AND c.relkind IN ('r','p')")
+                .bind(name).fetch_optional(pool).await.map_err(AppError::from)?;
+            Ok(row)
+        }
+        db::Db::Sqlite(pool) => {
+            let mut conn = pool.acquire().await.map_err(AppError::from)?;
+            let databases: Vec<(i64, String, String)> = crate::sql_history::query_as("PRAGMA database_list")
+                .fetch_all(&mut *conn).await.map_err(AppError::from)?;
+            let mut schemas = if shape.schema.is_empty() {
+                // SQLite 的未限定名优先 temp，然后 main，再按附加顺序查找。
+                let mut names = vec!["temp".to_string(), "main".to_string()];
+                names.extend(databases.iter().filter(|(_, name, _)| name != "temp" && name != "main").map(|(_, name, _)| name.clone()));
+                names
+            } else {
+                if !databases.iter().any(|(_, name, _)| name == &shape.schema) && shape.schema != "temp" { return Ok(None); }
+                vec![shape.schema.clone()]
+            };
+            for schema in schemas.drain(..) {
+                let query = format!("SELECT type FROM {}.sqlite_schema WHERE name=? AND type IN ('table','view')", crate::db::quote_ident(kind, &schema));
+                let object = crate::sql_history::query_scalar::<_, String>(&query).bind(&shape.table)
+                    .fetch_optional(&mut *conn).await.map_err(AppError::from)?;
+                if let Some(object) = object {
+                    // temp 属于物理连接，不能证明下一页会取得同一物理连接；安全回退。
+                    return Ok((object == "table" && schema != "temp").then_some(schema));
+                }
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod query_keyset_resolution_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sqlite_keyset_resolves_qualified_attached_schema_not_default_main() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE keys(id INTEGER PRIMARY KEY); ATTACH DATABASE ':memory:' AS other; CREATE TABLE other.keys(id TEXT PRIMARY KEY NOT NULL)")
+            .execute(&pool).await.unwrap();
+        let db = db::Db::Sqlite(pool.clone());
+        let kind = DbKind::of("sqlite");
+        let shape = crate::query_pagination::analyze_keyset(&kind, "SELECT id FROM other.keys ORDER BY id").unwrap();
+        let schema = resolve_keyset_schema(&db, &kind, &shape).await.unwrap().unwrap();
+        assert_eq!(schema, "other");
+        let meta = crate::schema::table_schema_for_page(&db, kind, &schema, &shape.table).await.unwrap();
+        assert!(!crate::schema::is_numeric_type(&meta.columns[0].data_type));
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_keyset_does_not_use_main_key_when_temp_object_shadows_it() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE keys(id INTEGER PRIMARY KEY); CREATE TEMP TABLE keys(id INTEGER)")
+            .execute(&pool).await.unwrap();
+        let db = db::Db::Sqlite(pool.clone());
+        let kind = DbKind::of("sqlite");
+        let unqualified = crate::query_pagination::analyze_keyset(&kind, "SELECT id FROM keys ORDER BY id").unwrap();
+        assert!(resolve_keyset_schema(&db, &kind, &unqualified).await.unwrap().is_none());
+        let qualified = crate::query_pagination::analyze_keyset(&kind, "SELECT id FROM main.keys ORDER BY id").unwrap();
+        assert_eq!(resolve_keyset_schema(&db, &kind, &qualified).await.unwrap().as_deref(), Some("main"));
+        pool.close().await;
+    }
+}
+
+pub(crate) async fn plan_query_keyset_service(
+    state: &AppState, connection_id: &str, sql: &str, namespace: Option<&str>,
+) -> CmdResult<QueryKeysetView> {
+    let target = keyset_target(state, connection_id, sql, namespace).await?;
+    Ok(match target {
+        Some((_cfg, shape, numeric)) => QueryKeysetView {
+            supported: true, reason: None, column: Some(shape.column), ascending: Some(shape.ascending), numeric: Some(numeric),
+        },
+        None => QueryKeysetView {
+            supported: false, reason: Some("当前实际对象不是已证明的单表单列唯一主键排序查询".into()), column: None, ascending: None, numeric: None,
+        },
+    })
+}
+
 #[tauri::command]
 pub async fn plan_query_keyset(
-    state: State<'_, AppState>, connection_id: String, sql: String,
+    state: State<'_, AppState>, connection_id: String, sql: String, namespace: Option<String>,
 ) -> CmdResult<QueryKeysetView> {
-    let cfg = saved_config(&state, &connection_id)?;
-    let Some(shape) = crate::query_pagination::analyze_keyset(&cfg.kind, &sql) else {
-        return Ok(QueryKeysetView { supported: false, reason: Some("SQL 不是单表单列排序的简单查询".into()), column: None, ascending: None, numeric: None });
-    };
-    // 只有当排序列是该表的唯一单列主键时，锚点定位才不会重复/漏行。
-    let (_key, db) = query_db(&state, &cfg.id, Some(&cfg.database)).await?;
-    let meta = crate::schema::table_schema_for_page(db.as_ref(), cfg.kind.clone(), &shape.schema, &shape.table).await;
-    let Ok(meta) = meta else {
-        return Ok(QueryKeysetView { supported: false, reason: Some("无法读取表结构，不能确定唯一键".into()), column: None, ascending: None, numeric: None });
-    };
-    let pks = crate::design::ordered_primary_key(&meta).map_err(AppError::from).unwrap_or_default();
-    if pks.len() != 1 || pks[0] != shape.column {
-        return Ok(QueryKeysetView {
-            supported: false,
-            reason: Some(format!("排序列不是唯一主键（主键：{}）", if pks.is_empty() { "无".into() } else { pks.join(",") })),
-            column: None, ascending: None, numeric: None,
-        });
-    }
-    let numeric = meta.columns.iter()
-        .find(|c| c.name == shape.column)
-        .map(|c| crate::schema::is_numeric_type(&c.data_type))
-        .unwrap_or(false);
-    Ok(QueryKeysetView { supported: true, reason: None, column: Some(shape.column), ascending: Some(shape.ascending), numeric: Some(numeric) })
+    plan_query_keyset_service(&state, &connection_id, &sql, namespace.as_deref()).await
 }
 
 /// 按 Keyset 锚点生成查询页 SQL：只生成、不执行。
@@ -773,23 +873,27 @@ pub struct QueryKeysetPageView {
     pub reason: Option<String>,
 }
 
-#[tauri::command]
-pub fn plan_query_keyset_page(
-    state: State<'_, AppState>, connection_id: String, sql: String, after: String, limit: u64,
+pub(crate) async fn plan_query_keyset_page_service(
+    state: &AppState, connection_id: &str, sql: &str, after: &str, limit: u64, namespace: Option<&str>,
 ) -> CmdResult<QueryKeysetPageView> {
-    let cfg = saved_config(&state, &connection_id)?;
-    let Some(shape) = crate::query_pagination::analyze_keyset(&cfg.kind, &sql) else {
-        return Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("SQL 不是单表单列排序的简单查询".into()) });
+    let Some((cfg, shape, numeric)) = keyset_target(state, connection_id, sql, namespace).await? else {
+        return Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("当前实际对象的唯一主键或 SQL 形状未获证明".into()) });
     };
     let column = crate::db::quote_ident(&cfg.kind, &shape.column);
-    let numeric = after.trim_start_matches('-').chars().all(|c| c.is_ascii_digit() || c == '.');
-    let Some(predicate) = crate::query_pagination::keyset_predicate(&column, shape.ascending, Some(&after), numeric) else {
-        return Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("锚点值无法安全转义".into()) });
+    let Some(predicate) = crate::query_pagination::keyset_predicate(&column, shape.ascending, Some(after), numeric) else {
+        return Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("锚点值与真实列类型不符，不能安全生成谓词".into()) });
     };
-    match crate::query_pagination::plan_keyset_page(&cfg.kind, &sql, &predicate, limit) {
+    match crate::query_pagination::plan_keyset_page(&cfg.kind, sql, &predicate, limit) {
         Some(page_sql) => Ok(QueryKeysetPageView { mode: "page".into(), sql: Some(page_sql), reason: None }),
         None => Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("无法在该 SQL 上追加锚点谓词".into()) }),
     }
+}
+
+#[tauri::command]
+pub async fn plan_query_keyset_page(
+    state: State<'_, AppState>, connection_id: String, sql: String, after: String, limit: u64, namespace: Option<String>,
+) -> CmdResult<QueryKeysetPageView> {
+    plan_query_keyset_page_service(&state, &connection_id, &sql, &after, limit, namespace.as_deref()).await
 }
 /// 导出「重新查询全量」：重新执行原始 SQL，再从本次执行的完整缓存导出。
 ///
@@ -808,6 +912,12 @@ pub(crate) async fn export_query_requery_service(
 ) -> CmdResult<u64> {
     let cfg = saved_config(state, &opts.connection_id)?;
     crate::transfer::validate_export(&opts)?;
+    {
+        let lease = state.manual_transactions.lease(&cfg.id).await;
+        if lease.status().active {
+            return Err(AppError::coded("EXPORT_REQUERY_TRANSACTION_ACTIVE", "手动事务期间不能重新查询全量导出；请先明确提交或回滚，或使用原事务结果缓存导出。没有重新执行 SQL"));
+        }
+    }
     crate::query_pagination::rerunnable_read(&cfg.kind, sql).map_err(|reason| {
         AppError::coded(
             "EXPORT_REQUERY_UNSAFE",

@@ -248,6 +248,9 @@ function queryHarness(bindings = {}) {
     fetchQueryRows: async (scope, index, offset, limit) => { calls.push(['fetch', plain(scope), index, offset, limit]); return { rows: Array.from({ length: Math.min(limit, 10001 - offset) }, (_, i) => [String(offset + i)]), total: 10001, truncated: false, message: '' }; },
     exportQuerySpooled: async (opts, scope, index) => { calls.push(['export-spool', plain(opts), plain(scope), index]); return 10001; },
     exportQueryResult: async (opts, columns, rows) => { calls.push(['export-loaded', plain(opts), plain(columns), plain(rows)]); return rows.length; },
+    planQueryPagination: async () => ({ mode: 'unsupported', sql: null, reason: 'fixture explicit unsupported' }),
+    planQueryKeyset: async () => ({ supported: false, reason: 'fixture no keyset' }),
+    exportQueryRequery: async (opts, sql, owner, namespace) => { calls.push(['export-requery', plain(opts), sql, owner, namespace]); return 10001; },
     executionCapabilities: async () => ({ cancel: { level: 'unsupported', reason: 'fixture 不支持取消' } }),
     executeSqlV2: async request => {
       try { return { execution_id: request.execution_id, state: 'succeeded', result: await api.executeSql(request.connection_id, request.sql, request.namespace || undefined, request.transaction_owner ?? undefined) }; }
@@ -951,4 +954,174 @@ test('completion log is not a live timer during transaction cleanup, and destroy
   assert.equal(fresh.timers.size, 0);
   pending.resolve({ cancel: { level: 'unsupported', reason: '' } });
   await running;
+});
+
+// 真 QueryTabView + 真 ExecutionController，不以源码正则代替分页行为测试。
+function serverPaginationHarness({ keyset = true, size = 2, truncate = false } = {}) {
+  const h = queryHarness();
+  h.tab.schema = 'tenant_a';
+  h.view.resultPages = new QueryResultPages(size);
+  h.api.planQueryPagination = async (id, sql, limit, offset) => {
+    h.calls.push(['plan-page', id, sql, limit, offset]);
+    return { mode: 'page', sql: `PAGE ${offset} ${limit}`, reason: null };
+  };
+  h.api.planQueryKeyset = async (id, sql, ns) => {
+    h.calls.push(['keyset-info', id, sql, ns]); return { supported: keyset, column: 'id' };
+  };
+  h.api.planQueryKeysetPage = async (id, sql, after, limit, ns) => {
+    h.calls.push(['plan-keyset', id, sql, after, limit, ns]);
+    return { mode: 'page', sql: `PAGE ${Number(after)} ${limit}`, reason: null };
+  };
+  h.api.executeSql = async (id, sql, ns) => {
+    h.calls.push(['execute', id, sql, ns]);
+    const [, start, limit] = /^PAGE (\d+) (\d+)$/.exec(sql) ?? ['', '0', String(size)];
+    const rows = Array.from({ length: Number(limit) }, (_, i) => [String(Number(start) + i + 1)]);
+    return { sets: [{ columns: [{ name: 'id', data_type: 'BIGINT' }], rows: truncate ? rows.slice(0, 1) : rows, total: rows.length, affected: 0, message: '' }], messages: [], elapsed_ms: 10, spool_id: `page-${start}` };
+  };
+  h.api.fetchQueryRows = async (scope, index, offset, limit) => {
+    h.calls.push(['fetch', plain(scope), index, offset, limit]);
+    const start = Number(scope.spoolId.slice(5));
+    return { rows: Array.from({ length: limit }, (_, i) => [String(start + offset + i + 1)]), total: size, truncated: false, message: '' };
+  };
+  h.sql = 'SELECT id FROM items ORDER BY id';
+  h.count = type => h.calls.filter(c => c[0] === type).length;
+  return h;
+}
+
+const settleTick = () => new Promise(resolve => setImmediate(resolve));
+
+test('server pagination initial query sends page SQL not original SQL and caches readonly without spool', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false);
+  assert.equal(h.count('execute'), 1); assert.equal(h.calls.find(c => c[0] === 'execute')[2], 'PAGE 0 2');
+  assert.equal(h.view.serverPageCache.size, 1); assert.equal(h.view.resultPages.scope, null);
+  assert.equal(h.tab.results.spool_id, null); assert.equal(h.view.resultExecution, null);
+  assert.equal(h.count('drop'), 1); h.view.destroy();
+});
+
+test('first next page uses initial last unique key and both Keyset APIs carry namespace', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false);
+  assert.equal(h.view.serverPageAnchor, '2');
+  await h.view.loadResultPage('next');
+  const plan = h.calls.find(c => c[0] === 'plan-keyset');
+  assert.equal(plan[3], '2'); assert.equal(plan[5], 'tenant_a');
+  assert.equal(h.calls.find(c => c[0] === 'keyset-info')[3], 'tenant_a');
+  assert.deepEqual(plain(h.tab.results.sets[0].rows), [['3'], ['4']]); h.view.destroy();
+});
+
+test('return to viewed page performs zero planning and zero database calls, no old scope or write panel', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false); await h.view.loadResultPage('next');
+  const db = h.count('execute'), plans = h.count('plan-page') + h.count('plan-keyset');
+  let disposed = 0; h.view.controlledResult = { dispose() { disposed++; } };
+  h.view.resultExecution = { context: { execution_id: 'old', connection_id: 'a', owner_id: h.tab.id, namespace: h.tab.schema }, result: h.tab.results };
+  await h.view.loadResultPage('previous');
+  assert.equal(h.count('execute'), db); assert.equal(h.count('plan-page') + h.count('plan-keyset'), plans);
+  assert.equal(disposed, 1); assert.equal(h.view.controlledResult, null); assert.equal(h.view.resultExecution, null);
+  assert.equal(h.view.resultPages.scope, null); assert.deepEqual(plain(h.tab.results.sets[0].rows), [['1'], ['2']]); h.view.destroy();
+});
+
+test('eight-page cache evicts oldest, requery only evicted page, released scopes never reattach', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false);
+  for (let i = 0; i < 8; i++) await h.view.loadResultPage('next');
+  assert.equal(h.view.serverPageCache.size, 8); assert.equal(h.view.serverPageCache.has(0), false);
+  assert.equal(h.count('drop'), 9);
+  const db = h.count('execute'); await h.view.loadResultPage('first');
+  assert.equal(h.count('execute'), db + 1); assert.equal(h.view.resultPages.scope, null); h.view.destroy();
+});
+
+test('new execution and clear/destroy invalidate all seen-page memory', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false); await h.view.loadResultPage('next');
+  await h.view.execute(h.sql, false); assert.equal(h.view.serverPageCache.size, 1); assert.equal(h.view.serverPageCache.has(2), false);
+  h.view.clearResultSnapshot(); assert.equal(h.view.serverPageCache.size, 0); assert.equal(h.view.serverPage, null);
+  await h.view.execute(h.sql, false); h.view.destroy(); assert.equal(h.view.serverPageCache.size, 0); assert.equal(h.view.serverPage, null);
+});
+
+test('planning IPC rejection never silently executes original full query', async () => {
+  const h = serverPaginationHarness(); h.api.planQueryPagination = async () => { throw new Error('planning IPC failed'); };
+  await h.view.execute(h.sql, false); assert.equal(h.count('execute'), 0); assert.equal(h.view.running, false);
+  assert.match(h.view.lastMessages[0].text, /planning IPC failed/); h.view.destroy();
+});
+
+test('explicit unsupported is permitted legacy execution and exposes reason', async () => {
+  const h = serverPaginationHarness(); h.api.planQueryPagination = async () => ({ mode: 'unsupported', sql: null, reason: 'JOIN driver unsupported' });
+  await h.view.execute(h.sql, false); assert.equal(h.calls.find(c => c[0] === 'execute')[2], h.sql);
+  assert.equal(h.view.serverPage, null); assert.ok(h.notices.some(c => /JOIN driver unsupported/.test(c[1]))); h.view.destroy();
+});
+
+test('active owned manual transaction does not plan server pages and preserves original SQL/owner', async () => {
+  const h = serverPaginationHarness(); h.transactions.set('a', { owner: h.tab.id, schema: h.tab.schema, active: true });
+  let request; const execute = h.api.executeSqlV2; h.api.executeSqlV2 = r => { request = r; return execute(r); };
+  await h.view.execute(h.sql, false); assert.equal(h.count('plan-page'), 0); assert.equal(h.view.serverPage, null);
+  assert.equal(request.sql, h.sql); assert.equal(request.transaction_owner, h.tab.id);
+  assert.ok(h.notices.some(c => /手动事务不使用服务器分页/.test(c[1]))); h.view.destroy();
+});
+
+test('double-click next while planning holds busy and sends only one database query', async () => {
+  const h = serverPaginationHarness({ keyset: false }); await h.view.execute(h.sql, false);
+  const gate = deferred(), planner = h.api.planQueryPagination;
+  h.api.planQueryPagination = async (...args) => { h.calls.push(['pending-plan']); await gate.promise; return planner(...args); };
+  const first = h.view.loadResultPage('next'); const second = h.view.loadResultPage('next');
+  assert.equal(h.view.running, true); assert.equal(h.count('pending-plan'), 1); assert.equal(h.count('execute'), 1);
+  gate.resolve(); await Promise.all([first, second]); assert.equal(h.count('execute'), 2); h.view.destroy();
+});
+
+test('stopping initial planning before reply sends no SQL and clears busy', async () => {
+  const h = serverPaginationHarness(), gate = deferred(); h.api.planQueryPagination = () => gate.promise;
+  const task = h.view.execute(h.sql, false); await settleTick(); h.view.stopBtn.fire('click');
+  gate.resolve({ mode: 'page', sql: 'PAGE 0 2' }); await task;
+  assert.equal(h.count('execute'), 0); assert.equal(h.view.running, false); assert.match(h.view.lastMessages[0].text, /没有发送 SQL/); h.view.destroy();
+});
+
+test('stopping next-page planning rejects late reply without database cancellation/requery', async () => {
+  const h = serverPaginationHarness({ keyset: false }); await h.view.execute(h.sql, false);
+  const gate = deferred(); h.api.planQueryPagination = () => gate.promise;
+  const task = h.view.loadResultPage('next'); h.view.stopBtn.fire('click');
+  gate.resolve({ mode: 'page', sql: 'PAGE 2 2' }); await task;
+  assert.equal(h.count('execute'), 1); assert.equal(h.view.running, false); h.view.destroy();
+});
+
+for (const change of ['close', 'connection', 'namespace', 'revision', 'serverPage']) {
+  test(`late next-page planning after ${change} never executes or overwrites cached page`, async () => {
+    const h = serverPaginationHarness({ keyset: false }); await h.view.execute(h.sql, false);
+    const gate = deferred(); h.api.planQueryPagination = () => gate.promise;
+    const task = h.view.loadResultPage('next');
+    if (change === 'close') h.view.destroy();
+    if (change === 'connection') h.tab.connectionId = 'b';
+    if (change === 'namespace') h.tab.schema = 'tenant_b';
+    if (change === 'revision') h.view.executionRevision++;
+    if (change === 'serverPage') h.view.serverPage = { ...h.view.serverPage };
+    gate.resolve({ mode: 'page', sql: 'PAGE 2 2' }); await task;
+    assert.equal(h.count('execute'), 1); assert.deepEqual(plain(h.tab.results.sets[0].rows), [['1'], ['2']]);
+    if (change !== 'close') h.view.destroy();
+  });
+}
+
+test('unknown page outcome prevents cache return and any subsequent pagination reexecution', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false);
+  h.api.executeSqlV2 = async r => ({ execution_id: r.execution_id, state: 'unknown', result: null, error: { message: 'unknown effects' } });
+  await h.view.loadResultPage('next'); assert.equal(h.view.executionNeedsReview, true);
+  const plans = h.count('plan-keyset'); await h.view.loadResultPage('previous'); await h.view.loadResultPage('next');
+  assert.equal(h.count('plan-keyset'), plans); assert.ok(h.notices.some(c => /结果未知/.test(c[1]))); h.view.destroy();
+});
+
+test('byte-truncated initial preview hydrates same page from spool then anchors exact last row', async () => {
+  const h = serverPaginationHarness({ truncate: true }); await h.view.execute(h.sql, false);
+  assert.equal(h.count('fetch'), 1); assert.deepEqual(plain(h.tab.results.sets[0].rows), [['1'], ['2']]);
+  assert.equal(h.view.serverPageAnchor, '2'); await h.view.loadResultPage('next');
+  assert.equal(h.calls.find(c => c[0] === 'plan-keyset')[3], '2'); assert.equal(h.view.resultPages.scope, null); h.view.destroy();
+});
+
+test('unreadable byte-truncated remainder explicitly errors rather than marking tail or skipping rows', async () => {
+  const h = serverPaginationHarness({ truncate: true }); h.api.fetchQueryRows = async () => ({ rows: [], total: 2, truncated: true, message: 'large row' });
+  await h.view.execute(h.sql, false); assert.equal(h.view.serverPageCache.size, 0); assert.equal(h.tab.results, null);
+  assert.match(h.view.lastMessages[0].text, /不会跳到下一页遗漏数据/); assert.equal(h.count('drop'), 1); h.view.destroy();
+});
+
+test('server page footer is current-page count not query total and export requeries original SQL', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false); h.renderResults();
+  assert.match(h.view.statusInfo().pageText, /本页 2 行.*总行数未知/);
+  assert.match(h.view.footerStatusEl.textContent, /运行耗时.*服务器分页/);
+  assert.match(h.view.pageCountEl.textContent, /总页数未知/);
+  await h.view.exportResultSnapshot({ format: 'csv' }, h.view.captureResultExport());
+  assert.equal(h.count('export-requery'), 1); assert.equal(h.calls.find(c => c[0] === 'export-requery')[2], h.sql);
+  assert.equal(h.count('export-spool'), 0); h.view.destroy();
 });

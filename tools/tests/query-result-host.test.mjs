@@ -84,6 +84,9 @@ function fixture({ snapshot, execute, grant = false, total = 3, pageSize = 200 }
   const doc = dom(), calls = [], notices = [], recovery = [], plans = new Map(), favorites = []; let choice = 'discard', confirmAnswer = true, saveFails = false, latestExecution, snapshotHandler = snapshot;
   const cfg = { id: 'connection-a', name: 'SQLite', kind: 'sqlite', read_only: false };
   const api = { executionCapabilities: async () => ({ cancel: { level: 'unsupported', reason: 'fixture' } }),
+    // 本夹具覆盖“旧全量路径 + 完整缓存”：显式声明不支持服务器分页，不靠异常被吞掉。
+    planQueryPagination: async () => ({ mode: 'unsupported', sql: null, reason: 'fixture 显式不支持服务器分页' }),
+    planQueryKeyset: async () => ({ supported: false, reason: 'fixture 不判定 Keyset' }),
     executeSqlV2: async request => { calls.push(['sql', plain(request)]); latestExecution = request.execution_id; return { execution_id: request.execution_id, state: 'succeeded', deadline: {}, effects: 'read_only', transaction_state: 'none', result: { elapsed_ms: 2, messages: [], spool_id: randomUUID(), sets: [{ columns: [{ name: 'id', data_type: 'INTEGER' }, { name: 'label', data_type: 'TEXT' }], rows: Array.from({ length: Math.min(total, pageSize) }, (_, i) => [String(i + 1), `label-${i + 1}`]), total, affected: 0, message: '' }] } }; },
     cancelExecution: async () => ({}), executionStatus: async () => ({}), dropQuerySpool: async scope => { calls.push(['drop-spool', plain(scope)]); },
     fetchQueryRows: async (scope, index, offset, limit) => { calls.push(['page', { scope, index, offset, limit }]); const n = Math.min(limit, total - offset); return { rows: Array.from({ length: n }, (_, i) => [String(offset + i + 1), `label-${offset + i + 1}`]), offset, total, truncated: false, message: '' }; },

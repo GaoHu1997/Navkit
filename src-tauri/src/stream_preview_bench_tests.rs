@@ -231,7 +231,10 @@ async fn measure(f: &MysqlFixture, sql: &str, streaming: bool, source_rows: u64,
         "stop_reason":stopped,"rss_peak_bytes":peak.rss,"private_peak_bytes":peak.private,
         "minimum_free_ram_bytes":peak.free_ram,"minimum_free_disk_bytes":peak.free_disk,
         "process_cpu_ms":baseline.cpu_ms.zip(cpu_end.cpu_ms).map(|(a,b)|b-a),
-        "build_mode":if cfg!(debug_assertions) {"debug"} else {"release"},"baseline":"3b67b6120b1a0dc539bef5655ea06a031a9f9508",
+        "build_mode":if cfg!(debug_assertions) {"debug"} else {"release"},
+        // 基线必须由隔离脚本显式传入；不再写死历史提交，避免合并后身份记录失真。
+        "baseline":std::env::var("NAVKIT_STREAM_BENCH_BASELINE").ok().filter(|value| !value.trim().is_empty()),
+        "baseline_declared":std::env::var("NAVKIT_STREAM_BENCH_BASELINE").is_ok(),
         "measurement_scope":"Rust命令服务，不含IPC/WebView/DOM绘制；内存100ms采样，最终终态1ms轮询"});
     if outcome.state == ExecutionState::Succeeded {
         assert!(!outcome.resources_pending);

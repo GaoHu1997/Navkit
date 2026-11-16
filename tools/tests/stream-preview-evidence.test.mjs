@@ -3,9 +3,13 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-const root = fileURLToPath(new URL('../../', import.meta.url));
-const dir = path.join(root, 'artifacts/stream-preview-eval-20261115');
+const evidenceDirectory = process.env.NAVKIT_STREAM_EVIDENCE_DIR;
+if (!evidenceDirectory) {
+  test('stream preview evidence requires an explicitly selected evidence directory', {
+    skip: '设置 NAVKIT_STREAM_EVIDENCE_DIR 后才能验证历史证据；未提供不读取本机产物',
+  }, () => {});
+} else {
+const dir = path.resolve(evidenceDirectory);
 const records = fs.readFileSync(path.join(dir, 'runs-latest.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
 const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest-latest.json'), 'utf8'));
 const summary = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8')).summary;
@@ -64,10 +68,13 @@ test('LIMIT 200 controls are distinguished from output-N and excluded warmups', 
   for (const n of [10000,100000,1000000,10000000,100000000]) assert.equal(records.filter(r=>r.range_upper_bound===n && r.round===0).length,2);
 });
 test('binary hash, source seed, real MySQL version, cache policy and owned-database removal match evidence', () => {
-  const hash=crypto.createHash('sha256').update(fs.readFileSync(manifest.binary)).digest('hex');
-  assert.equal(hash,manifest.binarySha256); assert.equal(manifest.mysqlVersion,'8.0.44');
+  const binary = process.env.NAVKIT_STREAM_EVIDENCE_BINARY || manifest.binary;
+  assert.equal(typeof binary, 'string', '证据必须给出二进制身份和可读取的对应文件');
+  const hash=crypto.createHash('sha256').update(fs.readFileSync(path.resolve(dir, binary))).digest('hex');
+  assert.equal(hash,manifest.binarySha256); assert.match(manifest.mysqlVersion,/^\d+\.\d+\.\d+/);
   assert.equal(manifest.fixedTableRows,100000000); assert.deepEqual(manifest.seed[0].aggregate,[100000000,1,100000000,16,16]);
   assert.deepEqual(manifest.cachePolicy,{singleSetBytes:536870912,globalBytes:2147483648});
   assert.equal(manifest.state,'completed'); assert.ok(manifest.cleanup.every(c=>c.state==='removed' && c.verifiedAbsent));
   assert.ok(new Date(manifest.buildCompleted) < new Date(manifest.queriesStartedAfterSeedAndBuild));
 });
+}

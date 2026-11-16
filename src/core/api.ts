@@ -539,16 +539,16 @@ export const api = {
       { connectionId, sql, limit, offset },
     ),
   /** 查询页 Keyset 判定：SQL 形状命中唯一键时可用锚点续页，否则继续 OFFSET。 */
-  planQueryKeyset: (connectionId: string, sql: string) =>
+  planQueryKeyset: (connectionId: string, sql: string, namespace: string) =>
     call<{ supported: boolean; reason: string | null; column?: string; ascending?: boolean; numeric?: boolean }>(
       "plan_query_keyset",
-      { connectionId, sql },
+      { connectionId, sql, namespace },
     ),
   /** 按 Keyset 锚点生成查询页 SQL：只生成、不执行。 */
-  planQueryKeysetPage: (connectionId: string, sql: string, after: string, limit: number) =>
+  planQueryKeysetPage: (connectionId: string, sql: string, after: string, limit: number, namespace: string) =>
     call<{ mode: "page" | "unsupported"; sql: string | null; reason: string | null }>(
       "plan_query_keyset_page",
-      { connectionId, sql, after, limit },
+      { connectionId, sql, after, limit, namespace },
     ),
   /** 导出时重新查询全量（仅可安全重跑的单条只读语句；超配额明确拒绝）。 */
   exportQueryRequery: (opts: ExportOptions, sql: string, ownerId: string, namespace: string) =>
