@@ -1,5 +1,5 @@
 /**
- * 关系图 ELK 分层布局 —— 移植自 dbx `lib/diagram/elk-layout.ts`。
+ * 关系图 ELK 分层布局 —— 移植自 参考实现 `lib/diagram/elk-layout.ts`。
  *
  * 相比原自研的「最长路径分层 + 同层纵排」，ELK 的 layered 算法（Sugiyama）会做：
  *   · 交叉最小化（LAYER_SWEEP）—— 这是连线交叉严重的根因
@@ -111,7 +111,7 @@ const DIRECTION_MAP: Record<LayoutDirection, string> = {
   BT: "UP",
 };
 
-/** dbx 的同一套参数，按本项目卡片尺寸微调间距。 */
+/** 参考实现 的同一套参数，按本项目卡片尺寸微调间距。 */
 export function buildElkOptions(direction: LayoutDirection = "LR"): Record<string, string> {
   return {
     "elk.algorithm": "layered",

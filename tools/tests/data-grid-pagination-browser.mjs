@@ -69,7 +69,7 @@ const waitForPage = async number => {
 };
   await page.goto(`http://127.0.0.1:${server.address().port}/preview.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__APP__?.connections?.length && window.__APP__.settings.rows_per_page === 20);
-  await page.evaluate(() => window.__APP__.openTableTab('c1', 'dbswitch', 'pagination_fixture', 'table'));
+  await page.evaluate(() => window.__APP__.openTableTab('c1', 'navkit', 'pagination_fixture', 'table'));
   const pager = page.getByRole('navigation', { name: '表格分页', exact: true });
   await pager.waitFor();
   await waitForPage(1);

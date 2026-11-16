@@ -2,7 +2,7 @@
 
 本目标确实调用产品 `synchronize` / `diff`，执行真实 INSERT/UPDATE/DDL 后完整回读，而不是匹配 SQL 字符串或返回固定行。三个测试均 `#[ignore]`，必须显式选择。没有运行厂商服务，所有报告固定 `vendor_server_status=NOT_TESTED`、`vendor_real_pass=0`。
 
-推荐在工作区根目录运行 `npm run test:sync:simulated`：统一执行器会先清本项目 Cargo 旧产物，顺序执行六套、严格校验实际二进制/源码/DLL 哈希与 42 个场景数量，保留独立报告并综合检查每套退出码。详见[同步动态验收说明](<D:/github/tauri-navicat/tools/acceptance/sync/README.md>)。下列单项命令仅用于诊断，不应把最后一个命令的退出码当作六套全部通过。
+推荐在工作区根目录运行 `npm run test:sync:simulated`：统一执行器会先清本项目 Cargo 旧产物，顺序执行六套、严格校验实际二进制/源码/DLL 哈希与 42 个场景数量，保留独立报告并综合检查每套退出码。详见[同步动态验收说明](<D:/github/tauri-navkit/tools/acceptance/sync/README.md>)。下列单项命令仅用于诊断，不应把最后一个命令的退出码当作六套全部通过。
 
 ## 手动诊断（Bash，工作区根目录）
 
@@ -11,14 +11,14 @@
 ```bash
 export NAVKIT_PYTHON='C:/Users/gaohu/AppData/Local/Programs/Python/Python313/python.exe'
 # 选择本轮独立的绝对目录；不要复用历史报告来宣称本轮通过。
-export NAVKIT_SYNC_SIM_REPORT_DIR='D:/github/tauri-navicat/artifacts/sync-simulation-current-round'
+export NAVKIT_SYNC_SIM_REPORT_DIR='D:/github/tauri-navkit/artifacts/sync-simulation-current-round'
 
 cargo test --manifest-path src-tauri/Cargo.toml --test e2e_sync_simulated --no-run
 cargo test --manifest-path src-tauri/Cargo.toml --test e2e_sync_simulated sync_simulated_tds -- --ignored --test-threads=1 --nocapture
 cargo test --manifest-path src-tauri/Cargo.toml --test e2e_sync_simulated sync_simulated_clickhouse -- --ignored --test-threads=1 --nocapture
 
-export NAVKIT_SIM_ODBC_DRIVER='D:/github/tauri-navicat/tools/acceptance/simulation/odbc/runtime/navkit_sim_odbc.dll'
-export NAVKIT_SIM_ODBC_BACKEND='D:/github/tauri-navicat/tools/acceptance/simulation/odbc/runtime/sim_duck_backend.dll'
+export NAVKIT_SIM_ODBC_DRIVER='D:/github/tauri-navkit/tools/acceptance/simulation/odbc/runtime/navkit_sim_odbc.dll'
+export NAVKIT_SIM_ODBC_BACKEND='D:/github/tauri-navkit/tools/acceptance/simulation/odbc/runtime/sim_duck_backend.dll'
 status=0
 for kind in odbc oracle dameng db2; do
   NAVKIT_SYNC_SIM_ODBC_KIND="$kind" cargo test --manifest-path src-tauri/Cargo.toml --test e2e_sync_simulated sync_simulated_odbc -- --ignored --test-threads=1 --nocapture || status=1

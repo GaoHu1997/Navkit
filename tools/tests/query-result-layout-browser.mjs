@@ -51,7 +51,7 @@ try {
     };
     mock.query_result_snapshot = () => { throw new Error('UI fixture intentionally read-only'); };
     const app = window.__APP__;
-    await app.openQueryTab('c1', 'SELECT * FROM large_table', 'dbswitch');
+    await app.openQueryTab('c1', 'SELECT * FROM large_table', 'navkit');
     await app.activeView().executeSelection(false);
   });
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
@@ -115,7 +115,7 @@ try {
   await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
   await page.screenshot({ path: path.join(root, 'artifacts/query-result-pagination.png') });
   const queryId = await page.evaluate(() => window.__APP__.activeTabId);
-  await page.evaluate(async () => { await window.__APP__.openTableTab('c1', 'dbswitch', 'dbswitch_assignment_config', 'table'); });
+  await page.evaluate(async () => { await window.__APP__.openTableTab('c1', 'navkit', 'navkit_assignment_config', 'table'); });
   await page.waitForFunction(() => !!window.__APP__.activeTab.page && !window.__APP__.activeView().loading);
   await page.locator('td[data-row="0"][data-col="1"]:visible').first().click();
   assert.equal(await page.locator('.cell-preview:visible').count(), 0);
@@ -125,7 +125,7 @@ try {
   await page.evaluate(queryId => window.__APP__.activateTab(queryId), queryId);
   await page.locator('td[data-row="0"][data-col="1"]:visible').first().click();
   assert.equal(await page.locator('.cell-preview:visible').count(), 0);
-  await page.evaluate(async () => { await window.__APP__.openTableTab('c1', 'dbswitch', 'dbswitch_database_connection', 'table'); });
+  await page.evaluate(async () => { await window.__APP__.openTableTab('c1', 'navkit', 'navkit_database_connection', 'table'); });
   await page.waitForFunction(() => !!window.__APP__.activeTab.page && !window.__APP__.activeView().loading);
   await page.locator('td[data-row="0"][data-col="1"]:visible').first().click();
   assert.equal(await page.locator('.cell-preview:visible').count(), 0);

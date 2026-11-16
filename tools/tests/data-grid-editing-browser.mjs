@@ -111,7 +111,7 @@ try {
     }, { columns, rows });
     await page.goto(`http://127.0.0.1:${port}/preview.html`, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForFunction(() => window.__APP__?.connections?.length);
-    await page.evaluate(() => window.__APP__.openTableTab('c1', 'dbswitch', 'editing_fixture', 'table'));
+    await page.evaluate(() => window.__APP__.openTableTab('c1', 'navkit', 'editing_fixture', 'table'));
     await page.waitForFunction(() => window.__APP__.activeView()?.grid?.rows.length === 200);
     await page.evaluate(() => { window.grid = window.__APP__.activeView().grid; });
     await open(0, 1);

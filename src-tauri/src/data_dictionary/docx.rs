@@ -1,9 +1,9 @@
 //! Word (.docx) 数据字典生成 —— 不依赖第三方 docx 库，直接产出 OOXML。
 //!
-//! 文档结构照搬 SmartSQL WordDoc（Aspose.Words）：
+//! 文档结构照搬 参考模板 WordDoc（Aspose.Words）：
 //!  标题页 → 修订日志 → 目录（TOC 域，Word 打开时自动更新）→ 表结构（每表一节 + 9 列表格）
 //!  页眉「NavKit 数据库字典」右对齐；页脚「第 X 页 / 共 Y 页」（PAGE / NUMPAGES 域）。
-//! 表头底纹 #E7E6E6，正文宋体 9pt，与 SmartSQL 模板一致。
+//! 表头底纹 #E7E6E6，正文宋体 9pt，与 参考模板 模板一致。
 
 use super::{xml_escape, DictDatabase, DictExportOptions};
 
@@ -213,7 +213,7 @@ pub fn build_docx(dto: &DictDatabase, opts: &DictExportOptions) -> anyhow::Resul
         }
     }
 
-    // 视图 / 存储过程（SmartSQL 的 Word 不含；这里按勾选追加，保持一致不强制）
+    // 视图 / 存储过程（参考模板 的 Word 不含；这里按勾选追加，保持一致不强制）
     if opts.include_views && !dto.views.is_empty() {
         body.push_str(&heading("视图", 2));
         for v in &dto.views {

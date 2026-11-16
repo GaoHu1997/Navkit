@@ -1,4 +1,4 @@
-[cwd: resolvedFrom="D:\\github\\tauri-navicat"; cwdSource="workingDirectory"]
+[cwd: resolvedFrom="D:\\github\\tauri-navkit"; cwdSource="workingDirectory"]
 {
   "evidence_type": "CURRENT_RUN_CTYPES_ACTUAL_WINDOWS_ODBC_MANAGER_EXISTING_FACADE_DUCKDB",
   "vendor_server_status": "NOT_TESTED",

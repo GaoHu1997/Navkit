@@ -47,7 +47,7 @@ const NUMERIC_TYPES = [...AUTO_INCREMENT_TYPES, "decimal", "numeric", "bit", "bo
 function baseType(dataType: string): string {
   return (dataType || "").toLowerCase().replace(/\(.*$/, "").trim();
 }
-/** 按字段类型给出默认值候选（参考 Navicat：' ' / NULL / 0 / 1 / CURRENT_*），仍允许手动输入任意表达式。 */
+/** 按字段类型给出默认值候选（参考 通用数据库客户端：' ' / NULL / 0 / 1 / CURRENT_*），仍允许手动输入任意表达式。 */
 function defaultChoices(dataType: string): string[] {
   const type = baseType(dataType);
   const numeric = NUMERIC_TYPES.includes(type);

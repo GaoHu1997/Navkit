@@ -2,7 +2,7 @@
 
 本目录专门验收实际数据同步，不以源码检查、SQL 字符串匹配、服务 ready 或驱动加载成功代替同步成功。测试调用生产 `synchronize`、`diff`、`synchronize_database`，创建隔离的数据，实际写入后独立回读全部行/列，并检查失败、取消和清理。
 
-2026-11-07 已实际执行结果见[完整测试报告](<D:/github/tauri-navicat/tools/acceptance/sync/TEST-REPORT-2026-11-07.md>)和[机器证据核对记录](<D:/github/tauri-navicat/tools/acceptance/sync/sync-run-record-final-20261107.json>)。本说明供复现，不能将预期用例数量直接当作另一次运行的通过结果。
+2026-11-07 已实际执行结果见[完整测试报告](<D:/github/tauri-navkit/tools/acceptance/sync/TEST-REPORT-2026-11-07.md>)和[机器证据核对记录](<D:/github/tauri-navkit/tools/acceptance/sync/sync-run-record-final-20261107.json>)。本说明供复现，不能将预期用例数量直接当作另一次运行的通过结果。
 
 ## 范围与证据等级
 
@@ -47,7 +47,7 @@ export NAVKIT_PG_PORT=5433
 export NAVKIT_PG_USER=postgres
 export NAVKIT_PG_DATABASE=postgres
 # 需要密码时另设 NAVKIT_PG_PASSWORD。
-export NAVKIT_SYNC_LIVE_REPORT='D:/github/tauri-navicat/tools/acceptance/sync/live-new-run.json'
+export NAVKIT_SYNC_LIVE_REPORT='D:/github/tauri-navkit/tools/acceptance/sync/live-new-run.json'
 npm run test:sync:live
 ```
 
@@ -64,7 +64,7 @@ npm run test:sync:live
 ```bash
 export NAVKIT_PYTHON='C:/Users/gaohu/AppData/Local/Programs/Python/Python313/python.exe'
 # 必须是绝对路径；每轮使用全新目录，不能覆盖或借用旧报告。
-export NAVKIT_SYNC_SIM_REPORT_DIR='D:/github/tauri-navicat/tools/acceptance/sync/simulated-new-run'
+export NAVKIT_SYNC_SIM_REPORT_DIR='D:/github/tauri-navkit/tools/acceptance/sync/simulated-new-run'
 npm run test:sync:simulated
 
 # 可选只运行指定协议；不是完整六套验收：
@@ -86,6 +86,6 @@ ODBC 双向二进制在每方向的一个场景中检查四行：`00FF1080`、NU
 - 测试通过生产 Rust 同步入口，不声称完成 GUI 点击端到端验证；Node UI 回归只是辅助证据。
 - 模拟器仅有有限的可变 SQL/wire 子集；fixture 离线自检不计产品同步通过。进程被强制杀死时的 RUNNING 或未清理记录也不能计通过。
 
-详细源码与模拟边界见 [真实矩阵](<D:/github/tauri-navicat/src-tauri/tests/e2e_sync_live_matrix.rs>)、[精度/键/取消回归](<D:/github/tauri-navicat/src-tauri/tests/e2e_sync_regressions.rs>)、[模拟入口](<D:/github/tauri-navicat/src-tauri/tests/e2e_sync_simulated.rs>)、[模拟器说明](<D:/github/tauri-navicat/src-tauri/tests/support/sync_simulated/README.md>) 与 [串行执行器](<D:/github/tauri-navicat/tools/acceptance/sync/run-simulations.mjs>)。
+详细源码与模拟边界见 [真实矩阵](<D:/github/tauri-navkit/src-tauri/tests/e2e_sync_live_matrix.rs>)、[精度/键/取消回归](<D:/github/tauri-navkit/src-tauri/tests/e2e_sync_regressions.rs>)、[模拟入口](<D:/github/tauri-navkit/src-tauri/tests/e2e_sync_simulated.rs>)、[模拟器说明](<D:/github/tauri-navkit/src-tauri/tests/support/sync_simulated/README.md>) 与 [串行执行器](<D:/github/tauri-navkit/tools/acceptance/sync/run-simulations.mjs>)。
 
-本次原始失败证据继续保留： [边界修复前](<D:/github/tauri-navicat/tools/acceptance/sync/regressions-before-fixes.json>)、[首次 90 场景实库基线](<D:/github/tauri-navicat/tools/acceptance/sync/live-baseline-90.json>)、[108 场景修复前](<D:/github/tauri-navicat/tools/acceptance/sync/live-108-before-final-fixes.json>)、[被拒绝作为新源码认证的缓存运行](<D:/github/tauri-navicat/tools/acceptance/sync/live-cached-build-rejected.json>)、[ODBC 二进制 ABI 探针](<D:/github/tauri-navicat/tools/acceptance/sync/odbc-binary-probe.txt>)。缓存运行与探针不能冒充最终全套同步结果。
+本次原始失败证据继续保留： [边界修复前](<D:/github/tauri-navkit/tools/acceptance/sync/regressions-before-fixes.json>)、[首次 90 场景实库基线](<D:/github/tauri-navkit/tools/acceptance/sync/live-baseline-90.json>)、[108 场景修复前](<D:/github/tauri-navkit/tools/acceptance/sync/live-108-before-final-fixes.json>)、[被拒绝作为新源码认证的缓存运行](<D:/github/tauri-navkit/tools/acceptance/sync/live-cached-build-rejected.json>)、[ODBC 二进制 ABI 探针](<D:/github/tauri-navkit/tools/acceptance/sync/odbc-binary-probe.txt>)。缓存运行与探针不能冒充最终全套同步结果。

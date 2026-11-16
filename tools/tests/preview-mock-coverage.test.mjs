@@ -132,7 +132,7 @@ test("关键命令必须出现在两侧注册表中（显式点名，防止提�
 
 test("关系图预览返回同目录的只读元数据，不包含视图或行数统计", () => {
   const mock = previewMock();
-  for (const schemaName of ["dbswitch", "password_manager", "empty_database"]) {
+  for (const schemaName of ["navkit", "password_manager", "empty_database"]) {
     const args = { id: "c1", schemaName };
     const result = mock.get_diagram_metadata(args);
     assert.deepEqual(Array.from(result.tables, table => table.table), Array.from(mock.list_tables(args).filter(([, type]) => type === "table"), ([name]) => name));

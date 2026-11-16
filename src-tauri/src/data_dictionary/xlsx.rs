@@ -1,6 +1,6 @@
 //! Excel (.xlsx) 数据字典生成 —— 不依赖第三方 xlsx 库，直接产出 SpreadsheetML。
 //!
-//! Sheet 结构照搬 SmartSQL ExcelDoc（EPPlus）：
+//! Sheet 结构照搬 参考模板 ExcelDoc（EPPlus）：
 //!  · 单 sheet 模式：修订日志 → 目录 → 表（所有表汇总，表名横幅行分隔）
 //!  · 每表一 sheet 模式：修订日志 → 目录 → 每张表一个 sheet（表头行尾「返回目录」超链接）
 //! 单元格用 inlineStr，样式集中在 styles.xml（表头 E7E6E6 / 横幅 F2F2F2 / 细边框）。
@@ -104,7 +104,7 @@ fn merges_xml(ranges: &[String]) -> String {
     )
 }
 
-/// 修订日志 sheet（SmartSQL：标题 + 5 列表头 + 15 空白待填行）。
+/// 修订日志 sheet（参考模板：标题 + 5 列表头 + 15 空白待填行）。
 fn log_sheet(dto: &DictDatabase, opts: &DictExportOptions) -> Sheet {
     let mut rows = String::new();
     let mut row = 1;

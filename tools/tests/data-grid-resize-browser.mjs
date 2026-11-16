@@ -65,7 +65,7 @@ try {
   }, { rowsPerPage: ROWS_PER_PAGE, total: TOTAL });
   await page.goto(`http://127.0.0.1:${server.address().port}/preview.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(n => window.__APP__?.connections?.length && window.__APP__.settings.rows_per_page === n, ROWS_PER_PAGE);
-  await page.evaluate(() => window.__APP__.openTableTab('c1', 'dbswitch', 'resize_fixture', 'table'));
+  await page.evaluate(() => window.__APP__.openTableTab('c1', 'navkit', 'resize_fixture', 'table'));
   await page.waitForFunction(n => window.__APP__.activeView()?.grid?.rows.length === n, ROWS_PER_PAGE);
 
   /** 采样当前网格状态：视口高、渲染行数、行高、滚动总高、分页 limit。 */

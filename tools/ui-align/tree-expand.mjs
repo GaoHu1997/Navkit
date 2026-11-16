@@ -11,8 +11,8 @@ await page.waitForTimeout(7000);
 
 const state = await page.evaluate(() => {
   const app = window.__APP__;
-  // 选中 dbswitch 库节点后执行「打开数据库」命令
-  const node = app.tree.find ? [...document.querySelectorAll('.tree-node')].find((n) => (n.dataset.id || '').endsWith('/db/dbswitch')) : null;
+  // 选中 navkit 库节点后执行「打开数据库」命令
+  const node = app.tree.find ? [...document.querySelectorAll('.tree-node')].find((n) => (n.dataset.id || '').endsWith('/db/navkit')) : null;
   const id = node?.dataset.id;
   if (!id) return { ok: false, reason: "node not found", ids: [...document.querySelectorAll(".tree-node")].slice(0, 6).map((n) => n.dataset.id) };
   node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -22,7 +22,7 @@ const state = await page.evaluate(() => {
 await page.waitForTimeout(1500);
 await page.evaluate(() => {
   const app = window.__APP__;
-  const el = [...document.querySelectorAll('.tree-node')].find((n) => (n.dataset.id || '').endsWith('/db/dbswitch/grp-table') || (n.dataset.id || '').endsWith('/db/dbswitch'));
+  const el = [...document.querySelectorAll('.tree-node')].find((n) => (n.dataset.id || '').endsWith('/db/navkit/grp-table') || (n.dataset.id || '').endsWith('/db/navkit'));
   // 若分组未展开,通过树 API 展开
   const n = app.tree.find(el?.dataset.id ?? "");
   if (n && !n.expanded && n.expandable) app.tree.toggle(n.id);

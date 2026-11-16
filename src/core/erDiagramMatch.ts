@@ -1,7 +1,7 @@
 /**
  * 关系图智能匹配（虚拟外键）—— 纯逻辑，无 DOM 依赖。
  *
- * 移植自 dbx `lib/diagram/match-strategies.ts` + `match-engine.ts`，按 NavKit 的类型与
+ * 移植自 参考实现 `lib/diagram/match-strategies.ts` + `match-engine.ts`，按 NavKit 的类型与
  * 约束重写。解决的核心问题：大量数据库不建物理外键（或引擎不支持），ER 图上表全是孤岛。
  *
  * 匹配策略分层（优先级从高到低）：
@@ -9,8 +9,8 @@
  *   P1 命名约定   —— {table}_id / {table}_uuid / {table}_pk → 目标表主键
  *   P2 类型签名   —— P1 + 源列与目标列类型兼容（bigint↔int 等）
  *
- * 与 dbx 的差异（修正项）：
- *   · dbx 用 `inferred:...` 形式的 id 去重，物理外键与推断关系的 id 永不相同，会重复出边。
+ * 与 参考实现 的差异（修正项）：
+ *   · 参考实现 用 `inferred:...` 形式的 id 去重，物理外键与推断关系的 id 永不相同，会重复出边。
  *     这里改为按 (源表,源列,目标表,目标列) 四元组去重，物理外键优先。
  *   · 源列已被物理外键覆盖时不再推断，避免同一条边两种样式。
  *   · 自引用（表指向自己）不推断。
@@ -126,7 +126,7 @@ export function extractTableNameCandidates(columnName: string): string[] {
 
 // ---------------------------------------------------------------- 表名索引
 
-/** 每张表的主键列（取第一列，与 dbx 一致）。 */
+/** 每张表的主键列（取第一列，与 参考实现 一致）。 */
 export interface PrimaryKeyInfo {
   name: string;
   data_type: string;
@@ -171,7 +171,7 @@ export function resolveTargetTable(candidate: string, lookup: Map<string, ErTabl
   const singular = snake.endsWith("s") ? lookup.get(snake.slice(0, -1)) : undefined;
   if (singular) return singular;
 
-  // 唯一子串匹配（dbx 的 partialMatch，但要求唯一，避免歧义）
+  // 唯一子串匹配（参考实现 的 partialMatch，但要求唯一，避免歧义）
   const matches = tables.filter((table) => table.name.toLowerCase().includes(snake));
   if (matches.length === 1) return matches[0];
   return null;

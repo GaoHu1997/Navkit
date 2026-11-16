@@ -47,7 +47,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__APP__?.connections?.length);
-  await page.evaluate(() => { void window.__APP__.openTableTab('c1', 'dbswitch', 'interaction_fixture', 'table'); });
+  await page.evaluate(() => { void window.__APP__.openTableTab('c1', 'navkit', 'interaction_fixture', 'table'); });
   await page.waitForFunction(() => requests.length === 1);
   assert.match(await page.locator('.data-load-status').textContent(), /正在加载当前页.*返回后自动更新/);
   await page.evaluate(() => resolvePage(0));

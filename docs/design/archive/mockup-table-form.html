@@ -176,7 +176,7 @@ function shell(opts) {
 
 function gridScreen() {
   var content = '<div class="content">' + grid(COLS, ROWS, { selectedRow: 1, pkKey: 'id' }) + gridFooterNew() + '</div>';
-  var body = shell({ doc: 'note_category — password_manager', active: '表', treeNodes: defaultTree('dbswitch'), tabs: TABS, activeTab: 1, pagetoolbar: TOOLBAR, content: content, info: INFO, statusLeft: STATUS_LEFT });
+  var body = shell({ doc: 'note_category — password_manager', active: '表', treeNodes: defaultTree('navkit'), tabs: TABS, activeTab: 1, pagetoolbar: TOOLBAR, content: content, info: INFO, statusLeft: STATUS_LEFT });
   return screen('表数据页 · 网格视图', '底部页脚保持原样（增/删/提交/清除 + 分页），仅在分页控件右侧新增「网格 / 表单」图标切换，并以 1px 竖分割线分隔；切换只显示图标。', body, { w: 1440, h: 900 });
 }
 
@@ -200,7 +200,7 @@ function formBody() {
 
 function formScreen() {
   var content = '<div class="content">' + formBody() + formFooter() + '</div>';
-  var body = shell({ doc: 'note_category — password_manager', active: '表', treeNodes: defaultTree('dbswitch'), tabs: TABS, activeTab: 1, pagetoolbar: TOOLBAR, content: content, info: INFO, statusLeft: STATUS_LEFT });
+  var body = shell({ doc: 'note_category — password_manager', active: '表', treeNodes: defaultTree('navkit'), tabs: TABS, activeTab: 1, pagetoolbar: TOOLBAR, content: content, info: INFO, statusLeft: STATUS_LEFT });
   return screen('表数据页 · 表单视图', '每屏一条记录，每行只放一个字段（单列）。翻页改为把网格分页图标旋转 90°：第一条 / 上一条 / 当前条 / 下一条 / 最后一条，仅图标；右侧图标切换选中表单。', body, { w: 1440, h: 900 });
 }
 

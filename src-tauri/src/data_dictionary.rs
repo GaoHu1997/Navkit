@@ -1,6 +1,6 @@
 //! 数据字典导出：五种格式生成器（Markdown / HTML / Excel / Word / PDF）。
 //!
-//! 模板结构与列集照搬 SmartSQL（SmartSQL.DocUtils.DBDoc.*）：
+//! 模板结构与列集照搬 参考模板（参考模板.DocUtils.DBDoc.*）：
 //!  · 列集：序号 / 列名 / 数据类型 / 长度 / 主键 / 自增 / 允许空 / 默认值 / 列说明
 //!  · Word/PDF/Excel 含「修订日志」章节；HTML/Markdown 不含
 //!  · Excel 支持「所有表一个 sheet」与「每张表一个 sheet」两种模式
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------- DTO
 
-/// 列（对应 SmartSQL ColumnDto）。
+/// 列（对应 参考模板 ColumnDto）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictColumn {
     pub order: usize,
@@ -31,17 +31,17 @@ pub struct DictColumn {
     pub comment: String,
 }
 
-/// 表（对应 SmartSQL TableDto）。
+/// 表（对应 参考模板 TableDto）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictTable {
     pub name: String,
     pub comment: String,
-    /// 数据库类型标签（如 "MySQL 8"）；Oracle 类型不输出「自增」列（与 SmartSQL 一致）。
+    /// 数据库类型标签（如 "MySQL 8"）；Oracle 类型不输出「自增」列（与 参考模板 一致）。
     pub db_type: String,
     pub columns: Vec<DictColumn>,
 }
 
-/// 视图 / 存储过程（对应 SmartSQL ViewProDto）。
+/// 视图 / 存储过程（对应 参考模板 ViewProDto）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictObject {
     pub name: String,
@@ -50,7 +50,7 @@ pub struct DictObject {
     pub db_type: String,
 }
 
-/// 一份数据库字典（对应 SmartSQL DBDto）。
+/// 一份数据库字典（对应 参考模板 DBDto）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictDatabase {
     pub name: String,
@@ -83,12 +83,12 @@ impl DictExportOptions {
     }
 }
 
-/// 该表是否隐藏「自增」列（Oracle 类型，与 SmartSQL 一致）。
+/// 该表是否隐藏「自增」列（Oracle 类型，与 参考模板 一致）。
 fn hide_identity(db_type: &str) -> bool {
     db_type.starts_with("Oracle")
 }
 
-/// 是 / 否（SmartSQL 模板用词）。
+/// 是 / 否（参考模板 模板用词）。
 fn yn(flag: bool) -> &'static str {
     if flag {
         "是"
@@ -107,7 +107,7 @@ fn structure_headers(db_type: &str) -> Vec<&'static str> {
     headers
 }
 
-/// 列宽百分比（SmartSQL 比例归一化，合计 100；隐藏「自增」时把该列宽度并入列说明）。
+/// 列宽百分比（参考模板 比例归一化，合计 100；隐藏「自增」时把该列宽度并入列说明）。
 fn structure_widths(db_type: &str) -> Vec<f64> {
     let hide = hide_identity(db_type);
     let mut widths = vec![7.0, 18.0, 11.0, 7.0, 7.0];
@@ -169,7 +169,7 @@ fn md_escape_cell(text: &str) -> String {
 
 // ---------------------------------------------------------------- Markdown
 
-/// Markdown 导出（照搬 SmartSQL MarkDownDoc 结构：表目录 → 表结构 → 视图 → 存储过程）。
+/// Markdown 导出（照搬 参考模板 MarkDownDoc 结构：表目录 → 表结构 → 视图 → 存储过程）。
 pub fn build_markdown(dto: &DictDatabase, opts: &DictExportOptions) -> String {
     let mut sb = String::new();
     sb.push_str("### 📚 数据库表目录\n\n");
@@ -255,7 +255,7 @@ pub fn build_markdown(dto: &DictDatabase, opts: &DictExportOptions) -> String {
 
 // ---------------------------------------------------------------- HTML
 
-/// HTML 导出（SmartSQL html.cshtml 结构 + NavKit 设计令牌样式）。
+/// HTML 导出（参考模板 html.cshtml 结构 + NavKit 设计令牌样式）。
 pub fn build_html(dto: &DictDatabase, opts: &DictExportOptions) -> String {
     let mut out = String::new();
     let title = xml_escape(&dto.doc_title);
@@ -334,7 +334,7 @@ pub fn build_html(dto: &DictDatabase, opts: &DictExportOptions) -> String {
         }
     }
 
-    // 视图 / 存储过程（HTML 版与 SmartSQL 一致只导出表；但勾选时按需输出 SQL 段）
+    // 视图 / 存储过程（HTML 版与 参考模板 一致只导出表；但勾选时按需输出 SQL 段）
     if opts.include("views") && !dto.views.is_empty() {
         out.push_str("<h2>视图</h2>\n");
         for v in &dto.views {

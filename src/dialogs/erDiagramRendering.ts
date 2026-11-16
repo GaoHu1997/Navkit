@@ -1,4 +1,4 @@
-/** DBX 的可见区域切片原则，适配现有 transform 视口；不改变图元或交互。 */
+/** 参考实现 的可见区域切片原则，适配现有 transform 视口；不改变图元或交互。 */
 export interface DiagramBounds { left: number; top: number; right: number; bottom: number }
 export function diagramViewport(viewport: { x: number; y: number; zoom: number }, width: number, height: number, overscan = 800): DiagramBounds {
   const zoom = viewport.zoom;

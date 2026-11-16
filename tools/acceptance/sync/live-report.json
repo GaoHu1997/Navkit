@@ -4,7 +4,7 @@
   "run_id": "189fe07ec4964284a59279f5c21266ba",
   "timestamp_utc": "2026-11-07T04:13:54.836278400+00:00",
   "executed_binary": {
-    "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_live_matrix-971eec0a1e4ebd11.exe",
+    "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_live_matrix-971eec0a1e4ebd11.exe",
     "sha256": "96738ae1b63d3c776446c18b9f8b53c90466e29d6dc6c544423908a4b4570fca"
   },
   "source_hashes": {

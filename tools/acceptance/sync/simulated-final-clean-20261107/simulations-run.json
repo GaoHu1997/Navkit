@@ -22,13 +22,13 @@
   },
   "runtime_artifacts": {
     "NAVKIT_SIM_ODBC_DRIVER": {
-      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\navkit_sim_odbc.dll",
+      "path": "D:\\github\\tauri-navkit\\tools\\acceptance\\simulation\\odbc\\runtime\\navkit_sim_odbc.dll",
       "status": "PRESENT",
       "bytes": 6144,
       "sha256": "c78f15e37ddbf4006df9261ecd93b01c2be792288043ab715f2e0ae0c1b7beef"
     },
     "NAVKIT_SIM_ODBC_BACKEND": {
-      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\sim_duck_backend.dll",
+      "path": "D:\\github\\tauri-navkit\\tools\\acceptance\\simulation\\odbc\\runtime\\sim_duck_backend.dll",
       "status": "PRESENT",
       "bytes": 41386800,
       "sha256": "9fa507ac3a43d0664c0e5214ba34551e9ea26a17f71415b3ffe18cc698fae563"
@@ -66,7 +66,7 @@
       },
       "cleanup_success": true,
       "executed_binary": {
-        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
         "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
       },
       "errors": []
@@ -97,7 +97,7 @@
       },
       "cleanup_success": true,
       "executed_binary": {
-        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
         "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
       },
       "errors": []
@@ -128,7 +128,7 @@
       },
       "cleanup_success": true,
       "executed_binary": {
-        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
         "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
       },
       "errors": []
@@ -159,7 +159,7 @@
       },
       "cleanup_success": true,
       "executed_binary": {
-        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
         "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
       },
       "errors": []
@@ -190,7 +190,7 @@
       },
       "cleanup_success": true,
       "executed_binary": {
-        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
         "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
       },
       "errors": []
@@ -221,7 +221,7 @@
       },
       "cleanup_success": true,
       "executed_binary": {
-        "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+        "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
         "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
       },
       "errors": []
@@ -269,13 +269,13 @@
   "source_unchanged_during_run": true,
   "runtime_artifacts_after": {
     "NAVKIT_SIM_ODBC_DRIVER": {
-      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\navkit_sim_odbc.dll",
+      "path": "D:\\github\\tauri-navkit\\tools\\acceptance\\simulation\\odbc\\runtime\\navkit_sim_odbc.dll",
       "status": "PRESENT",
       "bytes": 6144,
       "sha256": "c78f15e37ddbf4006df9261ecd93b01c2be792288043ab715f2e0ae0c1b7beef"
     },
     "NAVKIT_SIM_ODBC_BACKEND": {
-      "path": "D:\\github\\tauri-navicat\\tools\\acceptance\\simulation\\odbc\\runtime\\sim_duck_backend.dll",
+      "path": "D:\\github\\tauri-navkit\\tools\\acceptance\\simulation\\odbc\\runtime\\sim_duck_backend.dll",
       "status": "PRESENT",
       "bytes": 41386800,
       "sha256": "9fa507ac3a43d0664c0e5214ba34551e9ea26a17f71415b3ffe18cc698fae563"

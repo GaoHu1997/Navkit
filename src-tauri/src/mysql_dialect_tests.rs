@@ -38,9 +38,13 @@ fn read_only_transaction_call_sites_probe_the_server_dialect() {
 fn table_metadata_probes_dialect_capabilities_before_reading() {
     let source = include_str!("table_workflows_native_metadata.rs");
     // MySQL 族：server_uuid / 物理表 ID 来源都按实际目录探测，不能硬编码 MySQL 8 的表。
-    for marker in ["MysqlEvidence::probe", "INNODB_SYS_TABLES", "TIDB_TABLES", "SHOW VARIABLES LIKE 'server_uuid'"] {
+    for marker in ["MysqlEvidence::probe", "INNODB_SYS_TABLES", "TIDB_TABLE_ID", "SHOW VARIABLES LIKE 'server_uuid'"] {
         assert!(source.contains(marker), "缺少方言探测：{marker}");
     }
+    // TiDB 的物理表 ID 在 information_schema.TABLES.TIDB_TABLE_ID；
+    // 不能再查兼容的 TIDB_TABLES.TABLE_ID 或把它当成原生 MySQL。
+    assert!(!source.contains("TIDB_TABLES"), "TiDB 表身份应读 TABLES.TIDB_TABLE_ID，不是 TIDB_TABLES");
+    assert!(source.contains("requires_innodb_identity"), "TiDB 不能因兼容的 server_uuid 走原生 MySQL 强制校验");
     // PG 族：版本相关列必须探测后降级，否则 openGauss/GaussDB 会在 attgenerated/pg_sequence 上 42703。
     for marker in ["PgEvidence::probe", "attgenerated:has(", "indnkeyatts:has(", "evidence.sequences"] {
         assert!(source.contains(marker), "缺少 PG 能力探测：{marker}");

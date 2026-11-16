@@ -16,7 +16,7 @@ NavKit
 自动运行
 关系图
 本地MySQL
-dbswitch
+navkit
 information_schema
 mysql
 navkit_accept

@@ -3,7 +3,7 @@
   "protocol": "clickhouse",
   "tag": "http_sql_subset",
   "executed_binary": {
-    "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+    "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
     "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
   },
   "evidence_type": "ACTUAL_NAVKIT_SYNC_WITH_STATEFUL_PROTOCOL_SIMULATION",

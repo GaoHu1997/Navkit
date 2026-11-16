@@ -24,7 +24,7 @@ function dimApp() {
       <span style="display:grid;place-items:center">${navkitLogo(20)}</span>
       <span style="font-size:13px;font-weight:600">NavKit</span>
       <span style="width:1px;height:14px;background:var(--border)"></span>
-      <span style="font-size:12px;color:var(--text-tertiary)">dbswitch — localhost</span>
+      <span style="font-size:12px;color:var(--text-tertiary)">navkit — localhost</span>
     </div>
     <div style="height:44px;border-bottom:1px solid var(--border);background:var(--bg-surface)"></div>
     <div style="flex:1;display:flex;min-height:0;background:var(--bg-surface)">
@@ -444,7 +444,7 @@ export function driverStatesScreen() {
       chipText: "2 个连接在用",
       chipKind: "warn",
       body: "删除按钮置灰，并在行下方写明原因与解除办法；不让用户点下去才报错。",
-      action: `<div style="display:flex;gap:6px;align-items:center"><span style="font-size:11px;color:var(--text-tertiary)">dbswitch、报表库</span><div style="flex:1"></div>${btn("删除", "ghost sm", { disabled: true })}</div>`,
+      action: `<div style="display:flex;gap:6px;align-items:center"><span style="font-size:11px;color:var(--text-tertiary)">navkit、报表库</span><div style="flex:1"></div>${btn("删除", "ghost sm", { disabled: true })}</div>`,
     })}
     ${stateCell({
       tone: "error",

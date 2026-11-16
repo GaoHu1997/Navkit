@@ -51,7 +51,7 @@ async function addConn(kind, name, fields, cat) {
 {
   const ok = await addConn("PostgreSQL", "PG-5433", { 主机: "localhost", 端口: "5433", 用户名: "postgres", 密码: "" }, "关系型数据库");
   rec("CONN-PG", ok ? "PASS" : "FAIL", `PG-5433 保存=${ok}`);
-  const ok2 = await addConn("SQLite", "SQLite-accept", { 文件: "D:\\github\\tauri-navicat\\testdata\\accept.db" }, "轻量数据库");
+  const ok2 = await addConn("SQLite", "SQLite-accept", { 文件: "D:\\github\\tauri-navkit\\testdata\\accept.db" }, "轻量数据库");
   rec("CONN-SQLITE", ok2 ? "PASS" : "FAIL", `SQLite-accept 保存=${ok2}`);
   await shot(page, "TC-TREE-three_conns");
 }

@@ -1,7 +1,7 @@
 import type { DiagramMetadata } from "./api";
 import type { ConnectionConfig } from "./types";
 
-// Adapted from DBX diagramMetadataCache: immutable snapshots, bounded TTL,
+// Adapted from 参考实现 diagramMetadataCache: immutable snapshots, bounded TTL,
 // coalesced loads and identity-checked commits after refresh/invalidation.
 export const DIAGRAM_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 16;

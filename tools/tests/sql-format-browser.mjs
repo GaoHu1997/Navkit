@@ -31,7 +31,7 @@ try {
  const sql="CREATE VIEW v_readable AS SELECT a.id,a.display_name,COUNT(*) AS total FROM users a LEFT JOIN orders b ON a.id=b.user_id WHERE a.display_name <> 'from  where' GROUP BY a.id,a.display_name ORDER BY total;";
  await page.evaluate(sql=>{
   const app=window.__APP__;
-  const tab=app.makeTab('viewdesign','v_readable','c1','dbswitch','v_readable','view',sql);
+  const tab=app.makeTab('viewdesign','v_readable','c1','navkit','v_readable','view',sql);
   app.tabs.push(tab);app.activeTabId=tab.id;app.renderTabs();
  },sql);
  const editor=()=>page.evaluate(()=>window.__APP__.activeView().getSql());

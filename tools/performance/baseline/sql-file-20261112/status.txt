@@ -2,7 +2,7 @@
  M README.md
  M build.ps1
  D "docs/NavKit-\345\256\214\346\225\264\344\273\273\345\212\241\344\271\246.md"
- D "docs/Navicat\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
+ D "docs/通用数据库客户端\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
  D docs/design/DESIGN-v2-backup.md
  M docs/design/DESIGN.md
  M docs/design/assets/logo.js
@@ -43,8 +43,8 @@
  M src-tauri/src/http_db.rs
  M src-tauri/src/jdbc_db.rs
  M src-tauri/src/lib.rs
- D src-tauri/src/managed_dbx.rs
- D src-tauri/src/managed_dbx_tests.rs
+ D src-tauri/src/managed_参考实现.rs
+ D src-tauri/src/managed_参考实现_tests.rs
  M src-tauri/src/managed_jdbc.rs
  M src-tauri/src/manual_transaction.rs
  M src-tauri/src/models.rs
@@ -117,7 +117,7 @@
  D tools/_tmp_tree_probe.mjs
  D tools/_tmp_tree_probe2.mjs
  D tools/_tmp_tree_probe3.mjs
- D tools/fetch_dbx_logos.py
+ D tools/fetch_参考实现_logos.py
  D tools/fix_r2.py
  D tools/fix_r3.py
  D tools/fix_values.py

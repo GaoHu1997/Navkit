@@ -139,7 +139,7 @@ export function tokensScreen() {
         <div class="specimen">
           <div class="specimen-label">选择控件</div>
           <div class="specimen-row">${check("已勾选", true)}${check("未勾选")}${check("禁用", false, { disabled: true })}</div>
-          <div class="specimen-row">${select("MySQL", { width: 140 })}${input("dbswitch", { w: "w-md" })}</div>
+          <div class="specimen-row">${select("MySQL", { width: 140 })}${input("navkit", { w: "w-md" })}</div>
         </div>
         <div class="specimen">
           <div class="specimen-label">徽标与提示</div>
@@ -213,19 +213,19 @@ export function objectsScreen() {
   const nameCell = (n) =>
     ({ html: `<span class="cell-name"><span class="cell-ico">${icon("table", { size: 14 })}</span>${n}</span>` });
   const rows = [
-    ["dbswitch_account", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "账号表"],
-    ["dbswitch_assignment_config", "1", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "任务配置表"],
-    ["dbswitch_calendars", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-12 09:14:22", "日历表"],
-    ["dbswitch_cron_triggers", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "CRON 触发器"],
-    ["dbswitch_job_details", "3", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "作业明细"],
-    ["dbswitch_job_logback", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "作业日志回写"],
-    ["dbswitch_locks", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-12 09:14:22", "锁表"],
-    ["dbswitch_paused_trigger_grps", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "暂停触发器组"],
-    ["dbswitch_schema_history", "5", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-12 09:14:22", "Schema 变更历史"],
-    ["dbswitch_simple_triggers", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "简单触发器"],
-    ["dbswitch_system_log", "2", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "系统日志"],
-    ["dbswitch_system_user", "1", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "系统用户表"],
-    ["dbswitch_triggers", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "触发器"],
+    ["navkit_account", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "账号表"],
+    ["navkit_assignment_config", "1", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "任务配置表"],
+    ["navkit_calendars", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-12 09:14:22", "日历表"],
+    ["navkit_cron_triggers", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "CRON 触发器"],
+    ["navkit_job_details", "3", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "作业明细"],
+    ["navkit_job_logback", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "作业日志回写"],
+    ["navkit_locks", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-12 09:14:22", "锁表"],
+    ["navkit_paused_trigger_grps", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "暂停触发器组"],
+    ["navkit_schema_history", "5", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-12 09:14:22", "Schema 变更历史"],
+    ["navkit_simple_triggers", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "简单触发器"],
+    ["navkit_system_log", "2", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "系统日志"],
+    ["navkit_system_user", "1", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "系统用户表"],
+    ["navkit_triggers", "0", "InnoDB", "utf8mb4_0900_ai_ci", "2026-05-15 14:57:08", "触发器"],
   ].map((r) => ({
     name: nameCell(r[0]),
     rows: r[1],
@@ -245,12 +245,12 @@ export function objectsScreen() {
     "对象页 · 主视图",
     "四栏结构：标题栏 36 / 命令条 44 / 标签条 32 / 页工具栏 32；网格斑马底 26px 行高",
     shell({
-      doc: "dbswitch — localhost",
+      doc: "navkit — localhost",
       active: "表",
-      treeNodes: defaultTree("dbswitch"),
+      treeNodes: defaultTree("navkit"),
       tabs: [
         { label: "对象", icon: "table" },
-        { label: "dbswitch_calendars @dbswitch", icon: "table" },
+        { label: "navkit_calendars @navkit", icon: "table" },
         { label: "无标题 — 查询", icon: "code" },
       ],
       activeTab: 0,
@@ -270,7 +270,7 @@ export function objectsScreen() {
       content,
       info: {
         icon: "database",
-        title: "dbswitch",
+        title: "navkit",
         subtitle: "数据库",
         refs: [{ logo: "mysql", text: "localhost · MySQL 8.0.36" }],
         groups: [
@@ -282,7 +282,7 @@ export function objectsScreen() {
         `<span class="sb-item"><span class="sb-strong">19 个表</span></span>`,
         '<span class="sb-sep"></span>',
         `<span class="sb-item">${icon("connection", { size: 12 })}localhost</span>`,
-        `<span class="sb-item">${icon("database", { size: 12 })}dbswitch</span>`,
+        `<span class="sb-item">${icon("database", { size: 12 })}navkit</span>`,
       ],
     }),
     { w: 1440, h: 900 },
@@ -388,7 +388,7 @@ export function queryScreen() {
       tabs: [
         { label: "对象", icon: "table" },
         { label: "无标题 — 查询", icon: "code", dirty: true },
-        { label: "dbswitch_calendars @dbswitch", icon: "table" },
+        { label: "navkit_calendars @navkit", icon: "table" },
       ],
       activeTab: 1,
       pagetoolbar: pagetoolbar([
@@ -493,7 +493,7 @@ export function tableScreen() {
     shell({
       doc: "note_category — password_manager",
       active: "表",
-      treeNodes: defaultTree("dbswitch"),
+      treeNodes: defaultTree("navkit"),
       tabs: [
         { label: "对象", icon: "table" },
         { label: "note_category @password_manager", icon: "table" },
@@ -589,7 +589,7 @@ export function logoSpecScreen() {
       <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:16px">
         <div class="specimen">
           <div class="specimen-label">实际用法 · 应用标题栏</div>
-          ${titlebar({ doc: "dbswitch — localhost" })}
+          ${titlebar({ doc: "navkit — localhost" })}
         </div>
         <div class="specimen">
           <div class="specimen-label">实际用法 · 关于对话框头部</div>

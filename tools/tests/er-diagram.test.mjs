@@ -1,4 +1,4 @@
-// 关系图核心模型（需求 1.4，参考 dbx）：关系构建 / 基数 / 分层布局 / 搜索过滤 / JOIN SQL / 工程 ER 图。
+// 关系图核心模型（需求 1.4，参考实现）：关系构建 / 基数 / 分层布局 / 搜索过滤 / JOIN SQL / 工程 ER 图。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";

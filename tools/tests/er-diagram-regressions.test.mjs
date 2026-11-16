@@ -139,7 +139,7 @@ test("partial reads are not cached as a complete empty diagram", async () => {
   assert.equal(calls, 1);
 });
 
-test("cache expires after DBX's five-minute TTL", async () => {
+test("cache expires after 参考实现's five-minute TTL", async () => {
   const originalNow = Date.now, conn = connection();
   let now = 1000;
   Date.now = () => now;

@@ -223,7 +223,7 @@
       }
     ],
     "executed_binary": {
-      "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_live_matrix-971eec0a1e4ebd11.exe",
+      "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_live_matrix-971eec0a1e4ebd11.exe",
       "sha256": "96738ae1b63d3c776446c18b9f8b53c90466e29d6dc6c544423908a4b4570fca"
     },
     "all_cleanup_succeeded": true
@@ -237,7 +237,7 @@
     },
     "all_cleanup_succeeded": true,
     "executed_binary": {
-      "path": "D:\\github\\tauri-navicat\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
+      "path": "D:\\github\\tauri-navkit\\src-tauri\\target\\debug\\deps\\e2e_sync_simulated-8c21f74dfb65561d.exe",
       "sha256": "a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15"
     },
     "vendor_server_status": "NOT_TESTED",

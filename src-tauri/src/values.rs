@@ -247,7 +247,7 @@ pub fn pg_row_values(row: &PgRow, count: usize) -> Vec<Option<String>> {
             if row.try_get_raw(i).map(|v| is_binary_type(v.type_info().name())).unwrap_or(false) {
                 return row.try_get::<Option<Vec<u8>>, _>(i).ok().flatten().map(|x| format_binary(&x));
             }
-            // 与 dbx 一致：按列的静态类型“分类一次、单次解码”，避免对每个单元格
+            // 与 参考实现 一致：按列的静态类型“分类一次、单次解码”，避免对每个单元格
             // 逐级 try_get 二三十次（每格失败解码一次即触发一次错误构造）。
             // 只对已知类型快路径；其它类型仍走下方安全的逐级阶梯，输出保持等价。
             match ty {
@@ -403,7 +403,7 @@ pub fn my_row_values(row: &sqlx::mysql::MySqlRow, count: usize) -> Vec<Option<St
             if row.try_get_raw(i).map(|v| is_binary_type(v.type_info().name())).unwrap_or(false) {
                 return row.try_get::<Option<Vec<u8>>, _>(i).ok().flatten().map(|x| format_binary(&x));
             }
-            // 按列的静态类型一次性分派（等价 dbx 的分类解码），未知类型回退到下方阶梯。
+            // 按列的静态类型一次性分派（等价 参考实现 的分类解码），未知类型回退到下方阶梯。
             match ty {
                 "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => return row.try_get::<Option<i64>, _>(i).ok().flatten().map(|x| x.to_string()),
                 // YEAR is a distinct unsigned two-byte MySQL protocol type. SQLx's

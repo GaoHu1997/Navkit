@@ -6,14 +6,14 @@
 
 | 验收项 | 结果 | 证据 |
 |---|---:|---|
-| 真实 SQLite/MySQL/PostgreSQL 同构＋异构矩阵 | **108/108 场景通过，0 失败/未执行** | [逐方向/场景/回读/清理](<D:/github/tauri-navicat/tools/acceptance/sync/live-report.json>) |
-| SQL Server/TDS、ClickHouse、四种 ODBC profile 状态化模拟 | **42/42 场景通过，0 失败** | [六套汇总与实际二进制哈希](<D:/github/tauri-navicat/tools/acceptance/sync/simulated-final-clean-20261107/simulations-run.json>) |
-| 新增真实 SQLite 精度/主键/取消/批量回归 | **13/13 场景通过** | [独立 SQL 回读结果](<D:/github/tauri-navicat/tools/acceptance/sync/regressions-report.json>) |
-| 既有 SQLite 差异/增量集成测试 | **12/12 测试通过** | [核心回归日志](<D:/github/tauri-navicat/tools/acceptance/sync/core-final-clean-20261107.log#L423>) |
-| 既有导入导出/同步验收 | **SQLite 1 项＋真实 MySQL/PostgreSQL 1 项通过** | [SQLite 日志](<D:/github/tauri-navicat/tools/acceptance/sync/core-final-clean-20261107.log#L451>)、[实库日志](<D:/github/tauri-navicat/tools/acceptance/sync/live-final-clean-20261107.log#L214>) |
-| Rust 库普通回归 | **274 通过、0 失败、23 ignored** | [实际执行日志](<D:/github/tauri-navicat/tools/acceptance/sync/core-final-clean-20261107.log#L405>) |
-| 当前 Node 辅助回归 | **167 通过、0 失败、0 skipped** | [日志](<D:/github/tauri-navicat/tools/acceptance/sync/ui-final-20261107.log>) |
-| 已执行证据的一致性核对 | **7/7 通过，校验程序退出 0** | [机器运行记录](<D:/github/tauri-navicat/tools/acceptance/sync/sync-run-record-final-20261107.json>) |
+| 真实 SQLite/MySQL/PostgreSQL 同构＋异构矩阵 | **108/108 场景通过，0 失败/未执行** | [逐方向/场景/回读/清理](<D:/github/tauri-navkit/tools/acceptance/sync/live-report.json>) |
+| SQL Server/TDS、ClickHouse、四种 ODBC profile 状态化模拟 | **42/42 场景通过，0 失败** | [六套汇总与实际二进制哈希](<D:/github/tauri-navkit/tools/acceptance/sync/simulated-final-clean-20261107/simulations-run.json>) |
+| 新增真实 SQLite 精度/主键/取消/批量回归 | **13/13 场景通过** | [独立 SQL 回读结果](<D:/github/tauri-navkit/tools/acceptance/sync/regressions-report.json>) |
+| 既有 SQLite 差异/增量集成测试 | **12/12 测试通过** | [核心回归日志](<D:/github/tauri-navkit/tools/acceptance/sync/core-final-clean-20261107.log#L423>) |
+| 既有导入导出/同步验收 | **SQLite 1 项＋真实 MySQL/PostgreSQL 1 项通过** | [SQLite 日志](<D:/github/tauri-navkit/tools/acceptance/sync/core-final-clean-20261107.log#L451>)、[实库日志](<D:/github/tauri-navkit/tools/acceptance/sync/live-final-clean-20261107.log#L214>) |
+| Rust 库普通回归 | **274 通过、0 失败、23 ignored** | [实际执行日志](<D:/github/tauri-navkit/tools/acceptance/sync/core-final-clean-20261107.log#L405>) |
+| 当前 Node 辅助回归 | **167 通过、0 失败、0 skipped** | [日志](<D:/github/tauri-navkit/tools/acceptance/sync/ui-final-20261107.log>) |
+| 已执行证据的一致性核对 | **7/7 通过，校验程序退出 0** | [机器运行记录](<D:/github/tauri-navkit/tools/acceptance/sync/sync-run-record-final-20261107.json>) |
 
 场景数是独立测试场景集合，不是 Rust 测试函数数、SQL 调用数或行数；108 个矩阵场景和 13 个边界场景各由一个 Rust 测试函数汇集执行。条件性 ignored 没有计为通过，模拟没有计为厂商实库认证。
 
@@ -68,7 +68,7 @@
 5. **ClickHouse 方言与安全预检**：Nullable 包装、DELETE WHERE，以及不支持的 UPDATE 在任何写入前拒绝。
 6. **验收真实性**：修正旧测试缺字段导致的编译失败；去掉硬编码实库密码和连接失败静默通过；显式运行实库并保留各目标退出码。
 
-ODBC 根因先通过真实 Windows ODBC ABI 探针核实：二进制列 SQLDescribeCol 返回 `SQL_VARBINARY=-3`，C_BINARY 返回正确字节，C_CHAR 返回转义文本；没有把 fixture 行为未经调查归咎产品。[完整探针](<D:/github/tauri-navicat/tools/acceptance/sync/odbc-binary-probe.txt>)是根因证据，不算新增同步场景。
+ODBC 根因先通过真实 Windows ODBC ABI 探针核实：二进制列 SQLDescribeCol 返回 `SQL_VARBINARY=-3`，C_BINARY 返回正确字节，C_CHAR 返回转义文本；没有把 fixture 行为未经调查归咎产品。[完整探针](<D:/github/tauri-navkit/tools/acceptance/sync/odbc-binary-probe.txt>)是根因证据，不算新增同步场景。
 
 ## 5. 防止旧编译缓存冒充修复认证
 
@@ -78,13 +78,13 @@ ODBC 根因先通过真实 Windows ODBC ABI 探针核实：二进制列 SQLDescr
 
 - 模拟六套同一二进制：`a7f3ebe9287e65455724cf4bdc466ea5c9abbd1bcead99a32623c62a32156c15`。
 - 真实矩阵二进制：`96738ae1b63d3c776446c18b9f8b53c90466e29d6dc6c544423908a4b4570fca`。
-- 源码、执行二进制、现有 DLL、逐场景报告及日志哈希由[机器运行记录](<D:/github/tauri-navicat/tools/acceptance/sync/sync-run-record-final-20261107.json>)核对；校验 7/7 通过。
+- 源码、执行二进制、现有 DLL、逐场景报告及日志哈希由[机器运行记录](<D:/github/tauri-navkit/tools/acceptance/sync/sync-run-record-final-20261107.json>)核对；校验 7/7 通过。
 
-[边界修复前](<D:/github/tauri-navicat/tools/acceptance/sync/regressions-before-fixes.json>)、[90 场景基线](<D:/github/tauri-navicat/tools/acceptance/sync/live-baseline-90.json>)、[108 场景修复前](<D:/github/tauri-navicat/tools/acceptance/sync/live-108-before-final-fixes.json>)、[被拒绝作为新源码认证的缓存运行](<D:/github/tauri-navicat/tools/acceptance/sync/live-cached-build-rejected.json>)均继续保留。
+[边界修复前](<D:/github/tauri-navkit/tools/acceptance/sync/regressions-before-fixes.json>)、[90 场景基线](<D:/github/tauri-navkit/tools/acceptance/sync/live-baseline-90.json>)、[108 场景修复前](<D:/github/tauri-navkit/tools/acceptance/sync/live-108-before-final-fixes.json>)、[被拒绝作为新源码认证的缓存运行](<D:/github/tauri-navkit/tools/acceptance/sync/live-cached-build-rejected.json>)均继续保留。
 
 ## 6. 复现与明确未覆盖项
 
-完整环境变量、权限、隔离方式和命令见[同步动态验收说明](<D:/github/tauri-navicat/tools/acceptance/sync/README.md>)。核心入口：
+完整环境变量、权限、隔离方式和命令见[同步动态验收说明](<D:/github/tauri-navkit/tools/acceptance/sync/README.md>)。核心入口：
 
 ```bash
 cargo clean --offline --manifest-path src-tauri/Cargo.toml -p navkit

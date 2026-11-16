@@ -74,7 +74,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/preview.html`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForFunction(() => window.__APP__?.connections?.length);
-  await page.evaluate(() => window.__APP__.openTableTab('c1', 'dbswitch', 'editing_race_fixture', 'table'));
+  await page.evaluate(() => window.__APP__.openTableTab('c1', 'navkit', 'editing_race_fixture', 'table'));
   await page.waitForFunction(() => window.__APP__.activeView()?.grid?.rows.length === 25 && !window.__APP__.activeView().loading);
   const cell = () => page.locator('.grid-table tbody tr[data-row="0"] td[data-col="1"]');
   const editor = () => page.locator('.grid-cell-input');

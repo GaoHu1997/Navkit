@@ -55,7 +55,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/preview.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__APP__?.connections?.length);
-  await page.evaluate(() => { void window.__APP__.openTableTab('c1', 'dbswitch', 'status_fixture', 'table'); });
+  await page.evaluate(() => { void window.__APP__.openTableTab('c1', 'navkit', 'status_fixture', 'table'); });
   await page.waitForFunction(() => window.__STATUS_REQUESTS__.length === 1);
   const elapsed = page.locator('.statusbar-query-elapsed');
   assert.match(await elapsed.textContent(), /^查询耗时: \d+\.\d{3}s（查询中）$/);

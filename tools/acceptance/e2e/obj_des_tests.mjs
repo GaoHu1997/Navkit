@@ -64,7 +64,7 @@ const { page } = await connect();
   await page.locator(".grid-th-name").first().click();
   await sleep(700);
   const c1 = await firstId();
-  // 对象页表名列表：若排序改变则第一行会变（dbswitch_* 字典序）
+  // 对象页表名列表：若排序改变则第一行会变（navkit_* 字典序）
   rec("OBJ-03a", c0 === c1 ? "PASS" : "FAIL", `列头点击后首行 ${c0} → ${c1}（期望不变=不排序）`);
 }
 

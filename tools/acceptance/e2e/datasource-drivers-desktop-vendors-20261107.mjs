@@ -1,4 +1,4 @@
-// Current production desktop acceptance: original downloads through real WebView2/Tauri IPC, with dbx provenance explicit.
+// Current production desktop acceptance: original downloads through real WebView2/Tauri IPC, with 参考实现 provenance explicit.
 // No preview mocks, fixture HTTP servers, staged drivers or substituted command handlers.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,7 +47,7 @@ async function directDownload(kind,label){
     return button && !button.disabled && button.getAttribute('aria-disabled')!=='true' && button.dataset.mode==='download' && /下载驱动/.test(button.getAttribute('aria-label') || '');
   },kind,{timeout:30000});
   const thirdParty=['cache','sundb','oscar'].includes(kind);
-  assert.match(await action.getAttribute('aria-label'),thirdParty?/dbx.*第三方/:/官方源/);
+  assert.match(await action.getAttribute('aria-label'),thirdParty?/第三方/:/官方源/);
   const selectedBefore=await select.getAttribute('aria-pressed');
   assert.equal(await action.locator('button').count(),0);
   assert.equal(await action.evaluate(node=>!!node.parentElement?.closest('button')),false,'Download and selection buttons must be siblings');
@@ -89,7 +89,7 @@ async function directDownload(kind,label){
   assert.equal(await action.count(),0,'Verified ready driver removes the missing-driver action');
   assert.equal(await select.evaluate(node=>document.activeElement===node && !node.disabled),true,'Focus returns to the exact available source');
   await screenshot(`${kind}-after-download`);
-  check(`${label}: original card download, complete driver, selection and focus`,{kind,version:status.version || null,driver_status:status.status,architecture:status.architecture,attempts:attemptsUsed,source_type:thirdParty?'DBX_THIRD_PARTY_NOT_VENDOR':'OFFICIAL_VENDOR'});
+  check(`${label}: original card download, complete driver, selection and focus`,{kind,version:status.version || null,driver_status:status.status,architecture:status.architecture,attempts:attemptsUsed,source_type:thirdParty?'THIRD_PARTY_NOT_VENDOR':'OFFICIAL_VENDOR'});
   return status;
 }
 async function directJdbc(product){

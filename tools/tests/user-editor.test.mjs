@@ -1,4 +1,4 @@
-// 用户编辑（Navicat 式多标签）前端契约与纯逻辑测试。
+// 用户编辑（通用数据库客户端 式多标签）前端契约与纯逻辑测试。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

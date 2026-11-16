@@ -2,7 +2,7 @@
 //!
 //! 中文支持：读取系统字体（SimHei / 等线 / 楷体 …），按用到的字符做 glyf 子集，
 //! 以 CIDFontType2 + Identity-H 内嵌（FontFile2）。ToUnicode 略（搜索文本非关键诉求）。
-//! 章节结构照搬 SmartSQL PdfDoc（iTextSharp）：标题 → 修订日志 → 目录 → 表结构 → 视图/存储过程。
+//! 章节结构照搬 参考模板 PdfDoc（iTextSharp）：标题 → 修订日志 → 目录 → 表结构 → 视图/存储过程。
 
 use super::{DictDatabase, DictExportOptions};
 
@@ -726,7 +726,7 @@ pub fn build_pdf(dto: &DictDatabase, opts: &DictExportOptions) -> anyhow::Result
         }
     }
 
-    // 视图 / 存储过程（SmartSQL PDF 支持；按勾选输出）
+    // 视图 / 存储过程（参考模板 PDF 支持；按勾选输出）
     if opts.include_views && !dto.views.is_empty() {
         doc.heading(&mut y, "视图");
         for v in &dto.views {

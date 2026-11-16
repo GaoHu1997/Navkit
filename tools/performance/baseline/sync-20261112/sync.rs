@@ -70,7 +70,7 @@ const ODBC_UPPERCASE_KINDS: &[&str] = &["oracle", "dameng", "oscar", "sundb", "y
 fn odbc_target_dialect(kind: &DbKind) -> &'static str {
     if ODBC_UPPERCASE_KINDS.contains(&kind.id()) { "oracle" } else { "ansi" }
 }
-/// JDBC-like canonical type mapping inspired by dbswitch's reader/type/writer split.
+/// JDBC-like canonical type mapping inspired by navkit's reader/type/writer split.
 /// Never copy a source vendor's DDL type string directly into another vendor's CREATE.
 pub fn map_type(source: &str, target: &DbKind) -> String {
     let s = source.to_ascii_uppercase();

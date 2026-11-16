@@ -246,7 +246,7 @@ export function usersScreen() {
   const rows = [
     ["root", "localhost", "ANY", "不限", "不限", "不限", "0", { html: chip("超级用户", "accent") }],
     ["mysql.sys", "localhost", "ANY", "不限", "不限", "不限", "0", ""],
-    ["dbswitch", "%", "ANY", "0", "0", "0", "20", ""],
+    ["navkit", "%", "ANY", "0", "0", "0", "20", ""],
     ["readonly", "%", "REQUIRED", "3600", "0", "7200", "10", ""],
   ].map((r) => ({
     name: { html: `<span class="cell-name"><span class="cell-ico" style="color:#b5760a">${icon("user", { size: 14 })}</span>${r[0]}</span>` },
@@ -314,8 +314,8 @@ export function scheduleScreen() {
   ];
   const rows = [
     ["清理过期会话", "password_manager", "每 1 小时", "2026-05-16 09:00:00", { html: chip("成功", "ok") }, { html: '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">DELETE FROM session WHERE ...</span>' }],
-    ["每日统计汇总", "dbswitch", "每天", "2026-05-17 00:00:00", { html: chip("成功", "ok") }, { html: '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">INSERT INTO stat_daily SELECT ...</span>' }],
-    ["同步作业日志", "dbswitch", "每 5 分钟", "2026-05-16 08:35:00", { html: chip("失败", "danger") }, { html: '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">UPDATE job_logback SET ...</span>' }],
+    ["每日统计汇总", "navkit", "每天", "2026-05-17 00:00:00", { html: chip("成功", "ok") }, { html: '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">INSERT INTO stat_daily SELECT ...</span>' }],
+    ["同步作业日志", "navkit", "每 5 分钟", "2026-05-16 08:35:00", { html: chip("失败", "danger") }, { html: '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">UPDATE job_logback SET ...</span>' }],
     ["归档旧备份", "password_manager", "仅手动执行", "—", { html: '<span class="cell-muted">未运行</span>' }, { html: '<span style="font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)">DELETE FROM backup WHERE ...</span>' }],
   ].map((r) => ({ name: { html: `<span class="cell-name"><span class="cell-ico">${icon("schedule", { size: 14 })}</span>${r[0]}</span>` }, db: r[1], every: r[2], next: r[3], last: r[4], sql: r[5] }));
 
@@ -330,7 +330,7 @@ export function scheduleScreen() {
     shell({
       doc: "自动运行",
       active: "自动运行",
-      treeNodes: defaultTree("dbswitch"),
+      treeNodes: defaultTree("navkit"),
       tabs: [
         { label: "对象", icon: "table" },
         { label: "自动运行", icon: "schedule" },

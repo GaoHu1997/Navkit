@@ -37,7 +37,7 @@ function dimApp() {
       <span style="display:grid;place-items:center">${navkitLogo(20)}</span>
       <span style="font-size:13px;font-weight:600">NavKit</span>
       <span style="width:1px;height:14px;background:var(--border)"></span>
-      <span style="font-size:12px;color:var(--text-tertiary)">dbswitch — localhost</span>
+      <span style="font-size:12px;color:var(--text-tertiary)">navkit — localhost</span>
     </div>
     <div style="height:44px;border-bottom:1px solid var(--border);background:var(--bg-surface)"></div>
     <div style="flex:1;display:flex;min-height:0;background:var(--bg-surface)">
@@ -287,7 +287,7 @@ export function transferScreen() {
       <div style="border:1px solid var(--border);border-radius:8px;padding:12px">
         <div style="font-size:12px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:6px">${icon("database", { size: 14 })}目标</div>
         ${field("连接", select("dev-mysql（MySQL）"), { labelW: 60 })}
-        ${field("数据库", select("dbswitch"), { labelW: 60 })}
+        ${field("数据库", select("navkit"), { labelW: 60 })}
         ${field("表", select("（请先选择库）"), { labelW: 60 })}
       </div>
     </div>
@@ -579,7 +579,7 @@ export function userDialogScreen() {
 
 export function favoritesScreen() {
   const items = [
-    ["dbswitch_calendars", "localhost / dbswitch", "table"],
+    ["navkit_calendars", "localhost / navkit", "table"],
     ["note_category", "localhost / password_manager", "table"],
     ["计算月度活跃用户", "localhost / password_manager", "code"],
   ];
@@ -699,7 +699,7 @@ export function confirmDialogScreen() {
     <div style="width:38px;height:38px;border-radius:50%;background:var(--danger-50);color:var(--danger-500);display:grid;place-items:center;flex:0 0 auto">${icon("warning", { size: 20 })}</div>
     <div style="flex:1">
       <div style="font-size:13px;font-weight:600;margin-bottom:6px">确定要删除这 3 张表吗？</div>
-      <div style="font-size:12px;line-height:1.65;color:var(--text-secondary)">dbswitch_account、dbswitch_locks、dbswitch_calendars 将被永久删除，其中的数据无法恢复。</div>
+      <div style="font-size:12px;line-height:1.65;color:var(--text-secondary)">navkit_account、navkit_locks、navkit_calendars 将被永久删除，其中的数据无法恢复。</div>
       <div style="margin-top:12px">${note("warn", "建议先执行「备份」或「SQL 转储」。")}</div>
     </div>
   </div>`;

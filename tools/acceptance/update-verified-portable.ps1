@@ -1,4 +1,4 @@
-param([string]$Root = 'D:\github\tauri-navicat')
+param([string]$Root = 'D:\github\tauri-navkit')
 $ErrorActionPreference = 'Stop'
 $src = Join-Path $Root 'src-tauri\target\release\navkit.exe'
 $dst = Join-Path $Root 'dist-portable\navkit.exe'

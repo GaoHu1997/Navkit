@@ -144,10 +144,10 @@ index 388615e..4a40b44 100644
 -> 说明：应用图标、功能图标均为原创绘制（内联 SVG），产品标识为 NavKit，
 -> 不含任何第三方商业软件的资源。
 -> 例外：各数据源的连接图标使用**官方品牌 logo**（统一取自开源数据库客户端
--> [t8y2/dbx](https://github.com/t8y2/dbx) 的官方 logo 资源集，如 MySQL 海豚、PostgreSQL Slonik、
+-> [t8y2/参考实现](https://github.com/t8y2/参考实现) 的官方 logo 资源集，如 MySQL 海豚、PostgreSQL Slonik、
 -> Oracle 标志、MongoDB 叶片等 101 种，素材存于 tools/db_art/，经 tools/gen_dbicons.py 生成），
 -> 不使用自绘品牌图形；彩色=已连接 / 灰色=未连接，**规划中（适配器未提供）的数据源图标固定置灰**。
--> 例外：Apache Druid（dbx 未收录）保留 Apache 官方标志；「自定义 ODBC」为通用连接类型、无品牌标志。
+-> 例外：Apache Druid（参考实现 未收录）保留 Apache 官方标志；「自定义 ODBC」为通用连接类型、无品牌标志。
 -
 ----
 -
@@ -197,9 +197,9 @@ index 388615e..4a40b44 100644
 -- CSV/JSON/SQL 导入导出；表数据同步支持仅结构/仅数据/二者、列名与类型映射、主键差异比较及增量插入/更新。SQLite、MySQL、PostgreSQL 的 3 个同构/6 个异构方向已完成本轮真实 108 场景；SQL Server/TDS、ClickHouse 与四种 ODBC profile 另完成 42 个状态化协议模拟场景，不算对应厂商实库或默认 JDBC 路线认证。详见[本轮完整动态测试报告](<tools/acceptance/sync/TEST-REPORT-2026-11-07.md>)、[复现说明](<tools/acceptance/sync/README.md>)及[实库逐场景记录](<tools/acceptance/sync/live-report.json>)。
 -- MySQL DDL 会自动提交，重建目标表不可整体回滚；取消在数据库操作之间协作执行，不强制终止正在执行的语句。SQL Server/ClickHouse/ODBC 当前通用同步通道不承诺事务回滚；ClickHouse 标准 UPDATE 增量更新在写入前明确拒绝，可关闭更新仅插入缺失行。
 -- 数据生成、服务器只读监控、日志检索以及详细对象元数据。
--- 自定义驱动支持本机 64 位 ODBC 已安装驱动、DSN、可信原生 DLL，以及真实 Java sidecar 加载 JDBC JAR；**JAR 不作为原生 DLL 加载**。JDBC / H2 需要 Java 11+ 和 source compiler，严格匹配原包、必需依赖、厂商类、SPI 与 URL。当前原件清单含 31 套完整包（28 套官方来源、3 套明确标注的 dbx 固定提交原件），覆盖 34 个类型。15 套官方包专项与其余 8 组 Java 11/17 专项分别保留，不把闭端口拒连、驱动 ready 当作厂商服务器认证。Access、H2、DuckDB 另有真实本地 SQL；BigQuery 有真实 OAuth HTTP 拒绝，Spanner 有真实 gRPC 拒绝。详见[当前原件及依赖清单](<tools/acceptance/simulation/driver-registry-final-20261107.json>)与[完整验收说明](<tools/acceptance/simulation/README.md>)。
+-- 自定义驱动支持本机 64 位 ODBC 已安装驱动、DSN、可信原生 DLL，以及真实 Java sidecar 加载 JDBC JAR；**JAR 不作为原生 DLL 加载**。JDBC / H2 需要 Java 11+ 和 source compiler，严格匹配原包、必需依赖、厂商类、SPI 与 URL。当前原件清单含 31 套完整包（28 套官方来源、3 套明确标注的 参考实现 固定提交原件），覆盖 34 个类型。15 套官方包专项与其余 8 组 Java 11/17 专项分别保留，不把闭端口拒连、驱动 ready 当作厂商服务器认证。Access、H2、DuckDB 另有真实本地 SQL；BigQuery 有真实 OAuth HTTP 拒绝，Spanner 有真实 gRPC 拒绝。详见[当前原件及依赖清单](<tools/acceptance/simulation/driver-registry-final-20261107.json>)与[完整验收说明](<tools/acceptance/simulation/README.md>)。
 -- 原有十种规划数据源已接入实际协议：Druid、H2、DynamoDB、Cassandra、NebulaGraph、Kafka、RocketMQ、MQTT、ZooKeeper、etcd。不同产品、TLS/认证能力与实库验证状态不得混为一谈；详见[原生适配使用与边界](<tools/acceptance/datasources/NATIVE_ADAPTERS.md>)。
--- 新建连接卡片原标签位置提供驱动状态和直接下载。**31 套原件、34 个类型的完整生产桌面流程已通过 71 项检查**，包括实际点击下载、单次 IPC、完整包/依赖校验、选中项和焦点保留。H2 / DuckDB / Access 还执行真实 SQL。Caché / SUNDB / OSCAR 下载来源明确为 dbx 固定提交，非厂商官网；ArgoDB 使用官方 QuarkDriver 而非 Inceptor，托管模式仅空凭据 auth=noSasl。Salesforce / HBase 新增内置 REST，无需数据库驱动；含 SOQL/CRUD 或 scanner/二进制读写的状态化实适配器测试。当前目录为 66 个内置类型、34 个可下载类型及 2 个需显式目标的通用入口，不捏造通用 ODBC/JDBCX 的唯一驱动。详见[最终桌面记录](<tools/acceptance/simulation/desktop-final-verified-20261107/report.json>)及[获取范围和限制](<tools/acceptance/simulation/driver-download-limitations-20261107.md>)。
+-- 新建连接卡片原标签位置提供驱动状态和直接下载。**31 套原件、34 个类型的完整生产桌面流程已通过 71 项检查**，包括实际点击下载、单次 IPC、完整包/依赖校验、选中项和焦点保留。H2 / DuckDB / Access 还执行真实 SQL。Caché / SUNDB / OSCAR 下载来源明确为 参考实现 固定提交，非厂商官网；ArgoDB 使用官方 QuarkDriver 而非 Inceptor，托管模式仅空凭据 auth=noSasl。Salesforce / HBase 新增内置 REST，无需数据库驱动；含 SOQL/CRUD 或 scanner/二进制读写的状态化实适配器测试。当前目录为 66 个内置类型、34 个可下载类型及 2 个需显式目标的通用入口，不捏造通用 ODBC/JDBCX 的唯一驱动。详见[最终桌面记录](<tools/acceptance/simulation/desktop-final-verified-20261107/report.json>)及[获取范围和限制](<tools/acceptance/simulation/driver-download-limitations-20261107.md>)。
 -- [全目录逐项验收](<tools/acceptance/simulation/README.md>) 的完整历史快照覆盖全部 102 项：8 项实库参考、94 项状态化协议/兼容模拟，0 失败、0 缺项；[逐项报告](<tools/acceptance/simulation/coverage-report.md>)保留每项方式与限制。后续完整 JDBC 下载及 Salesforce/HBase 原生 REST 有独立增量证据，**不把早期 ODBC 合同测试倒算为新默认 JDBC/REST 路线全量重跑**。最终 Rust 普通回归 259 通过、0 失败、23 项按条件 ignored；UI 166 通过。协议模拟、ODBC 测试代理及同家族复用不算对应厂商实库认证；[历史实库矩阵](<tools/acceptance/datasources/README.md>)单独保留。
 -- [最终证据校验脚本](<tools/acceptance/simulation/create-run-record-final-20261107.mjs>)已实际退出 0，生成 `result=PASS` 的[机器运行记录](<tools/acceptance/simulation/run-record-final-20261107.json>)；交付摘要见[验收报告](<tools/acceptance/simulation/final-acceptance-20261107.md>)。该结果对应固定程序与各自哈希快照；同期同步模块和 dist 后续改动单独记录，不将固定程序验收冒充整个最新工作区的新测试。
 -- Windows 未注册 DLL 加载需要唯一临时用户 DSN，仅保存 Driver 路径，连接建立或失败后清理。此为纯便携存储以外的明确临时注册表例外，不永久安装驱动，不写机器级 ODBC，不保存明文密码到 DSN。
@@ -341,7 +341,7 @@ index 388615e..4a40b44 100644
 -## 七、目录结构
 -
 -```
--tauri-navicat/
+-tauri-navkit/
 -├── build.ps1                     一键构建脚本
 -├── index.html                    Vite 入口
 -├── preview.html                  浏览器预览入口（模拟 IPC）
@@ -610,7 +610,7 @@ index 388615e..4a40b44 100644
 +## 七、目录结构
 +
 +```
-+tauri-navicat/
++tauri-navkit/
 +├── src/                        前端（原生 TypeScript，无框架）
 +│   ├── core/                   主控制器、IPC 桥接、状态机
 +│   ├── ui/                     原生组件（网格、编辑器、树、菜单、图标）
@@ -696,7 +696,7 @@ index c00d1c4..0000000
 -
 -| 项 | 值 |
 -|---|---|
--| 工作目录 | `D:\github\tauri-navicat` |
+-| 工作目录 | `D:\github\tauri-navkit` |
 -| 技术栈 | Tauri 2 + Rust + 原生 TypeScript（无前端框架） |
 -| 前端 | `src/`（`core/App.ts` 主控制器、`ui/` 原生组件、`dialogs/` 对话框、`styles/base.css`） |
 -| 后端 | `src-tauri/src/`（`commands.rs` IPC 命令表、`db.rs` 连接池、`schema.rs` 元数据、`transfer.rs` 导入导出/传输） |
@@ -804,7 +804,7 @@ index c00d1c4..0000000
 -  - 补全项带类型标签/图标，前缀优先排序，大小写不敏感；
 -  - `Ctrl+Space` 手动唤起；无匹配不弹空白框；错误上下文不弹；
 -  - 大库（1000+ 表）不卡顿（元数据缓存 + 去抖，勿每次按键走 IPC）。
--- **验收**：`SELECT * FROM dbswitch_schema_history h WHERE h.` 列出该表全部字段；快速连续输入无卡顿无报错。
+-- **验收**：`SELECT * FROM navkit_schema_history h WHERE h.` 列出该表全部字段；快速连续输入无卡顿无报错。
 -
 -### U4 数据列宽不能拖动
 -
@@ -826,7 +826,7 @@ index c00d1c4..0000000
 -- **现象**：库节点打开后仍为灰色。
 -- **线索**：`App.ts` 有 `syncDbIcons()`，需确认调用时机（选中/展开/树重建/刷新后是否都触发，重绘后是否丢状态）。
 -- **期望**：已打开连接为彩色/绿色，未打开为灰；展开、折叠、切换选中、刷新、重连、重启后均正确。
--- **验收**：打开 `dbswitch` → 变绿；关闭连接 → 变灰；重启按打开状态还原。
+-- **验收**：打开 `navkit` → 变绿；关闭连接 → 变灰；重启按打开状态还原。
 -
 -### U7 新建连接对话框的 logo 要是各自数据库的 logo
 -
@@ -839,7 +839,7 @@ index c00d1c4..0000000
 -- **期望**：页签按对象类型动态给出完整集合（表：常规/字段/索引/外键/检查/触发器/选项/注释/SQL 预览；视图、函数各有对应集合），不少项、不空白。
 -- **内容**：字段页列全部列（名/类型/长度/小数位/非空/默认值/注释/键）；索引含唯一与非唯一、包含列；SQL 预览生成可执行完整 DDL。
 -- **布局**：纵向可滚动、横向不截断或换行；滚动条不遮挡末行末列；宽度变化自适应；无数据有空态说明。
--- **验收**：打开 `dbswitch_schema_history` 字段页 6 列全部可见；SQL 预览与 `SHOW CREATE TABLE` 语义一致；无外键/触发器对象显示空态。
+-- **验收**：打开 `navkit_schema_history` 字段页 6 列全部可见；SQL 预览与 `SHOW CREATE TABLE` 语义一致；无外键/触发器对象显示空态。
 -
 -### U9 菜单栏功能不一致
 -
@@ -1917,21 +1917,21 @@ index c00d1c4..0000000
 -5. 三者交叉：修复项必须在验收中 PASS，在对照中一致，在自证中经 3 次复现
 -
 -> 四部分不是四个独立任务，而是**同一件事的四种视角**：修好 → 证明好 → 证明一样 → 怀疑自己没做好。
-diff --git "a/docs/Navicat\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md" "b/docs/Navicat\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
+diff --git "a/docs/通用数据库客户端\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md" "b/docs/通用数据库客户端\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
 deleted file mode 100644
 index 0673ad0..0000000
---- "a/docs/Navicat\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
+--- "a/docs/通用数据库客户端\346\240\207\350\257\206\344\270\216\350\201\224\347\275\221\350\241\214\344\270\272\345\256\241\350\256\241\346\212\245\345\221\212.md"
 +++ /dev/null
 @@ -1,196 +0,0 @@
--# Navicat 标识残留与联网行为审计报告
+-# 通用数据库客户端 标识残留与联网行为审计报告
 -
 -- 审计日期：2026-11-05（清理执行完成于同日）
--- 审计范围：`D:\github\tauri-navicat` 全仓库（排除 `node_modules`、`src-tauri/target`）
+-- 审计范围：`D:\github\tauri-navkit` 全仓库（排除 `node_modules`、`src-tauri/target`）
 -- 审计方法：全文检索（含二进制 strings / UTF-16 扫描）、配置审查、图标资源哈希比对、Rust/TS 网络调用点逐一定位
 -
 -> **清理状态（2026-11-05 更新）**：§2 所列 P0 项均已处理完毕，
 -> 完成后复扫全库（排除第三方克隆 `tools/acceptance/reference-transfer-*`），
--> 唯一命中为项目目录名 `tauri-navicat` 本身，**无真实品牌残留**。
+-> 唯一命中为项目目录名 `tauri-navkit` 本身，**无真实品牌残留**。
 -> 详见 §5「清理执行记录」。
 -
 ----
@@ -1940,72 +1940,72 @@ index 0673ad0..0000000
 -
 -| 项目 | 结论 |
 -|---|---|
--| 应用主体标识（产品名/Bundle ID/窗口标题/关于框/exe 元数据） | ✅ 已全部品牌化为 **NavKit**，二进制内无 Navicat 字符串 |
--| 发行物内 Navicat 残留 | ❌ **有遗留**（构建产物、便携版说明、lock 文件，共 7 处，见 §2.1） |
--| 第三方专有资产 | ❌ **严重遗留**（Navicat 安装包/主程序/EULA/提取资源等 ~460MB，见 §2.3） |
--| 图标知识产权 | ⚠️ **存疑**：图标脚本自述取材自 Navicat 安装包，与 README"原创绘制"矛盾（见 §2.2） |
+-| 应用主体标识（产品名/Bundle ID/窗口标题/关于框/exe 元数据） | ✅ 已全部品牌化为 **NavKit**，二进制内无 通用数据库客户端 字符串 |
+-| 发行物内 通用数据库客户端 残留 | ❌ **有遗留**（构建产物、便携版说明、lock 文件，共 7 处，见 §2.1） |
+-| 第三方专有资产 | ❌ **严重遗留**（通用数据库客户端 安装包/主程序/EULA/提取资源等 ~460MB，见 §2.3） |
+-| 图标知识产权 | ⚠️ **存疑**：图标脚本自述取材自 通用数据库客户端 安装包，与 README"原创绘制"矛盾（见 §2.2） |
 -| 联网上报 / 遥测 / 更新检查 / 激活 | ✅ **未发现**，前端被 CSP 硬性阻断外部请求（见 §3） |
 -
 ----
 -
--## 二、Navicat 相关标识残留
+-## 二、通用数据库客户端 相关标识残留
 -
 -### 2.1 发行物 / 用户可见残留（P0 — 发布前必须清理）
 -
 -| # | 位置 | 内容 | 影响 |
 -|---|---|---|---|
--| 1 | `dist/preview.html:5` | `<title>Navicat Premium 18 — 预览（模拟 IPC）</title>` | 会被 `frontendDist: ../dist` 嵌入 navkit.exe |
--| 2 | `dist/preview-bootstrap.js:499-507` | mock `about_info` 返回 `product: "Navicat Premium 18"`、`copyright: "Copyright © 2026 Navicat"`、`publisher: "Navicat"`、`url/support: https://www.navicat.com…`、`dataDir: "D:/Navicat/data"` | 同上，已确认 `preview.html`/`preview-bootstrap` 路径字符串嵌入 exe 资产清单 |
--| 3 | `dist/preview-bootstrap.js:393` | mock 返回本地路径 `D:/Navicat/data/backups/...` | 泄露开发机路径 |
+-| 1 | `dist/preview.html:5` | `<title>通用数据库客户端 Premium 18 — 预览（模拟 IPC）</title>` | 会被 `frontendDist: ../dist` 嵌入 navkit.exe |
+-| 2 | `dist/preview-bootstrap.js:499-507` | mock `about_info` 返回 `product: "通用数据库客户端 Premium 18"`、`copyright: "Copyright © 2026 通用数据库客户端"`、`publisher: "通用数据库客户端"`、`url/support: https://www.navkit.com…`、`dataDir: "D:/通用数据库客户端/data"` | 同上，已确认 `preview.html`/`preview-bootstrap` 路径字符串嵌入 exe 资产清单 |
+-| 3 | `dist/preview-bootstrap.js:393` | mock 返回本地路径 `D:/通用数据库客户端/data/backups/...` | 泄露开发机路径 |
 -| 4 | `public/preview.html:5`、`public/preview-bootstrap.js:500-507` | 同上内容的**源头文件**（Vite 复制进 dist） | 只清 dist 不清 public 会复发 |
--| 5 | `preview.html:6`（仓库根） | `<title>Navicat Premium 18 (Preview)</title>` | 开发预览入口 |
--| 6 | `dist-portable/README-portable.txt:1`、`assets/使用说明.txt:1` | 标题 **"Navicat Premium 18 复刻 — 绿色版"**；正文写 `navicat-clone.exe`（旧包名，实际产物是 `navkit.exe`） | **随绿色版分发给用户** |
--| 7 | `package-lock.json:2,8` | `"name": "navicat-clone"`（`package.json` 已改名 `navkit`，lock 未同步） | npm script 输出 `navicat-clone@…` |
+-| 5 | `preview.html:6`（仓库根） | `<title>通用数据库客户端 Premium 18 (Preview)</title>` | 开发预览入口 |
+-| 6 | `dist-portable/README-portable.txt:1`、`assets/使用说明.txt:1` | 标题 **"通用数据库客户端 Premium 18 复刻 — 绿色版"**；正文写 `navkit-clone.exe`（旧包名，实际产物是 `navkit.exe`） | **随绿色版分发给用户** |
+-| 7 | `package-lock.json:2,8` | `"name": "navkit-clone"`（`package.json` 已改名 `navkit`，lock 未同步） | npm script 输出 `navkit-clone@…` |
 -
--> 正式构建的 `dist/assets/index-*.js`（主程序 bundle）**不含**任何 navicat 字符串；残留集中在 preview 相关文件与说明文档。
+-> 正式构建的 `dist/assets/index-*.js`（主程序 bundle）**不含**任何 navkit 字符串；残留集中在 preview 相关文件与说明文档。
 -
 -### 2.2 图标（P1 — 知识产权风险，需人工定夺）
 -
 -- `tools/make_icons.py:2-9` 文档字符串明确写着：
--  > "Build the application icon set (src-tauri/icons/\*) **from the reference Navicat installer's own RT_GROUP_ICON / RT_ICON resources**"，且 `:119` 默认输入为 `navicat18_premium_cs_x64.exe`。
+-  > "Build the application icon set (src-tauri/icons/\*) **from the reference 通用数据库客户端 installer's own RT_GROUP_ICON / RT_ICON resources**"，且 `:119` 默认输入为 `navkit18_premium_cs_x64.exe`。
 -- `README.md:6` 却声称"**应用图标为原创绘制**"。两者矛盾。
 -- 实测核对：
--  - `src-tauri/icons/*`（icon.ico / 各尺寸 PNG）的 MD5 与安装包、`reference_files/navicat.exe` 内 RT_ICON 原始资源**均不一致**；
+-  - `src-tauri/icons/*`（icon.ico / 各尺寸 PNG）的 MD5 与安装包、`reference_files/navkit.exe` 内 RT_ICON 原始资源**均不一致**；
 -  - 安装包自带图标实为 Inno Setup 纸箱图，非蓝色 N 标；
--  - 应用图标（蓝色圆角方块 + 白色 N + 绿点）与 Navicat 品牌图标**视觉高度近似**。
--- 结论：字节层面无法证明是直接提取，但（a）工具链脚本自述取材自 Navicat 资源，（b）图形与 Navicat 商标近似。**建议替换为有明确原创证据的新图标，并重写/删除 `make_icons.py` 的取材说明**，否则商业分发有商标侵权风险。
+-  - 应用图标（蓝色圆角方块 + 白色 N + 绿点）与 通用数据库客户端 品牌图标**视觉高度近似**。
+-- 结论：字节层面无法证明是直接提取，但（a）工具链脚本自述取材自 通用数据库客户端 资源，（b）图形与 通用数据库客户端 商标近似。**建议替换为有明确原创证据的新图标，并重写/删除 `make_icons.py` 的取材说明**，否则商业分发有商标侵权风险。
 -
 -### 2.3 第三方专有资产残留（P0 — 法律风险，与本项目无关，应移出仓库）
 -
 -| 位置 | 内容 | 规模 |
 -|---|---|---|
--| `navicat18_premium_cs_x64.exe`（仓库根） | **Navicat Premium 18.0.5 安装包本体** | 195 MB |
--| `reference_files/navicat.exe`、`navicat.pdf` | Navicat 主程序 + 官方手册 | 110 MB + PDF |
--| `reference_files/eula.txt` | PremiumSoft Cybertech Ltd. 许可协议（含 "PREMIUMSOFT CYBERTECH LTD"、"Navicat Premium Lite"） | — |
--| `reference_files/resource/httptunnel/ntunnel_mysql.php` 等 3 个 | Navicat 官方 HTTP 隧道脚本，含 navicat 标识 3-4 处/文件 | — |
--| `reference_files/*.dll`（数十个） | Navicat 附带的运行库 | — |
--| `reference_resources/delphi_strings.txt` | 从 Navicat 提取的字符串表，**navicat ×580**，含"激活码/取消激活/激活失败…请激活以继续使用 Navicat"等 DRM 文案 | — |
--| `reference_resources/ui_strings.txt` | 提取的 UI 字符串，**navicat ×457**，PremiumSoft 字样 | — |
--| `reference_resources/assets/` | `navicat_cloud_*.png` 等上百个 Navicat 云功能图标、`tnavicat*.bmp` 表单位图，`_index.txt` navicat ×141 | — |
+-| `navkit18_premium_cs_x64.exe`（仓库根） | **通用数据库客户端 Premium 18.0.5 安装包本体** | 195 MB |
+-| `reference_files/navkit.exe`、`navkit.pdf` | 通用数据库客户端 主程序 + 官方手册 | 110 MB + PDF |
+-| `reference_files/eula.txt` | PremiumSoft Cybertech Ltd. 许可协议（含 "PREMIUMSOFT CYBERTECH LTD"、"通用数据库客户端 Premium Lite"） | — |
+-| `reference_files/resource/httptunnel/ntunnel_mysql.php` 等 3 个 | 通用数据库客户端 官方 HTTP 隧道脚本，含 navkit 标识 3-4 处/文件 | — |
+-| `reference_files/*.dll`（数十个） | 通用数据库客户端 附带的运行库 | — |
+-| `reference_resources/delphi_strings.txt` | 从 通用数据库客户端 提取的字符串表，**navkit ×580**，含"激活码/取消激活/激活失败…请激活以继续使用 通用数据库客户端"等 DRM 文案 | — |
+-| `reference_resources/ui_strings.txt` | 提取的 UI 字符串，**navkit ×457**，PremiumSoft 字样 | — |
+-| `reference_resources/assets/` | `navkit_cloud_*.png` 等上百个 通用数据库客户端 云功能图标、`tnavkit*.bmp` 表单位图，`_index.txt` navkit ×141 | — |
 -| `reference_resources/EXTRACTED_MENU.txt`、`action_names.txt` 等 | 提取的菜单/命令名 | — |
--| `tools/extract_*.py`、`innoparse.py`、`innoextract.py`、`dfm.py` 等 | 从 Navicat 安装包/二进制提取资源的脚本，注释中直接出现 Navicat（如 `extract_menu.py:1` "Recover the Navicat main menu tree…"） | — |
--| `tools/_backup_App_concurrent.ts:1237,2059` | 备份源码含 `"代码段功能需要 Navicat Cloud 账户"`、`"官方文档：https://www.navicat.com/support"` | — |
--| `tools/_tauri_dev*.log`、`_tauri_final*.log` | 开发日志含 `navicat-clone@18.0.5`、`navicat-clone.exe`（log 内 navicat ×5-54 不等） | — |
--| `docs/验收交付/修改文件完整源码/src-tauri/tauri.conf.json:3,5,15` | **旧品牌配置副本**：`productName: "Navicat Premium 18"`、`identifier: "com.navicat.premium.clone"`、窗口标题 `"Navicat Premium 18"` | — |
--| `docs/验收交付/修改文件完整源码/src-tauri/Cargo.toml:2,4,9` | `name = "navicat-clone"`、`description = "Navicat Premium 18 像素级复刻"` | — |
--| `README.md` | navicat ×9："Navicat 风格复刻"、`参考程序：navicat18_premium_cs_x64.exe`、`D:/app/Navicat/navicat.exe` 等 | — |
--| `docs/NavKit-完整任务书.md`、`验收报告.md`、`界面规格表.md`、`差异清单.md` 等 | 文档内多处 navicat 引用（×2-10/文件） | — |
+-| `tools/extract_*.py`、`innoparse.py`、`innoextract.py`、`dfm.py` 等 | 从 通用数据库客户端 安装包/二进制提取资源的脚本，注释中直接出现 通用数据库客户端（如 `extract_menu.py:1` "Recover the 通用数据库客户端 main menu tree…"） | — |
+-| `tools/_backup_App_concurrent.ts:1237,2059` | 备份源码含 `"代码段功能需要 通用数据库客户端 Cloud 账户"`、`"官方文档：https://www.navkit.com/support"` | — |
+-| `tools/_tauri_dev*.log`、`_tauri_final*.log` | 开发日志含 `navkit-clone@18.0.5`、`navkit-clone.exe`（log 内 navkit ×5-54 不等） | — |
+-| `docs/验收交付/修改文件完整源码/src-tauri/tauri.conf.json:3,5,15` | **旧品牌配置副本**：`productName: "通用数据库客户端 Premium 18"`、`identifier: "com.navkit.premium.clone"`、窗口标题 `"通用数据库客户端 Premium 18"` | — |
+-| `docs/验收交付/修改文件完整源码/src-tauri/Cargo.toml:2,4,9` | `name = "navkit-clone"`、`description = "通用数据库客户端 Premium 18 像素级复刻"` | — |
+-| `README.md` | navkit ×9："通用数据库客户端 风格复刻"、`参考程序：navkit18_premium_cs_x64.exe`、`D:/app/通用数据库客户端/navkit.exe` 等 | — |
+-| `docs/NavKit-完整任务书.md`、`验收报告.md`、`界面规格表.md`、`差异清单.md` 等 | 文档内多处 navkit 引用（×2-10/文件） | — |
 -
 -### 2.4 源码注释残留（P2 — 不影响运行，建议顺手清理）
 -
 -| 位置 | 内容 |
 -|---|---|
--| `src/styles/base.css:2` | `Navicat Premium 复刻 —— 全局样式` |
--| `src/core/App.ts:193` | `// 标题栏（实测 29px…logo + "Navicat Premium" + 窗口按钮）` |
--| `src/core/App.ts:5566` | `// …（Navicat 网格底部工具）` |
--| `src/ui/menu.ts:2` | `Navicat 主菜单定义。` |
--| `src/ui/Ribbon.ts:2` | `Ribbon 工具栏：Navicat Premium 的主命令区。` |
--| `src/dialogs/ConnectionDialog.ts:6` | `（Navicat / 数据库）` |
+-| `src/styles/base.css:2` | `通用数据库客户端 Premium 复刻 —— 全局样式` |
+-| `src/core/App.ts:193` | `// 标题栏（实测 29px…logo + "通用数据库客户端 Premium" + 窗口按钮）` |
+-| `src/core/App.ts:5566` | `// …（通用数据库客户端 网格底部工具）` |
+-| `src/ui/menu.ts:2` | `通用数据库客户端 主菜单定义。` |
+-| `src/ui/Ribbon.ts:2` | `Ribbon 工具栏：通用数据库客户端 Premium 的主命令区。` |
+-| `src/dialogs/ConnectionDialog.ts:6` | `（通用数据库客户端 / 数据库）` |
 -
 -### 2.5 已确认干净的应用标识（✅ 无需改动）
 -
@@ -2019,8 +2019,8 @@ index 0673ad0..0000000
 -| npm 包名 | `navkit` | `package.json`（lock 待同步） |
 -| 关于对话框 | product `NavKit`、`Copyright © 2026 NavKit Contributors`、publisher `NavKit`、url/support 为空 | `src-tauri/src/commands.rs:1378-1388` |
 -| exe 版本信息 | FileDescription `NavKit`、CompanyName `navkit` | navkit.exe VersionInfo |
--| 构建产物二进制 | "Navicat / PremiumSoft / navicat.com / navicat-clone" ASCII+UTF-16 扫描均 **0 命中** | `dist-portable/navkit.exe` |
--| 主 bundle JS | `dist/assets/index-*.js` 无 navicat 字符串 | rg 扫描 |
+-| 构建产物二进制 | "通用数据库客户端 / PremiumSoft / navkit.com / navkit-clone" ASCII+UTF-16 扫描均 **0 命中** | `dist-portable/navkit.exe` |
+-| 主 bundle JS | `dist/assets/index-*.js` 无 navkit 字符串 | rg 扫描 |
 -
 ----
 -
@@ -2028,7 +2028,7 @@ index 0673ad0..0000000
 -
 -### 3.1 结论：**未发现任何主动联网上报功能**
 -
--无遥测（telemetry）、埋点统计（analytics）、崩溃上报（crash report）、更新检查（update check）、激活/许可证校验、"phone-home" 行为。全库关键词（telemetry / analytics / sentry / posthog / matomo / gtag / sendBeacon / 上报 / 埋点 / activation / license key 等）在源码中 **0 有效命中**（`analytics` 仅是数据库分类"数仓分析"的 id；激活类字符串只存在于 Navicat 提取的 `reference_resources/delphi_strings.txt`，属遗留物而非本程序代码）。
+-无遥测（telemetry）、埋点统计（analytics）、崩溃上报（crash report）、更新检查（update check）、激活/许可证校验、"phone-home" 行为。全库关键词（telemetry / analytics / sentry / posthog / matomo / gtag / sendBeacon / 上报 / 埋点 / activation / license key 等）在源码中 **0 有效命中**（`analytics` 仅是数据库分类"数仓分析"的 id；激活类字符串只存在于 通用数据库客户端 提取的 `reference_resources/delphi_strings.txt`，属遗留物而非本程序代码）。
 -
 -### 3.2 网络出口清单（全部为"连接用户自己的数据库"，即产品核心功能）
 -
@@ -2059,13 +2059,13 @@ index 0673ad0..0000000
 -
 -## 四、清理建议（按优先级）
 -
--1. **P0 移出仓库**：`navicat18_premium_cs_x64.exe`、`reference_files/`、`reference_resources/` —— 商业软件本体与提取物，任何分发渠道（含 GitHub 公开）都构成侵权风险；
--2. **P0 修发行物**：删 `public/preview.html`、`public/preview-bootstrap.js`、根 `preview.html`（或改名去除 Navicat 字样与 mock 中的品牌信息、`D:/Navicat` 路径、navicat.com 链接），重建 `dist`；改写 `assets/使用说明.txt` 与 `dist-portable/README-portable.txt`（"NavKit — 绿色版"、`navkit.exe`）；
+-1. **P0 移出仓库**：`navkit18_premium_cs_x64.exe`、`reference_files/`、`reference_resources/` —— 商业软件本体与提取物，任何分发渠道（含 GitHub 公开）都构成侵权风险；
+-2. **P0 修发行物**：删 `public/preview.html`、`public/preview-bootstrap.js`、根 `preview.html`（或改名去除 通用数据库客户端 字样与 mock 中的品牌信息、`D:/通用数据库客户端` 路径、navkit.com 链接），重建 `dist`；改写 `assets/使用说明.txt` 与 `dist-portable/README-portable.txt`（"NavKit — 绿色版"、`navkit.exe`）；
 -3. **P0 同步命名**：`package-lock.json` 重新生成（name → navkit）；删除 `tools/_tauri_*.log`、`tools/_backup_App_concurrent.ts`；
--4. **P1 图标**：确认/更换 `src-tauri/icons/*` 与标题栏 `ICON_LOGO`，使之一眼可区分于 Navicat 商标；重写 `make_icons.py` 注释或移除该脚本；修正 README 的图标来源表述；
--5. **P2 注释/文档**：清理 §2.4 的 6 处源码注释；`docs/验收交付/修改文件完整源码/` 内旧品牌副本（`com.navicat.premium.clone`、`navicat-clone`）与 README/docs 中的 Navicat 字样按需改写或删除。
+-4. **P1 图标**：确认/更换 `src-tauri/icons/*` 与标题栏 `ICON_LOGO`，使之一眼可区分于 通用数据库客户端 商标；重写 `make_icons.py` 注释或移除该脚本；修正 README 的图标来源表述；
+-5. **P2 注释/文档**：清理 §2.4 的 6 处源码注释；`docs/验收交付/修改文件完整源码/` 内旧品牌副本（`com.navkit.premium.clone`、`navkit-clone`）与 README/docs 中的 通用数据库客户端 字样按需改写或删除。
 -
--完成 P0-P1 后，可认为"无 Navicat 遗留"；联网方面当前即无上报功能，无需整改。
+-完成 P0-P1 后，可认为"无 通用数据库客户端 遗留"；联网方面当前即无上报功能，无需整改。
 -
 ----
 -
@@ -2075,14 +2075,14 @@ index 0673ad0..0000000
 -
 -| 类别 | 内容 | 说明 |
 -|---|---|---|
--| 商业软件本体 | `navicat18_premium_cs_x64.exe`（195 MB） | 安装包 |
--| 专有资产目录 | `reference_files/`（含 `navicat.exe` 110 MB、`navicat.pdf`、PremiumSoft `eula.txt`、`httptunnel/ntunnel_*.php`、数十个 DLL） | 整体删除 |
--| 提取资源目录 | `reference_resources/`（`navicat_cloud_*` 图标、`tnavicat*.bmp`、`delphi_strings.txt`、`ui_strings.txt`、`EXTRACTED_MENU.txt` 等） | 整体删除 |
--| 逆向工具 | `tools/` 下 14 个脚本：`capture_window.py`、`cut_ribbon_icons.py`、`dfm.py`、`extract_assets.py`、`extract_bitmap_icons.py`、`extract_image_lists.py`、`extract_menu.py`、`extract_resources.py`、`extract_ribbon_icons.py`、`extract_strings.py`、`extract_ui_strings.py`、`innoextract.py`、`innoparse.py`、`make_icons.py` | 均以 Navicat 二进制为输入 |
--| 开发日志/备份 | `tools/_tauri_dev*.log`、`tools/_tauri_final*.log`、`tools/_backup_App_concurrent.ts`、`tools/_tsc.log`、`tools/browser_shot.js` | 含旧包名 `navicat-clone` |
--| 像素比对截图 | `tools/*.png`（192 个，含 37 张 Navicat 并排对比图、65 张裁切自 Navicat 的局部） | 逆向比对产物 |
--| 界面截图 | `images/`（20 张，含 14 张 Navicat 界面截图） | 专有界面素材 |
--| 旧品牌文档副本 | `docs/验收交付/修改文件完整源码/`（19 文件，含 `com.navicat.premium.clone`） | 过期源码副本 |
+-| 商业软件本体 | `navkit18_premium_cs_x64.exe`（195 MB） | 安装包 |
+-| 专有资产目录 | `reference_files/`（含 `navkit.exe` 110 MB、`navkit.pdf`、PremiumSoft `eula.txt`、`httptunnel/ntunnel_*.php`、数十个 DLL） | 整体删除 |
+-| 提取资源目录 | `reference_resources/`（`navkit_cloud_*` 图标、`tnavkit*.bmp`、`delphi_strings.txt`、`ui_strings.txt`、`EXTRACTED_MENU.txt` 等） | 整体删除 |
+-| 逆向工具 | `tools/` 下 14 个脚本：`capture_window.py`、`cut_ribbon_icons.py`、`dfm.py`、`extract_assets.py`、`extract_bitmap_icons.py`、`extract_image_lists.py`、`extract_menu.py`、`extract_resources.py`、`extract_ribbon_icons.py`、`extract_strings.py`、`extract_ui_strings.py`、`innoextract.py`、`innoparse.py`、`make_icons.py` | 均以 通用数据库客户端 二进制为输入 |
+-| 开发日志/备份 | `tools/_tauri_dev*.log`、`tools/_tauri_final*.log`、`tools/_backup_App_concurrent.ts`、`tools/_tsc.log`、`tools/browser_shot.js` | 含旧包名 `navkit-clone` |
+-| 像素比对截图 | `tools/*.png`（192 个，含 37 张 通用数据库客户端 并排对比图、65 张裁切自 通用数据库客户端 的局部） | 逆向比对产物 |
+-| 界面截图 | `images/`（20 张，含 14 张 通用数据库客户端 界面截图） | 专有界面素材 |
+-| 旧品牌文档副本 | `docs/验收交付/修改文件完整源码/`（19 文件，含 `com.navkit.premium.clone`） | 过期源码副本 |
 -| 过期构建产物 | `dist/`、`dist-portable/`（内含未清理的 preview 副本与旧 README） | 见 §5.3 |
 -
 -### 5.2 已改写
@@ -2090,28 +2090,28 @@ index 0673ad0..0000000
 -| 文件 | 改动 |
 -|---|---|
 -| `public/preview.html`、`preview.html` | 标题 → `NavKit` |
--| `public/preview-bootstrap.js` | mock `about_info` → NavKit 品牌；`D:/Navicat/...` → 相对路径 |
--| `assets/使用说明.txt` | 标题 → 「NavKit — 数据库管理工具 绿色版」；`navicat-clone.exe` → `navkit.exe`；补充实际支持的数据库清单 |
+-| `public/preview-bootstrap.js` | mock `about_info` → NavKit 品牌；`D:/通用数据库客户端/...` → 相对路径 |
+-| `assets/使用说明.txt` | 标题 → 「NavKit — 数据库管理工具 绿色版」；`navkit-clone.exe` → `navkit.exe`；补充实际支持的数据库清单 |
 -| `package-lock.json` | `name`/`version`/`packages[""]` → `navkit` 1.0.0 |
--| `src/styles/base.css`、`src/core/App.ts`（2 处）、`src/ui/menu.ts`、`src/ui/Ribbon.ts`、`src/dialogs/ConnectionDialog.ts` | 注释中的 Navicat 字样改为中性表述 |
+-| `src/styles/base.css`、`src/core/App.ts`（2 处）、`src/ui/menu.ts`、`src/ui/Ribbon.ts`、`src/dialogs/ConnectionDialog.ts` | 注释中的 通用数据库客户端 字样改为中性表述 |
 -| `README.md` | 重写：移除参考程序与逆向提取章节；新增「图标」「隐私与网络」章节 |
 -| `docs/NavKit-完整任务书.md`、`docs/界面规格表.md`、`docs/差异清单.md`、`docs/design/DESIGN.md`、`docs/验收交付/验收报告.md` | 品牌词与产物名改为中性/NavKit |
 -
 -### 5.3 复验结果
 -
 -- 全库复扫（排除 `node_modules`、`src-tauri/target`、第三方克隆 `tools/acceptance/reference-transfer-*`）：
--  仅剩 5 个文件的命中，且**全部是项目目录名 `tauri-navicat` 的子串**，无真实品牌残留；
--- 文件名/目录名检索：无 `*navicat*` 项（目录名除外）；
+-  仅剩 5 个文件的命中，且**全部是项目目录名 `tauri-navkit` 的子串**，无真实品牌残留；
+-- 文件名/目录名检索：无 `*navkit*` 项（目录名除外）；
 -- `dist/` 与 `dist-portable/` 已删除（原产物内含未清理的 preview 副本）。
 -
 -### 5.4 未处理项与后续事项
 -
--1. **图标**：`src-tauri/icons/*` 由已删除的 `make_icons.py` 生成，来源为 Navicat 安装包图标资源。
+-1. **图标**：`src-tauri/icons/*` 由已删除的 `make_icons.py` 生成，来源为 通用数据库客户端 安装包图标资源。
 -   仓库内另有原创脚本 `tools/make_original_icon.py`（品牌蓝渐变 + 白色「N」+ 绿点，自述原创且不引用任何第三方资源），
 -   但当前 `icons/` 是否为该脚本产物**无法从仓库内自证**（原提取脚本已删除、无构建记录）。建议执行
 -   `python tools/make_original_icon.py` 重新生成图标后再发布，以彻底消除商标近似风险；
--2. **格式兼容命名**：`tools/acceptance/reference-transfer-20261105-dbx/` 内 `navicatImport.ts`、
--   `navicat_nb3.rs`、`navicat_mysql_tunnel.rs` 等均为**上游开源项目自带的 Navicat 导入功能**，
+-2. **格式兼容命名**：`tools/acceptance/reference-transfer-20261105-参考实现/` 内 `navkitImport.ts`、
+-   `navkit_nb3.rs`、`navkit_mysql_tunnel.rs` 等均为**上游开源项目自带的 通用数据库客户端 导入功能**，
 -   属第三方代码，不应改动；
 -3. **`tools/acceptance/`**（约 2.1 GB：`pg/` PostgreSQL 数据目录、两个第三方仓库克隆）为测试基建，
 -   体积较大且不属于发行物，可按需清理或加入 `.gitignore`；
@@ -2265,7 +2265,7 @@ index 5304999..0000000
 -
 -## 三·二、Logo 规范（v2.2 · 抽象图形，无字母）
 -
--NavKit logo 为**原创抽象几何构成**（见 `assets/logo.js`）——与 Navicat（渐变环）、
+-NavKit logo 为**原创抽象几何构成**（见 `assets/logo.js`）——与 通用数据库客户端（渐变环）、
 -IDEA（渐变方）、Claude（星芒）同属"图形隐喻"路线，不依赖字母：
 -
 -- 容器：32 网格圆角方形（rx 8.5），强调蓝渐变 `#3d7cf0 → #1f4fc0`（左上 → 右下）
@@ -2417,7 +2417,7 @@ index 2f63836..90d407c 100644
 @@ -1,9 +1,9 @@
  # NavKit 设计规范 v3 —— 专业桌面数据库工具
  
--> 目标：与 DataGrip / IDEA / Navicat 同级的**专业感与可读性**。
+-> 目标：与 DataGrip / IDEA / 通用数据库客户端 同级的**专业感与可读性**。
 +> 目标：与主流专业 IDE / 数据库客户端同级的**专业感与可读性**。
  > 原则：界面服从功能。每个像素都服务于「快速找到对象、快速读写数据、快速看清结构」。
  > 范围：除数据源官方 logo（`src/ui/dbIcons.ts`，101 个品牌图标）外，全部界面元素重设计。
@@ -2451,7 +2451,7 @@ index 2f63836..90d407c 100644
 +—— 顶层 `#82becc`、中层 `#91aead`、底层 `#677ca6` —— 否则浅色中层在浅色标题栏上、
 +冰青顶层在深色任务栏上都会失去轮廓。层间 `feDropShadow`（`#2a3759`）投影形成纵深。
  隐喻：NavKit = 导航 + 工具箱 —— 在数据层之间穿行。抽象几何，无字母依赖，
--与 Navicat（环形球）、IDEA（渐变方）、Claude（星芒）同路线。
+-与 通用数据库客户端（环形球）、IDEA（渐变方）、Claude（星芒）同路线。
 +不复刻任何具体产品的图形标识，只靠形状、层次与颜色传达含义。
  
  20px 用于标题栏，48px 用于「关于」，16px 为最小可用尺寸；`size ≤ 24` 时描边加粗（0.9 → 1.2）、
@@ -2884,7 +2884,7 @@ index 6cabe99..0000000
 -
 -- 搜索框：高 26.4px，聚焦边框 `#0078D4`，占位「搜索」+ 11.2px 放大镜 SVG
 -- 行高 **20px**（物理 25 ✓）；每级缩进 25.6px；箭头/图标盒 17.6px
--- 行图标 16px 逻辑（物理 ~20 ✓）；文字 13.2px（"dbswitch_calendars" 18 字符 157 物理 → 8.7px/字符）
+-- 行图标 16px 逻辑（物理 ~20 ✓）；文字 13.2px（"navkit_calendars" 18 字符 157 物理 → 8.7px/字符）
 -- 选中行 `#CCE8FF`；库节点选中时图标转绿色数据库，其余系统库为灰色
 -- 结构：组（黄文件夹）> 连接 > 库 > 表/视图/函数/查询/备份 分组 > 对象
 -
@@ -2959,10 +2959,10 @@ index 1dede05..0000000
 @@ -1,42 +0,0 @@
 -# 驱动下载来源政策与待办
 -
--日期：2026-11-07。背景：驱动管理中部分数据源此前无法直接下载驱动；dbx 方案落地后重新盘点来源覆盖。
--更新：2026-11-07 政策收紧——dbx 降级为一次性镜像来源，在用驱动将迁移到自有仓库托管。
+-日期：2026-11-07。背景：驱动管理中部分数据源此前无法直接下载驱动；参考实现 方案落地后重新盘点来源覆盖。
+-更新：2026-11-07 政策收紧——参考实现 降级为一次性镜像来源，在用驱动将迁移到自有仓库托管。
 -更新：2026-11-07 迁移完成——三个在用驱动已发布到自有仓库 `GaoHu1997/Navkit-drivers`，
--`managed_dbx.rs` 运行时下载 URL 已切换（固定指纹不变），详见第三节待办表。
+-`managed_参考实现.rs` 运行时下载 URL 已切换（固定指纹不变），详见第三节待办表。
 -
 -## 一、政策：不在本仓库托管驱动，只用别人的
 -
@@ -2973,12 +2973,12 @@ index 1dede05..0000000
 -   - 厂商官方：Maven Central（IBM jcc、Trino、达梦等 26 个托管 JDBC）、GBase 官方 CDN、
 -     星环官方 COS（Inceptor/ArgoDB 8.37.3）、GitHub Releases（DuckDB ODBC）、
 -     Oracle 官网现代直链（23.26 Basic+ODBC）、Snowflake 官方库（MSI 只下载不安装）；
--   - 自有仓库托管（已落地）：在用驱动不得长期依赖他人仓库运行时获取。dbx
--     （`t8y2/dbx`）固定提交 `71ce0349…` 仅作为**一次性镜像来源**，三个在用驱动
+-   - 自有仓库托管（已落地）：在用驱动不得长期依赖他人仓库运行时获取。参考实现
+-     （`t8y2/参考实现`）固定提交 `71ce0349…` 仅作为**一次性镜像来源**，三个在用驱动
 -     （CacheDB / sundb8-1.0.2 / oscarJDBC8）已字节级发布到自有公开仓库
 -     **`GaoHu1997/Navkit-drivers`**（raw 直链 + 固定 SHA-256 校验），运行时下载
 -     URL 已切换，固定指纹（大小/SHA-256/条目数）全部不变。UI 保留第三方溯源说明
--     （"自有镜像，原件来自 dbx 固定提交"）；原包许可/签名保留，dbx 自身许可不套用
+-     （"自有镜像，原件来自 参考实现 固定提交"）；原包许可/签名保留，参考实现 自身许可不套用
 -     到专有驱动内容；连接层 TLS 不静默降级、扩展参数要求走自定义 JDBC。
 -3. **没有可核验外部来源的数据源**：保持"需手动获取"状态并记入本文待办，
 -   等待来源出现再接入；不自建托管、不伪造下载成功、不打开网页代用户接受许可。
@@ -2986,7 +2986,7 @@ index 1dede05..0000000
 -## 二、现状盘点（2026-11-07 源码）
 -
 -- 目录 35 个 ODBC 数据源 + H2：33 个有直链下载路径（官方来源 30 + 自有镜像 3；
--  自有镜像托管于 `GaoHu1997/Navkit-drivers`，原件来自 dbx 固定提交）；
+-  自有镜像托管于 `GaoHu1997/Navkit-drivers`，原件来自 参考实现 固定提交）；
 -  H2 / DuckDB / Oracle / Snowflake 为独立路径。
 -- 无下载入口的仅剩两个入口型数据源，**属设计使然、不算缺口**：
 -  - 通用 ODBC（`odbc`）：本就没有唯一驱动，用户任选已安装驱动 / DSN；
@@ -2996,8 +2996,8 @@ index 1dede05..0000000
 -
 -| 项 | 说明 | 触发条件 |
 -|---|---|---|
--| GBase 8c 数据源接入 | dbx 固定提交已有原件 `gbase8c-jdbc-3.0.0B02.jar`（`71ce0349…`）；目录尚无 GBase 8c 数据源（现有 `gbase` 为 8a） | 产品决定支持 GBase 8c 时，按 dbx 方案接入：第三方来源标注 + TLS 不降级 + 固定 SHA-256 |
--| 自有仓库托管接入（✅ 2026-11-07 完成） | 三个在用驱动（CacheDB / sundb8-1.0.2 / oscarJDBC8）已镜像并发布到自有公开仓库 `GaoHu1997/Navkit-drivers`（raw 直链经真实下载验证，SHA-256 与固定指纹逐一核对通过）；`managed_dbx.rs` 三个 jar URL 已切换，`size`/`sha256`/条目数指纹全部不动；UI 与 Rust 目录来源文案已更新为"自有镜像（原件来自 dbx 固定提交 71ce0349…）"。`tools/driver-mirror/dbx-71ce0349/` 保留为镜像落位记录 | 已完成，无后续触发条件；新增镜像文件时按 Navkit-drivers 仓库 README 约定登记指纹 |
+-| GBase 8c 数据源接入 | 参考实现 固定提交已有原件 `gbase8c-jdbc-3.0.0B02.jar`（`71ce0349…`）；目录尚无 GBase 8c 数据源（现有 `gbase` 为 8a） | 产品决定支持 GBase 8c 时，按 参考实现 方案接入：第三方来源标注 + TLS 不降级 + 固定 SHA-256 |
+-| 自有仓库托管接入（✅ 2026-11-07 完成） | 三个在用驱动（CacheDB / sundb8-1.0.2 / oscarJDBC8）已镜像并发布到自有公开仓库 `GaoHu1997/Navkit-drivers`（raw 直链经真实下载验证，SHA-256 与固定指纹逐一核对通过）；`managed_参考实现.rs` 三个 jar URL 已切换，`size`/`sha256`/条目数指纹全部不动；UI 与 Rust 目录来源文案已更新为"自有镜像（原件来自 参考实现 固定提交 71ce0349…）"。`tools/driver-mirror/参考实现-71ce0349/` 保留为镜像落位记录 | 已完成，无后续触发条件；新增镜像文件时按 Navkit-drivers 仓库 README 约定登记指纹 |
 -| 新增数据源的来源门槛 | 此表为占位提醒：新数据源若找不到满足第一条政策的来源，直接记入此表，不引入自建托管 | 每次新增目录条目时核对 |
 diff --git "a/docs/\351\252\214\346\224\266\344\272\244\344\273\230/14\351\241\271\344\277\256\345\244\215\351\252\214\346\224\266\346\212\245\345\221\212.md" "b/docs/\351\252\214\346\224\266\344\272\244\344\273\230/14\351\241\271\344\277\256\345\244\215\351\252\214\346\224\266\346\212\245\345\221\212.md"
 deleted file mode 100644
@@ -3070,10 +3070,10 @@ index ae1da9f..0000000
 -## 明确范围与限制
 -
 -- 自定义驱动是64位原生ODBC，不把JDBC JAR当可加载原生DLL。Windows文件驱动连接使用唯一临时用户DSN，只记驱动路径，正常成功/失败后删除，不永久安装驱动。强制杀进程不能保证RAII清理。
--- 同步是表级手动结构/数据同步，不包含调度、ETL或其他dbswitch功能。兼容协议类型映射并明确提示外键/自增跨库差异。
+-- 同步是表级手动结构/数据同步，不包含调度、ETL或其他navkit功能。兼容协议类型映射并明确提示外键/自增跨库差异。
 -- MySQL DDL自动提交，重建表不可整体回滚；取消在数据库操作之间协作停止，不强制终止正在运行的数据库语句。
 -- 导入256MiB上限，当前整表读取；大规模持续同步/CDC不在本次范围。
--- 已参考dbx/dbswitch功能和连接体验，保留项目现有桌面样式，未引入其完整运行平台。
+-- 已参考参考实现/navkit功能和连接体验，保留项目现有桌面样式，未引入其完整运行平台。
 -- 构建仍有现有MSSQL unused_mut、前端块大小等非阻塞警告；正式运行验收无控制台错误。
 diff --git "a/docs/\351\252\214\346\224\266\344\272\244\344\273\230/\351\252\214\346\224\266\346\212\245\345\221\212.md" "b/docs/\351\252\214\346\224\266\344\272\244\344\273\230/\351\252\214\346\224\266\346\212\245\345\221\212.md"
 deleted file mode 100644
@@ -3119,7 +3119,7 @@ index 78a5703..0000000
 -| TypeScript 类型检查 | 通过 | `npx tsc --noEmit` 无输出（EXIT=0），含 noUnusedLocals/noUnusedParameters 严格开关 |
 -| Vite 生产构建 | 通过 | `✓ built in 1.34s`；产物 dist/index.html 0.41kB / index css 21.98kB / index js 576.93kB（gzip 179.41kB） |
 -| cargo check | 通过 | `Finished `dev` profile target(s) in 34.89s`（winreg 移除后全量重解析） |
--| tauri build（release） | 通过 | `Finished `release` profile [optimized] target(s) in 3m 41s` → `Built application at: D:\github\tauri-navicat\src-tauri\target\release\navkit.exe` |
+-| tauri build（release） | 通过 | `Finished `release` profile [optimized] target(s) in 3m 41s` → `Built application at: D:\github\tauri-navkit\src-tauri\target\release\navkit.exe` |
 -| 绿色版组装 | 通过 | build.ps1 输出：`构建完成！绿色版目录 : dist-portable  可执行文件 : navkit.exe (6.59 MB)` |
 -| 启动冒烟测试 | 通过 | dist-portable/navkit.exe 双击运行 6 秒：进程存活（PID 1744/14420，主进程+WebView2），无报错退出 |
 -| 编译警告 | 无阻断 | vite 仅 chunk>500kB 提示（非错误）；cargo check 无警告输出；release 编译期 npm 子进程偶发 R6016 提示（node 线程栈告警，不影响产物，构建 Finish 成功） |
@@ -3270,9 +3270,9 @@ index 78a5703..0000000
 -    Finished `dev` profile [unoptimized + debuginfo] target(s) in 34.89s
 -
 -$ powershell -ExecutionPolicy Bypass -File build.ps1 -SkipInstall -NoRun
--    Compiling navkit v1.0.0 (D:\github\tauri-navicat\src-tauri)
+-    Compiling navkit v1.0.0 (D:\github\tauri-navkit\src-tauri)
 -    Finished `release` profile [optimized] target(s) in 3m 41s
--       Built application at: D:\github\tauri-navicat\src-tauri\target\release\navkit.exe
+-       Built application at: D:\github\tauri-navkit\src-tauri\target\release\navkit.exe
 -
 -[4/4] 整理绿色版目录 ...
 -  下载 WebView2 离线引导程序 ...
@@ -3280,7 +3280,7 @@ index 78a5703..0000000
 -
 -==========================================
 - 构建完成！
-- 绿色版目录 : D:\github\tauri-navicat\dist-portable
+- 绿色版目录 : D:\github\tauri-navkit\dist-portable
 - 可执行文件 : navkit.exe (6.59 MB)
 -==========================================
 -
@@ -3572,7 +3572,7 @@ index 88ca29c..f4f5fbf 100644
 -          },
            list_objects: (args) => {
              const schema = (args && args.schemaName) || "";
-             if (schema === "dbswitch") {
+             if (schema === "navkit") {
 @@ -318,32 +397,7 @@ try {
              }
              return [];
@@ -3900,7 +3900,7 @@ index 88ca29c..f4f5fbf 100644
 +
 +          // ---- 数据库会话 / 进程 ----
 +          list_db_processes: () => [
-+            { id: "8", user: "root", host: "localhost:52100", db: "dbswitch", command: "Query", state: "Sending data", elapsed_secs: 3, sql: "SELECT * FROM dbswitch_job_details", is_self: false },
++            { id: "8", user: "root", host: "localhost:52100", db: "navkit", command: "Query", state: "Sending data", elapsed_secs: 3, sql: "SELECT * FROM navkit_job_details", is_self: false },
 +            { id: "9", user: "root", host: "localhost", db: "mysql", command: "Sleep", state: "", elapsed_secs: null, sql: "", is_self: true },
 +          ],
 +          kill_db_process: () => "OK",
@@ -3932,9 +3932,9 @@ index 88ca29c..f4f5fbf 100644
 +            const fallback = responses.get_table_ddl({ table: object.name });
 +            let definition = "";
 +            if (object.kind === "view" && object.name === "v_job_summary") {
-+              definition = "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `dbswitch_job_details` GROUP BY job_name";
++              definition = "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `navkit_job_details` GROUP BY job_name";
 +            } else if (object.name === "sp_cleanup_logs") {
-+              definition = "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
++              definition = "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `navkit_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
 +            } else if (object.name === "fn_next_seq") {
 +              definition = "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND";
 +            }
@@ -3975,7 +3975,7 @@ index 88ca29c..f4f5fbf 100644
 +          read_routine_design: (args) => {
 +            const name = (args && args.name) || "";
 +            const definition = name === "sp_cleanup_logs"
-+              ? "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND"
++              ? "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `navkit_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND"
 +              : name === "fn_next_seq"
 +                ? "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND"
 +                : `CREATE ROUTINE \`${name}\`（预览模拟）`;
@@ -4167,7 +4167,7 @@ index 88ca29c..f4f5fbf 100644
 +              job_revision: (job && job.revision) || "rev-1", expires_at_utc: isoPlus(600000),
 +              actions: (job && job.actions || []).map((a, i) => ({
 +                action_id: a.id || `action-${i}`, template_name: `模板 ${i + 1}`,
-+                connection_label: "预览连接", namespace: "dbswitch", read_only: false,
++                connection_label: "预览连接", namespace: "navkit", read_only: false,
 +                details: ["预览模拟动作"], destructive: [],
 +              })),
 +            };
@@ -23508,7 +23508,7 @@ zBD$8hUR8(IPM2of!)TXJPMJ?>M&gv;e-fj4yyoVf5bz-m{=ob*SO&}AQC~i{?zpip
 z_kFrYYOoe|{cc|$$+If0!`_U|g*+&Bvv3ZRZ9PrWxrPokrPZ+MK=`!;)n&=)Ux@su
 z+2j7`A$`c&K${w6__H2|=?i}#`<IQpd_|}+)oBH-*Yd#rb3s(y)g}BQ-L#iY_g=SZ
 zec5}s@=n~;oL9BCrfso%-H@PByT+Ftsr(uWA&cI{OoerY=?8hP>&c2!3uu1}ck5ZZ
-z&z4#pu4R=zM>NmB#Nh|)IAdo0w5GVSFLT*L+t<Pe5((d0c79edbXY7gA}VQzL!8bR
+z&z4#pu4R=zM>NmB#Nh|)IAdo0w5GVSFLT*L+t<Pe5((d0c79e参考实现Y7gA}VQzL!8bR
 zug)1opBZ|GfwSIVE%+@#sjY8Vjg%$wWDZ7DuioUr8U=p?M5|cDM5{PU4Rr#>9{cl5
 z>k{ckV>o4;lr~S&HDx5c;}$Tl5zt(B6j~)=Pr(%{xq9YX&2+pff=l}^eBwDzBD_sh
 zd8M9=1t*O)lWYALWtwgQin3iDOF}EjwKWyT&>~k%MZO3nbR=qjEE5gdc<ZU4cXuG9
@@ -24510,7 +24510,7 @@ z*&~42@=k>i1K7zIY1uw7Cyv(k0oW+auFxE1LF>Lrz4#-c^E<!k*`wTUWmngxD00~L
 z(I*aqTLw`dZ)pY4GVWBfqZ_wdLSe=hrtIB?Por_Bk5>kLh{pp_bixpuHCn#Fp0WKb
 zKx^ni;CQ#_4d8HWo)<{*au5g2Z|mJr!Ta>*c9DB)4%EeeZI7>e`J1qPy%aZgR1lSL
 zC%dO1zTb}zk~tQoXwg<DP?O*-96#DGvsw?mJ2SyXOz=o+P}q5v?Gk@*_LNwy6ez97
-z9&OhKW#~HR#pOVd2@f6ntdbXms!RT{*$amAf!mR|JsmpewyK33bid;Lo2PCexQ$Gs
+z9&OhKW#~HR#pOVd2@f6nt参考实现ms!RT{*$amAf!mR|JsmpewyK33bid;Lo2PCexQ$Gs
 zyT3n2$h2%A{-MWOq-D0n-jg+Np2Z*`I7-N>L+L?NZcqJY{IJT=F6X&MaO~RSroct=
 zr5C;atH{^?s)NP1quzZ@`L5yTVII77k+^BD6JI#rL4-glX};48B?q$1-9pIneEKPN
 znJUeo!+lt_^!2f4I2psHQTkF^Ku}L-;S9=3`EnqL#L05D%cqonIxtw17FfqB_g9!+
@@ -25107,7 +25107,7 @@ z+TkcOwjZO%&q6!rK=0c66h%oL{m#|f(9M3SEP&pS!Voj$|7_qU2lOEXQHj{{%xL!V
 zY=MwU(h;O{A}|t{Br~2d4-x?y1|FfWy(p2kVgfs9`F%biN#dLQ!s<ACOitBKUc2}E
 zS^;5<O(VlL?PpFc;qWWhadrwH6QsH25tkLI1umU8{P^ECB2b~SDlBC$c)np~>Zr@T
 zWo!Hb$WkA3eV_SIy1L!+jaY+Vcs(A%k1^kJ=e81Rn)p<}ay1F){N_8fyBk^Sy?OW0
-z{u8lmIZl<lYDj7eR6239x{l9XDbx`JQ|SnXF~g#g4#E?;k^Af>$FpB*SyT=G-4cc2
+z{u8lmIZl<lYDj7eR6239x{l9X参考实现`JQ|SnXF~g#g4#E?;k^Af>$FpB*SyT=G-4cc2
 z|Kr&9mhku4@yYsavzHq-zzTh=&3F4PJ~D-wPcf`&I8WsrX$n6hD^#sR8BJ|6zl<%H
 zegu!n_5W070{^ZS1w{EoC<T8)?dOWtz4rH=<KwnVq=V=W8(u#j*RSGtTGelVuzJA&
 zHO}MimA<^hIkH&9ueWf6)iIKr2l8&n7xMD)(h{kqIl8p`bZF-3gS8$DrBjYoKcb<K
@@ -26522,7 +26522,7 @@ zg<C~<DS(-v8$E9%(iXfw`t2Zs9YGa(@Oj}0PBAkPuk*O6J!~g1xS;>u;Gc#GNotH_
 zixa=(Kmhso{8BgOH};3wUJ1BA><sr6-N`k@s49#nI*!KNT5%;L^uPkV3dHt$2nLa7
 z@sgI$Pv8s&71}Xy>+aqhi5GZW&;F4Ys5R7PC2)ZbpZJYkE~q`2?26|zL0z-btKwP_
 zgQ}ws5Lwd+%%Vu<tJW!}#vtnj9<>i@FZX^}b4J@nW*y4l8n9XLiHhmqA4L{85<F@n
-zCIWOhD6BE1fL4C`A9)((b45PQm9rS{!^hfm3!FcRSJxLrg%NaU#dBXe{btE(Daj-y
+zCIWOhD6BE1fL4C`A9)((b45PQm9rS{!^hfm3!FcRSJxLrg%NaU#参考实现e{btE(Daj-y
 zUu|vL_Wn3SXhGu62G@tZ*beN7B$ZDbWUB%=K<5k0`<ooIofq1qqaTNM-DuVV#5rk_
 z7X0ZW4p(U3BV3)x!&PzM?!b1R8|o>bv_<n*e-}8^mP({0s*9BF!3f6}BkC_fY$|-z
 z3Cay`sMN`Mp{)t%ein+UsnMD1g~(apNu&E`9$1&a+$?@aUg8r*`Gf~ifP{(be`dTr
@@ -28299,7 +28299,7 @@ index cf25466..22476bd 100644
 @@ -1,712 +1,717 @@
 -//! 数据源类型目录：全部支持的数据源类型与其连接协议映射。
 -//!
--//! 参考 dbx 的分层支持策略（https://github.com/t8y2/dbx）：
+-//! 参考实现 的分层支持策略（https://github.com/t8y2/参考实现）：
 -//! - 协议兼容：MySQL / PostgreSQL 协议族数据库直接复用对应原生驱动；
 -//! - 原生客户端：SQL Server、Redis、MongoDB、HTTP API 类（检索 / 向量 / 时序 / MQ）；
 -//! - ODBC 通用：提供 Windows ODBC 驱动的数据源（Oracle、DB2、达梦、Hive 等）。
@@ -28483,7 +28483,7 @@ index cf25466..22476bd 100644
 -        1972,
 -        "relational",
 -        "InterSystems ODBC",
--        "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。",
+-        "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自参考项目 固定提交，第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。",
 -    ),
 -    k("custom_mysql", "Custom (MySQL)", 3306, Protocol::Mysql, "relational"),
 -    k("dolt", "Dolt", 3307, Protocol::Mysql, "relational"),
@@ -28707,7 +28707,7 @@ index cf25466..22476bd 100644
 -        40000,
 -        "domestic",
 -        "SUNDB ODBC Driver",
--        "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。",
+-        "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自参考项目 固定提交，第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。",
 -    ),
 -    odbc(
 -        "oscar",
@@ -28715,7 +28715,7 @@ index cf25466..22476bd 100644
 -        2003,
 -        "domestic",
 -        "Shentong ODBC Driver",
--        "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。",
+-        "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自参考项目 固定提交，第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。",
 -    ),
 -    odbc(
 -        "xugu",
@@ -51371,17 +51371,17 @@ index f4ac462..c8ef583 100644
 +            }
 +        });
 +}
-diff --git a/src-tauri/src/managed_dbx.rs b/src-tauri/src/managed_dbx.rs
+diff --git a/src-tauri/src/managed_参考实现.rs b/src-tauri/src/managed_参考实现.rs
 deleted file mode 100644
 index ba9dd4c..0000000
---- a/src-tauri/src/managed_dbx.rs
+--- a/src-tauri/src/managed_参考实现.rs
 +++ /dev/null
 @@ -1,42 +0,0 @@
 -//! Original drivers self-hosted on the Navkit-drivers mirror; byte-identical originals
--//! from the user-requested dbx reference (fixed commit). Provenance stays third-party.
--//! Original bytes/notices are retained. dbx's license is not applied to proprietary driver contents.
+-//! from the user-requested 参考实现 reference (fixed commit). Provenance stays third-party.
+-//! Original bytes/notices are retained. 参考实现's license is not applied to proprietary driver contents.
 -use super::*;
--const SOURCE: &str = "来源为自有镜像仓库 GaoHu1997/Navkit-drivers 的字节级原 JAR（原件来自用户指定参考项目 dbx 的固定提交 71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a），并非厂商官方下载；原包许可/签名保留，不推断再分发授权。需 Java 11+；普通 TCP 用户名/密码路线已验证，厂商服务器 SQL/认证和 TLS 仍 UNVERIFIED。TLS/证书/集群扩展请显式配置自定义 JDBC，不会静默降级。";
+-const SOURCE: &str = "来源为自有镜像仓库 GaoHu1997/Navkit-drivers 的字节级原 JAR（原件来自用户指定参考项目 的固定提交 71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a），并非厂商官方下载；原包许可/签名保留，不推断再分发授权。需 Java 11+；普通 TCP 用户名/密码路线已验证，厂商服务器 SQL/认证和 TLS 仍 UNVERIFIED。TLS/证书/集群扩展请显式配置自定义 JDBC，不会静默降级。";
 -pub(super) fn vendor(kind: &str) -> Option<Vendor> {
 -    match kind {
 -        "cache" => Some(Vendor {
@@ -51407,38 +51407,38 @@ index ba9dd4c..0000000
 -}
 -pub(super) fn connection_url(req: &ConnectionRequest, kind: &str, pairs: &[(String, String)]) -> Result<String> {
 -    if matches!(tls_mode(pairs)?, Some(TlsMode::Require | TlsMode::VerifyCa | TlsMode::VerifyFull)) {
--        bail!("dbx 原件托管连接未核验 TLS，不会静默降级；请配置自定义 JDBC")
+-        bail!("参考实现 原件托管连接未核验 TLS，不会静默降级；请配置自定义 JDBC")
 -    }
 -    if pairs.iter().any(|(key, _)| !["ssl", "tls", "sslmode", "ssl-mode", "ssl_verify"].contains(&key.as_str())) {
--        bail!("dbx 原件的扩展认证或命名空间请显式配置自定义 JDBC，不会忽略 catalog/schema")
+-        bail!("参考实现 原件的扩展认证或命名空间请显式配置自定义 JDBC，不会忽略 catalog/schema")
 -    }
 -    let (prefix, port, default) = match kind {
 -        "cache" => ("Cache", 1972, "USER"), "sundb" => ("sundb", 22581, "test"), "oscar" => ("oscar", 2003, "OSRDB"),
--        _ => bail!("未知 dbx 原件产品"),
+-        _ => bail!("未知 参考实现 原件产品"),
 -    };
 -    let database = if req.database.trim().is_empty() { default } else { plain_name(req.database.trim(), "厂商数据库/namespace")? };
 -    Ok(format!("jdbc:{prefix}://{}/{database}", server_authority(req, port)?))
 -}
-diff --git a/src-tauri/src/managed_dbx_tests.rs b/src-tauri/src/managed_dbx_tests.rs
+diff --git a/src-tauri/src/managed_参考实现_tests.rs b/src-tauri/src/managed_参考实现_tests.rs
 deleted file mode 100644
 index 1464dff..0000000
---- a/src-tauri/src/managed_dbx_tests.rs
+--- a/src-tauri/src/managed_参考实现_tests.rs
 +++ /dev/null
 @@ -1,58 +0,0 @@
--//! Explicit dbx originals on the self-hosted Navkit-drivers mirror; never substitute IRIS or label these as official downloads.
+-//! Explicit 参考实现 originals on the self-hosted Navkit-drivers mirror; never substitute IRIS or label these as official downloads.
 -use super::*;
 -fn request(kind: &str) -> ConnectionRequest {
 -    ConnectionRequest { kind: crate::models::DbKind::of(kind), host: "127.0.0.1".into(), port: 1,
--        user: "navkit_dbx_probe".into(), password: "dbx-probe;@中文-secret".into(), database: String::new(),
+-        user: "navkit_参考实现_probe".into(), password: "参考实现-probe;@中文-secret".into(), database: String::new(),
 -        file: String::new(), params: String::new(), timeout_secs: 5 }
 -}
 -#[test]
--fn dbx_originals_keep_exact_provenance_urls_and_refuse_tls_downgrade() {
+-fn 参考实现_originals_keep_exact_provenance_urls_and_refuse_tls_downgrade() {
 -    for (kind, expected) in [("cache", "jdbc:Cache://127.0.0.1:1/USER"), ("sundb", "jdbc:sundb://127.0.0.1:1/test"), ("oscar", "jdbc:oscar://127.0.0.1:1/OSRDB")] {
 -        let v = vendor(kind).unwrap(); let mut req = request(kind);
 -        assert_eq!(connection_url(&req, &v, &[]).unwrap(), expected);
 -        assert!(v.jar.url.starts_with("https://raw.githubusercontent.com/GaoHu1997/Navkit-drivers/main/"));
--        assert!(v.limits.contains("dbx 的固定提交 71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a")); assert!(v.pom.is_none() && v.license.is_none());
+-        assert!(v.limits.contains("参考实现 的固定提交 71ce03490dad3c9c3eaaa3bd62863b9a6fcdbb9a")); assert!(v.pom.is_none() && v.license.is_none());
 -        for bad in ["ssl=true", "tls=true", "sslmode=verify-full", "sslmode=prefer", "ssl_verify=false", "schema=ignored", "catalog=ignored"] {
 -            req.params = bad.into();
 -            assert!(params(&v, &req).and_then(|pairs| connection_url(&req, &v, &pairs.unwrap())).is_err(), "{kind}: {bad}");
@@ -51451,11 +51451,11 @@ index 1464dff..0000000
 -    assert_ne!(vendor("cache").unwrap().class, vendor("iris").unwrap().class);
 -}
 -#[tokio::test]
--#[ignore="fixed dbx original JARs, Java11/17 and actual HTTPS downloads; isolated copied executable only"]
--async fn original_dbx_packages_default_routes_and_full_downloads() {
+-#[ignore="fixed 参考实现 original JARs, Java11/17 and actual HTTPS downloads; isolated copied executable only"]
+-async fn original_参考实现_packages_default_routes_and_full_downloads() {
 -    let portable = crate::storage::portable_root();
 -    assert!(portable.starts_with(std::env::temp_dir()) && portable.file_name().unwrap().to_string_lossy().starts_with("navkit-jdbc-command-tests-"));
--    let root = PathBuf::from(std::env::var_os("NAVKIT_DBX_DRIVER_ROOT").expect("pinned dbx original driver root"));
+-    let root = PathBuf::from(std::env::var_os("NAVKIT_参考实现_DRIVER_ROOT").expect("pinned 参考实现 original driver root"));
 -    assert!(std::net::TcpStream::connect_timeout(&"127.0.0.1:1".parse().unwrap(), Duration::from_millis(250)).is_err());
 -    for (kind, original) in [("cache", "cache/libs/CacheDB.jar"), ("sundb", "sundb/libs/sundb8-1.0.2.jar"), ("oscar", "oscar/libs/oscarJDBC8.jar")] {
 -        let v = vendor(kind).unwrap(); let dir = package_dir_for(&v); fs::create_dir_all(&dir).unwrap();
@@ -51463,7 +51463,7 @@ index 1464dff..0000000
 -        let jar = dir.join("driver.jar"); fs::copy(&source, &jar).unwrap();
 -        fs::write(dir.join("manifest.json"), serde_json::to_vec(&Manifest { format:1, kind:v.kind.into(), version:v.version.into(), class:v.class.into() }).unwrap()).unwrap();
 -        let ready = status_at(&v, &dir, kind); assert_eq!(ready.status, "ready", "{kind}: {}", ready.message);
--        assert!(ready.message.contains("dbx 的固定提交")); assert!(!ready.message.contains("官方完整 JDBC 包"));
+-        assert!(ready.message.contains("参考实现 的固定提交")); assert!(!ready.message.contains("官方完整 JDBC 包"));
 -        assert_eq!(std::env::split_paths(&classpath_for(&jar).unwrap()).collect::<Vec<_>>(), [jar.clone()]);
 -        let saved = fs::read(&jar).unwrap(); fs::remove_file(&jar).unwrap();
 -        assert!(verify_package(&dir, &v).is_err()); assert!(classpath_for(&jar).is_err());
@@ -51478,9 +51478,9 @@ index 1464dff..0000000
 -        for bad in ["NoClassDefFoundError", "ClassNotFoundException", "sidecar 已退出", &req.password] { assert!(!error.contains(bad), "{kind}: {error}"); }
 -        let downloaded = download(kind, Some(v.version)).await.expect("complete fixed-commit original HTTPS download");
 -        assert_eq!(downloaded.status, "ready", "{kind}: {}", downloaded.message);
--        assert!(downloaded.message.contains("dbx 的固定提交")); assert!(!downloaded.can_download);
+-        assert!(downloaded.message.contains("参考实现 的固定提交")); assert!(!downloaded.can_download);
 -        assert_eq!(verify_package(&dir, &v).unwrap(), jar); assert_eq!(digest_file(&source).unwrap(), v.jar.sha256);
--        println!("{kind}: original DBX package/integrity/Java/default route/full HTTPS download PASS; vendor SQL/auth/TLS UNVERIFIED");
+-        println!("{kind}: original 参考实现 package/integrity/Java/default route/full HTTPS download PASS; vendor SQL/auth/TLS UNVERIFIED");
 -    }
 -}
 diff --git a/src-tauri/src/managed_jdbc.rs b/src-tauri/src/managed_jdbc.rs
@@ -51490,8 +51490,8 @@ index 8c9cc9e..94aa02d 100644
 @@ -1,1797 +1,1797 @@
 -//! Fixed, product-specific original JDBC packages with explicit provenance. No JAR is bundled in NavKit.
 -//!
--//! 参考 dbx（https://github.com/t8y2/dbx）的分层支持策略：协议兼容数据库走原生驱动、
--//! 其余数据库走具体产品 JDBC。每个产品只允许固定的 Maven/厂商或明确标源的 dbx 原始制品
+-//! 参考实现（https://github.com/t8y2/参考实现）的分层支持策略：协议兼容数据库走原生驱动、
+-//! 其余数据库走具体产品 JDBC。每个产品只允许固定的 Maven/厂商或明确标源的 参考实现 原始制品
 -//! （现经由自有镜像仓库 GaoHu1997/Navkit-drivers 字节级托管；jar/zip/pom 的
 -//! 大小/SHA-256/条目数/展开大小全部固定），所有 URL 拼写均经真实驱动 `acceptsURL`/
 -//! `getPropertyInfo`/死端口连接验证；不会被验证支持的 TLS 形态一律显式拒绝而不是静默明文。
@@ -51505,8 +51505,8 @@ index 8c9cc9e..94aa02d 100644
 -mod vendor_assets;
 -#[path = "managed_spanner.rs"]
 -mod spanner;
--#[path = "managed_dbx.rs"]
--mod dbx;
+-#[path = "managed_参考实现.rs"]
+-mod 参考实现;
 -use crate::{
 -    driver_manager::{DriverResolution, OdbcInventory, PARAMS_PREFIX},
 -    models::ConnectionRequest,
@@ -51733,7 +51733,7 @@ index 8c9cc9e..94aa02d 100644
 -            limits: "官方 Google BigQuery JDBC 1.9.0 完整 all JAR（原包包含运行依赖与许可），需 Java 11+。数据库填 project 或 project/dataset，用户名 token、密码填写预生成 OAuth 访问令牌，令牌只走 stdin Properties，不进入 URL。默认固定 Google HTTPS；OAuth 刷新、服务账户、ADC、任意端点扩展请用自定义 JDBC。离线加载/真实闭回环查询失败已验证，Google 账户权限、云端查询与 TLS 握手仍 UNVERIFIED。",
 -        }),
 -        "spanner" => Some(spanner::vendor()),
--        _ => vendor_assets::vendor(kind).or_else(|| dbx::vendor(kind)),
+-        _ => vendor_assets::vendor(kind).or_else(|| 参考实现::vendor(kind)),
 -    }
 -}
 -pub fn supports(kind: &str) -> bool {
@@ -52313,7 +52313,7 @@ index 8c9cc9e..94aa02d 100644
 -        "bigquery" => bigquery_url(req, pairs),
 -        "spanner" => spanner::connection_url(req, pairs),
 -        "gbase" | "inceptor" | "argodb" => vendor_assets::connection_url(req, v.kind, pairs),
--        "cache" | "sundb" | "oscar" => dbx::connection_url(req, v.kind, pairs),
+-        "cache" | "sundb" | "oscar" => 参考实现::connection_url(req, v.kind, pairs),
 -        _ => trino_presto_url(req, v, pairs),
 -    }
 -}
@@ -52778,8 +52778,8 @@ index 8c9cc9e..94aa02d 100644
 -#[path = "managed_spanner_tests.rs"]
 -mod spanner_tests;
 -#[cfg(test)]
--#[path = "managed_dbx_tests.rs"]
--mod dbx_tests;
+-#[path = "managed_参考实现_tests.rs"]
+-mod 参考实现_tests;
 -#[cfg(test)]
 -#[path = "managed_argodb_tests.rs"]
 -mod argodb_tests;
@@ -66434,7 +66434,7 @@ index 85382c0..9e61f8c 100644
 -fn odbc_target_dialect(kind: &DbKind) -> &'static str {
 -    if ODBC_UPPERCASE_KINDS.contains(&kind.id()) { "oracle" } else { "ansi" }
 -}
--/// JDBC-like canonical type mapping inspired by dbswitch's reader/type/writer split.
+-/// JDBC-like canonical type mapping inspired by navkit's reader/type/writer split.
 -/// Never copy a source vendor's DDL type string directly into another vendor's CREATE.
 -pub fn map_type(source: &str, target: &DbKind) -> String {
 -    let s = source.to_ascii_uppercase();
@@ -67448,7 +67448,7 @@ index 85382c0..9e61f8c 100644
 +fn odbc_target_dialect(kind: &DbKind) -> &'static str {
 +    if ODBC_UPPERCASE_KINDS.contains(&kind.id()) { "oracle" } else { "ansi" }
 +}
-+/// JDBC-like canonical type mapping inspired by dbswitch's reader/type/writer split.
++/// JDBC-like canonical type mapping inspired by navkit's reader/type/writer split.
 +/// Never copy a source vendor's DDL type string directly into another vendor's CREATE.
 +pub fn map_type(source: &str, target: &DbKind) -> String {
 +    let s = source.to_ascii_uppercase();
@@ -83830,7 +83830,7 @@ index 34ca7a3..88cbad7 100644
 -  { id: "jdbcx", label: "JDBCX", port: 0, category: "relational", protocol: "odbc", driver: "", note: "通用 JDBC 桥接数据源：通过 ODBC DSN / 连接串接入，请在参数中填写完整 ODBC 连接串。", planned: false },
 -  { id: "spanner", label: "Cloud Spanner", port: 443, category: "relational", protocol: "odbc", driver: "", note: "可直接下载官方 Google Spanner 2.47.0 完整 JDBC 包（Java 11+）；默认 spanner.googleapis.com:443、数据库填 project/instance/database、用户名 token、密码填预生成 OAuth 令牌。无凭据本地模拟器须显式回环地址与 ssl=false；驱动就绪不代表 Google 云端 SQL/TLS 已验收。", planned: false },
 -  { id: "iris", label: "IRIS", port: 1972, category: "relational", protocol: "odbc", driver: "InterSystems IRIS ODBC", note: "可直接下载官方 IRIS JDBC 3.11.0（原签名完整保留，需 Java 11+）；数据库名填 namespace，默认 USER；也保留已安装 IRIS ODBC。IRIS 驱动不代替 Caché。", planned: false },
--  { id: "cache", label: "InterSystems Caché", port: 1972, category: "relational", protocol: "odbc", driver: "InterSystems ODBC", note: "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。", planned: false },
+-  { id: "cache", label: "InterSystems Caché", port: 1972, category: "relational", protocol: "odbc", driver: "InterSystems ODBC", note: "可直接下载自有镜像（Navkit-drivers）的 Caché 原 JDBC 2010.2.3.702（原件来自参考项目 固定提交，第三方来源，非厂商官网；保留原包许可，需 Java 11+）。普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装 Caché ODBC。", planned: false },
 -  { id: "custom_mysql", label: "Custom (MySQL)", port: 3306, category: "relational", protocol: "mysql", driver: "", note: "", planned: false },
 -  { id: "dolt", label: "Dolt", port: 3307, category: "relational", protocol: "mysql", driver: "", note: "", planned: false },
 -  { id: "custom_pg", label: "Custom (PostgreSQL)", port: 5432, category: "relational", protocol: "postgres", driver: "", note: "", planned: false },
@@ -83879,8 +83879,8 @@ index 34ca7a3..88cbad7 100644
 -  { id: "dameng", label: "达梦 Dameng", port: 5236, category: "domestic", protocol: "odbc", driver: "DM8 ODBC DRIVER", note: "可直接下载官方达梦 JDBC（DmJdbcDriver18，需 Java 11+）；也可安装达梦自带的 DM8 ODBC DRIVER。", planned: false },
 -  { id: "inceptor", label: "星环 Inceptor", port: 10000, category: "domestic", protocol: "odbc", driver: "Hive ODBC Driver", note: "可直接下载星环官方 Inceptor JDBC 8.37.3 原 JAR（Java 11+，官方公开导航来源）；普通 inceptor2/noSasl 路由已验，Kerberos/HTTP/TLS 等扩展请用自定义 JDBC。不是 Apache Hive standalone 包，也不以此冒充 ArgoDB 实库认证。", planned: false },
 -  { id: "argodb", label: "ArgoDB", port: 10000, category: "domestic", protocol: "odbc", driver: "Hive ODBC Driver", note: "可直接下载星环官方 Quark JDBC 8.37.3 独立完整包（Java 11+）；ArgoDB 文档指定 Quark Gateway 为 SQL 入口。实际 io.transwarp.jdbc.QuarkDriver + jdbc:transwarp2，仅 auth=noSasl 且用户名/密码留空；LDAP/NONE/Kerberos/TLS 扩展请显式配置自定义驱动，厂商实库 SQL/认证未验。", planned: false },
--  { id: "sundb", label: "科蓝 SUNDB", port: 40000, category: "domestic", protocol: "odbc", driver: "SUNDB ODBC Driver", note: "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。", planned: false },
--  { id: "oscar", label: "神通 OSCAR", port: 2003, category: "domestic", protocol: "odbc", driver: "Shentong ODBC Driver", note: "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自参考项目 dbx 固定提交，第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。", planned: false },
+-  { id: "sundb", label: "科蓝 SUNDB", port: 40000, category: "domestic", protocol: "odbc", driver: "SUNDB ODBC Driver", note: "可直接下载自有镜像（Navkit-drivers）的 SUNDB 8-1.0.2 原 JDBC（原件来自参考项目 固定提交，第三方来源，非厂商官网，Java 11+）；普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留已安装科蓝 ODBC。", planned: false },
+-  { id: "oscar", label: "神通 OSCAR", port: 2003, category: "domestic", protocol: "odbc", driver: "Shentong ODBC Driver", note: "可直接下载自有镜像（Navkit-drivers）的 OSCAR JDBC 原 JAR（原件来自参考项目 固定提交，第三方来源，非厂商官网，Java 11+）；保留原包许可/版本，普通 TCP 路由已验，服务器 SQL/认证/TLS 未验；也保留神通 ODBC。", planned: false },
 -  { id: "xugu", label: "虚谷 XuguDB", port: 5138, category: "domestic", protocol: "odbc", driver: "Xugu ODBC Driver", note: "可直接下载官方虚谷 JDBC 12.3.9 与必需 checker-qual 依赖（需 Java 11+）；数据库名默认 SYSTEM，也保留已安装虚谷 ODBC。托管 TLS 参数尚未核验。", planned: false },
 -  { id: "sqlite", label: "SQLite", port: 0, category: "lightweight", protocol: "sqlite", driver: "", note: "", planned: false },
 -  { id: "rqlite", label: "RQLite", port: 4001, category: "lightweight", protocol: "native", driver: "", note: "rqlite原生HTTP SQL /db/request，支持查询与DML；url/ssl/ssl_verify参数", planned: false },
@@ -86949,15 +86949,15 @@ index 3f86838..565fd93 100644
 -  button.dataset.driverKind = kind;
 -  // 角标只放图标：下载=托盘箭头、获取=外链、检查中/下载中=旋转环（卡片角标空间小，文字会挤压）
 -  const mode = busy || !state ? "busy" : state.can_download ? "download" : "manual";
--  const dbxSource = ["cache", "sundb", "oscar"].includes(kind);
+-  const 参考实现Source = ["cache", "sundb", "oscar"].includes(kind);
 -  const hint = busy
 -    ? state?.can_download
--      ? dbxSource ? "正在下载并校验自有镜像原件（dbx 固定提交）…" : "正在下载并校验官方驱动…"
+-      ? 参考实现Source ? "正在下载并校验自有镜像原件（参考实现 固定提交）…" : "正在下载并校验官方驱动…"
 -      : "正在检查本地驱动…"
 -    : !state
 -      ? "正在检查当前架构的完整本地驱动…"
 -      : state.can_download
--        ? dbxSource ? "下载驱动：从自有镜像 Navkit-drivers 下载原件并校验完整性（原件来自 dbx 固定提交）" : "下载驱动：从官方源直接下载并校验完整性"
+-        ? 参考实现Source ? "下载驱动：从自有镜像 Navkit-drivers 下载原件并校验完整性（原件来自 参考实现 固定提交）" : "下载驱动：从官方源直接下载并校验完整性"
 -        : `获取驱动：无法自动下载（${state.message || "受授权或平台限制"}），需按官方渠道手动获取`;
 -  button.dataset.mode = mode;
 -  button.innerHTML = svg(
@@ -108887,18 +108887,18 @@ index 4306533..0000000
 -for (const where of ["label", "icon", "blank"]) out.push(await one(browser, "localhost", where));
 -console.log(JSON.stringify(out, null, 2));
 -await browser.close();
-diff --git a/tools/fetch_dbx_logos.py b/tools/fetch_dbx_logos.py
+diff --git a/tools/fetch_参考实现_logos.py b/tools/fetch_参考实现_logos.py
 deleted file mode 100644
 index 56fddcc..0000000
---- a/tools/fetch_dbx_logos.py
+--- a/tools/fetch_参考实现_logos.py
 +++ /dev/null
 @@ -1,96 +0,0 @@
 -# -*- coding: utf-8 -*-
--"""全部数据源 logo 统一取自 t8y2/dbx（apps/desktop/public/icons/database/）。
+-"""全部数据源 logo 统一取自 t8y2/参考实现（apps/desktop/public/icons/database/）。
 -
--映射依据 dbx 的 DatabaseIcon.vue 资源表（含别名：cache->iris、argo->hive、
--dameng->dm、inceptor->transwarp-inceptor.png 等）。dbx 缺失的 kind（druid / odbc）
--保留既有素材。用法：python tools/fetch_dbx_logos.py
+-映射依据 参考实现 的 DatabaseIcon.vue 资源表（含别名：cache->iris、argo->hive、
+-dameng->dm、inceptor->transwarp-inceptor.png 等）。参考实现 缺失的 kind（druid / odbc）
+-保留既有素材。用法：python tools/fetch_参考实现_logos.py
 -"""
 -import io
 -import os
@@ -108907,7 +108907,7 @@ index 56fddcc..0000000
 -
 -ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 -OUT = os.path.join(ROOT, "tools", "db_art")
--BASE = "https://raw.githubusercontent.com/t8y2/dbx/main/apps/desktop/public/icons/database/%s"
+-BASE = "https://raw.githubusercontent.com/t8y2/参考实现/main/apps/desktop/public/icons/database/%s"
 -
 -ctx = ssl.create_default_context()
 -ctx.check_hostname = False
@@ -108923,7 +108923,7 @@ index 56fddcc..0000000
 -        return None
 -
 -
--# kind -> dbx 资源名（DatabaseIcon.vue 映射；无扩展名按 .svg/.png/.webp 探测）
+-# kind -> 参考实现 资源名（DatabaseIcon.vue 映射；无扩展名按 .svg/.png/.webp 探测）
 -MAP = {
 -    "mysql": "mysql", "postgresql": "postgres", "sqlserver": "sqlserver",
 -    "oracle": "oracle", "mariadb": "mariadb", "firebird": "firebird",
@@ -108960,7 +108960,7 @@ index 56fddcc..0000000
 -    "consul": "consul", "zookeeper": "zookeeper", "etcd": "etcd",
 -}
 -
--KEEP = ("off_druid.svg",)  # dbx 无此 kind，保留既有官方素材
+-KEEP = ("off_druid.svg",)  # 参考实现 无此 kind，保留既有官方素材
 -
 -
 -def main():
@@ -108982,7 +108982,7 @@ index 56fddcc..0000000
 -        if not got:
 -            miss.append(kind)
 -            print("MISS", kind, asset, flush=True)
--    print("\n== dbx 素材：%d 成功，%d 缺失 ==" % (len(ok := [k for k in MAP if k not in miss]), len(miss)))
+-    print("\n== 参考实现 素材：%d 成功，%d 缺失 ==" % (len(ok := [k for k in MAP if k not in miss]), len(miss)))
 -    if miss:
 -        print("缺失：", ", ".join(miss))
 -
@@ -113391,7 +113391,7 @@ index 49221b8..440a369 100644
 -      mock["plugin:event|unlisten"] = () => null;
 -      mock.completion_data = () => ({
 -        __tables__: ["users", "orders", "active_users"],
--        __views__: ["active_users"], __schemas__: ["dbswitch"],
+-        __views__: ["active_users"], __schemas__: ["navkit"],
 -        users: ["id", "display_name"], orders: ["id", "user_id", "amount"],
 -        active_users: ["id", "display_name"],
 -      });
@@ -113414,7 +113414,7 @@ index 49221b8..440a369 100644
 -  ok("顶部顺序与隐藏入口");
 -  assert.equal(await page.locator('.ribbon-btn[aria-label="连接"] .ribbon-drop').count(), 0);
 -  ok("连接无展开标识");
--  await page.evaluate(() => window.__APP__.openQueryTab("c1", "", "dbswitch"));
+-  await page.evaluate(() => window.__APP__.openQueryTab("c1", "", "navkit"));
 -  await page.waitForSelector(".sql-editor .cm-content");
 -  await page.waitForFunction(() => window.__APP__.activeView().completionLoaded);
 -  assert.equal(await page.locator('.tab-toolbar [title="文本"]').count(), 0);
@@ -113516,10 +113516,10 @@ index 49221b8..440a369 100644
 +      mock["plugin:event|unlisten"] = () => null;
 +      mock.completion_data = () => ({
 +        __tables__: ["users", "orders", "active_users"],
-+        __views__: ["active_users"], __schemas__: ["dbswitch"],
++        __views__: ["active_users"], __schemas__: ["navkit"],
 +        users: ["id", "display_name"], orders: ["id", "user_id", "amount"],
 +        __meta__: {
-+          version: 2, schema: "dbswitch",
++          version: 2, schema: "navkit",
 +          relations: { users: { kind: "table", comment: "用户基础信息", columns_known: true } },
 +          columns: { users: { id: { type: "INTEGER", comment: "用户编号" }, display_name: { type: "TEXT", comment: null } } },
 +        },
@@ -113543,7 +113543,7 @@ index 49221b8..440a369 100644
 +  ok("顶部顺序与隐藏入口");
 +  assert.equal(await page.locator('.ribbon-btn[aria-label="连接"] .ribbon-drop').count(), 0);
 +  ok("连接无展开标识");
-+  await page.evaluate(() => window.__APP__.openQueryTab("c1", "", "dbswitch"));
++  await page.evaluate(() => window.__APP__.openQueryTab("c1", "", "navkit"));
 +  await page.waitForSelector(".sql-editor .cm-content");
 +  await page.waitForFunction(() => window.__APP__.activeView().completionLoaded);
 +  assert.equal(await page.locator('.tab-toolbar [title="文本"]').count(), 0);

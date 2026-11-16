@@ -126,7 +126,7 @@ interface EditTab {
 
 /**
  * 编辑用户：常规 / 高级 / 成员属于 / 成员 / 服务器权限 / 权限 / SQL 预览，
- * 参考 Navicat 的「编辑用户」对话框；保存时按差量执行 GRANT / REVOKE / ALTER USER。
+ * 参考 通用数据库客户端 的「编辑用户」对话框；保存时按差量执行 GRANT / REVOKE / ALTER USER。
  */
 export function openEditUserDialog(
   connId: string,

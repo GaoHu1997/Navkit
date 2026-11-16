@@ -17,7 +17,7 @@
 - outcome 存在且最终成功后，使用 spool_id 读取当前页，不能把 metadata-only receipt 中的空 rows 当查询无结果。
 - 失败/取消/Unknown 时撤销临时预览，不允许将不完整缓存导出为完整文件。
 - 背景期间暂时禁用缓存翻页/导出与行编辑；成功后保留原执行身份、真实全量行数及只读/编辑证据校验。
-- 查询页面及 mock/IPC/DOM 回归通过，并进行 Windows/Tauri + 专用 MySQL 的真实现场验收。报告分别记录首屏、全量完成、导出时间，核对与 DBX/DBeaver 的服务器、SQL、fetch 行数、冷热缓存与驱动参数是否一致。
+- 查询页面及 mock/IPC/DOM 回归通过，并进行 Windows/Tauri + 专用 MySQL 的真实现场验收。报告分别记录首屏、全量完成、导出时间，核对与 参考实现/DBeaver 的服务器、SQL、fetch 行数、冷热缓存与驱动参数是否一致。
 
 ## 代码触点
 

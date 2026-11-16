@@ -1,11 +1,11 @@
-# NavKit 完整性能优化方案：开源实现与 Navicat 官方行为对照
+# NavKit 完整性能优化方案：开源实现与 通用数据库客户端 官方行为对照
 
 ## 1. 状态、范围与结论
 
 - **状态：active，已按用户授权开工。** 原始研究依据保留；当前实施以真实入口、回归测试和前后对照为准，未经验证的快路径不默认开启。
 - 研究日期：2026-11-13。NavKit 核验基线为当前工作树，HEAD `5d01dae124dbcd618bbfb0f0528dbfae42a5a424`，但存在大量未提交及并行改动；以下行号是本轮读取时的位置，不代表该 commit 的干净版本。
-- 外部依据：已核验 GitHub/Gitee 的固定 commit 原始文件，实际阅读实现与失败分支；Navicat 只引用 17 Windows 官方手册的公开行为，不推测闭源算法。没有用搜索摘要、项目名气或 README 宣称替代源码；未运行上游基准。
-- 本次扩展按用户指定的 dbswitch、SmartSQL、dbx 仓库研究，不以同名项目替代。`dbs` 未提供可确定身份的地址，列为待补证，不计入证据或影响本版结论。
+- 外部依据：已核验 GitHub/Gitee 的固定 commit 原始文件，实际阅读实现与失败分支；通用数据库客户端 只引用 17 Windows 官方手册的公开行为，不推测闭源算法。没有用搜索摘要、项目名气或 README 宣称替代源码；未运行上游基准。
+- 本次扩展按用户指定的 navkit、参考模板、参考实现 仓库研究，不以同名项目替代。`dbs` 未提供可确定身份的地址，列为待补证，不计入证据或影响本版结论。
 - **研究阶段不承诺倍数收益；实现阶段已有隔离 SQLite 回归与 A/B。** 当前实测仅适用于记录的工作树、数据库、数据与事务语义，不外推到其他协议。初版磁盘差异比较已测得负收益，正在通过有界内存和批量溢写纠正；完整范围尚未完成。
 - 范围：数据同步、数据导入、数据导出、大数据量生成、数据库备份/还原、运行 SQL 文件、SQL 转储，以及这些实际入口的端到端验证。
 - 非目标：重写所有驱动、开放任意 SQL 并行执行、默认改变事务/错误策略、实现通用断点续传、用降低持久性或删校验换吞吐。实现仅改本方案涉及代码及测试，不回退或覆盖用户已有其他改动；未通过验证的能力不得标为完成。
@@ -23,10 +23,10 @@
 | [mydumper / myloader](https://github.com/mydumper/mydumper/tree/8b47d633cd97b0e09700ae2a275fdfc66d8f6c4b) | `8b47d633cd97b0e09700ae2a275fdfc66d8f6c4b` | 看快照协调、分片调节、按字节组 SQL 和事务断线处理 |
 | [PostgreSQL](https://github.com/postgres/postgres/tree/3d6a828938a5fa0444275d3d2f67b64ec3199eb7) | REL_18_0，`3d6a828938a5fa0444275d3d2f67b64ec3199eb7` | 直接看 pg_dump / psql 的读取、快照、COPY 协议和 SQL 扫描 |
 | [sysbench](https://github.com/akopytov/sysbench/tree/3ceba0b1e115f8c50d1d045a4574d8ed643bd497) | `3ceba0b1e115f8c50d1d045a4574d8ed643bd497` | 看大数据准备阶段逐行生成、批包写入，不在前端积累全部数据 |
-| [dbx](https://github.com/t8y2/dbx/tree/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0) | `62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0` | 与 NavKit 同类桌面数据库工具；验证分块生成、SQL 组包、有界队列和阻塞隔离 |
-| [SmartSQL（指定 Gitee 项目）](https://gitee.com/dotnetchina/SmartSQL/tree/c354096c04c618fe1f05f0a5350e5d7583e51178) | `c354096c04c618fe1f05f0a5350e5d7583e51178` | 数据库文档/元数据/查询桌面工具，**不是同名 SmartSql ORM**；看本地 prepared 复用、模板和后台导出，不当作七链路吞吐标杆 |
-| [dbswitch（指定 Gitee 分支）](https://gitee.com/cbynd/dbswitch/tree/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce) | `555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce`，POM 1.6.10 | 用户指定的 fork，核验实际同步/批写路径，不用上游新版本代替 |
-| [Navicat 17 Windows 手册](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/data_migration.html) | 2026-11-13 读取的版本 17 官方手册 | **闭源行为证据**：extended INSERT、最大语句、事务与执行选项；不提供内部队列、快照或并行实现的证明 |
+| [参考实现](https://github.com/t8y2/参考实现/tree/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0) | `62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0` | 与 NavKit 同类桌面数据库工具；验证分块生成、SQL 组包、有界队列和阻塞隔离 |
+| [参考模板（指定 Gitee 项目）](https://gitee.com/dotnetchina/参考模板/tree/c354096c04c618fe1f05f0a5350e5d7583e51178) | `c354096c04c618fe1f05f0a5350e5d7583e51178` | 数据库文档/元数据/查询桌面工具，**不是同名 参考模板 ORM**；看本地 prepared 复用、模板和后台导出，不当作七链路吞吐标杆 |
+| [navkit（指定 Gitee 分支）](https://gitee.com/cbynd/navkit/tree/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce) | `555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce`，POM 1.6.10 | 用户指定的 fork，核验实际同步/批写路径，不用上游新版本代替 |
+| [通用数据库客户端 17 Windows 手册](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/data_migration.html) | 2026-11-13 读取的版本 17 官方手册 | **闭源行为证据**：extended INSERT、最大语句、事务与执行选项；不提供内部队列、快照或并行实现的证明 |
 
 ### 2.2 具体实现与不能照搬的地方
 
@@ -67,39 +67,39 @@
 - [随机状态：214–239](https://github.com/akopytov/sysbench/blob/3ceba0b1e115f8c50d1d045a4574d8ed643bd497/src/sb_rand.c#L214-L239) 是线程初始化 RNG，**没有为 NavKit 提供与分块/调度无关的逐行确定性保证**。
 - **不照搬：** 自建基准表后建二级索引的流程、事务能力假设、超大行边界处理。NavKit 面向已有表，不能擅自删索引、延迟约束或关闭触发器。
 
-**E6 — dbx：与本项目接近的分块/调度案例，但软阈值不是硬内存界。**
+**E6 — 参考实现：与本项目接近的分块/调度案例，但软阈值不是硬内存界。**
 
-- [生成执行循环：161–245](https://github.com/t8y2/dbx/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/apps/desktop/src/composables/useDataGenerateSession.ts#L161-L245) 在前端按块生成、组装 SQL、按字节拆分并等待执行，再让出事件循环；不是一次构造全部目标行。`useTransaction` 随每次调用传入，不能声称整个生成任务共用同一事务；按行生成后才做字节拆分，也不能证明生成瞬间的硬内存限制。NavKit 借其分块思想，但采用后端 recipe，避免长期让 WebView 承担生成与 SQL 转义。
-- [JSON 两遍读取：2479–2551](https://github.com/t8y2/dbx/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/dbx-core/src/data/table_import.rs#L2479-L2551) 先扫描列集合/计数，后重新打开逐行发送到容量 2 的通道。证明可不持有全部行，但额外一遍 I/O、列集合/单行预算、两遍之间源变化必须单独处理；不是所有格式都应无条件预扫两遍。
-- [SQL 批次策略：2391–2432](https://github.com/t8y2/dbx/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/dbx-core/src/data/sql_file_import.rs#L2391-L2432) 在手动事务模式保留逐句执行边界；其他合并/失败逐条恢复不能套用 NavKit 的 Unknown/禁止重放约束。它的批字节目标允许额外一个大语句，不能把配置的 8 MiB 当实际 RSS 上限。
-- [SQL assembler：1979–2118](https://github.com/t8y2/dbx/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/dbx-core/src/data/database_export.rs#L1979-L2118) 复用前缀，区分 identity 与方言，并按行数/语句字节 flush；SQL Server 字节计算使用 UTF-16。超大首行仍能进入语句，且此函数返回本次 `Vec<String>`，不证明整个调用链严格有界。NavKit 要增加单行硬限，并直接向现有 sink 刷写。
-- [导出调度：16–19、52–87](https://github.com/t8y2/dbx/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/dbx-core/src/data/export_runtime.rs#L16-L87) 把带同步格式化/写文件的工作放入 blocking worker；有模拟阻塞不饿死异步 worker 的测试代码，**本轮仅读，未运行**。借鉴隔离机制，不借无限扩张线程；须限制并发、资源所有权和取消后的 join。
+- [生成执行循环：161–245](https://github.com/t8y2/参考实现/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/apps/desktop/src/composables/useDataGenerateSession.ts#L161-L245) 在前端按块生成、组装 SQL、按字节拆分并等待执行，再让出事件循环；不是一次构造全部目标行。`useTransaction` 随每次调用传入，不能声称整个生成任务共用同一事务；按行生成后才做字节拆分，也不能证明生成瞬间的硬内存限制。NavKit 借其分块思想，但采用后端 recipe，避免长期让 WebView 承担生成与 SQL 转义。
+- [JSON 两遍读取：2479–2551](https://github.com/t8y2/参考实现/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/参考实现-core/src/data/table_import.rs#L2479-L2551) 先扫描列集合/计数，后重新打开逐行发送到容量 2 的通道。证明可不持有全部行，但额外一遍 I/O、列集合/单行预算、两遍之间源变化必须单独处理；不是所有格式都应无条件预扫两遍。
+- [SQL 批次策略：2391–2432](https://github.com/t8y2/参考实现/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/参考实现-core/src/data/sql_file_import.rs#L2391-L2432) 在手动事务模式保留逐句执行边界；其他合并/失败逐条恢复不能套用 NavKit 的 Unknown/禁止重放约束。它的批字节目标允许额外一个大语句，不能把配置的 8 MiB 当实际 RSS 上限。
+- [SQL assembler：1979–2118](https://github.com/t8y2/参考实现/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/参考实现-core/src/data/database_export.rs#L1979-L2118) 复用前缀，区分 identity 与方言，并按行数/语句字节 flush；SQL Server 字节计算使用 UTF-16。超大首行仍能进入语句，且此函数返回本次 `Vec<String>`，不证明整个调用链严格有界。NavKit 要增加单行硬限，并直接向现有 sink 刷写。
+- [导出调度：16–19、52–87](https://github.com/t8y2/参考实现/blob/62e3e9e4ba38c4a2b4164bb6e263c4fc84e245d0/crates/参考实现-core/src/data/export_runtime.rs#L16-L87) 把带同步格式化/写文件的工作放入 blocking worker；有模拟阻塞不饿死异步 worker 的测试代码，**本轮仅读，未运行**。借鉴隔离机制，不借无限扩张线程；须限制并发、资源所有权和取消后的 join。
 
-**E7 — Navicat：参考“显式选项和边界”，不把官方说明当源码。**
+**E7 — 通用数据库客户端：参考“显式选项和边界”，不把官方说明当源码。**
 
-- [数据传输高级选项](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/data_transfer_1.html) 明确提供 extended INSERT、maximum statement size、use transaction、use single transaction、源/目标锁等选项，且选项随数据库类型变化。最大语句值针对 extended INSERT，单行超出时使用普通 INSERT，**不是普通单行无限安全**。这支持 NavKit 将组包、事务、快照/锁分别建模，而不是混为“高速开关”。
-- [导入模式](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/import_wizard_7.html) 公开 extended INSERT/最大语句/一次多查询，也列有忽略外键和遇错继续。只借前者的受控策略选择；后两者会改变正确性，不成为本方案默认提速手段。官方未给内部实现和可比基准，不推导它一定比 NavKit 快多少。
-- [执行 SQL 文件](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/dump_execute_sql.html) 暴露一次执行多条、关闭自动提交、遇错继续等选项；这是产品行为证据，**不能证明任意 SQL 合并仍语义等价或失败后可安全重放**。NavKit 的普通模式保持顺序与原始事务，特殊快模式必须先建立另一份明确契约。
-- [生成配置](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/data_generate_2.html) 允许每表指定数据量、列生成规则及唯一/NULL 等配置，但明确说明生成顺序不自动考虑依赖，需手动调整。可借配方与总量独立表达；不能据此声称自动 FK 拓扑、多线程、百万行性能或常量内存。
-- [同步映射](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/data_sync_2.html) 与[差异查看](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/data_sync_3.html) 分离键/字段映射、比较预览和部署。NavKit 的分页差异报告参考这一契约；官方页面没有披露 hash、排序归并或 CDC 算法，不能从 UI 推断实现。
-- [备份入口](https://www.navicat.com/manual/online_manual/en/navicat_17/win_manual/backup_restore.html) 明确区分内建备份、Oracle Data Pump、SQL Server Backup、MongoDump；借鉴“逻辑 SQL 转储”和“原生备份”的能力区分，不把一种文件包装成所有数据库原生备份。
+- [数据传输高级选项](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/data_transfer_1.html) 明确提供 extended INSERT、maximum statement size、use transaction、use single transaction、源/目标锁等选项，且选项随数据库类型变化。最大语句值针对 extended INSERT，单行超出时使用普通 INSERT，**不是普通单行无限安全**。这支持 NavKit 将组包、事务、快照/锁分别建模，而不是混为“高速开关”。
+- [导入模式](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/import_wizard_7.html) 公开 extended INSERT/最大语句/一次多查询，也列有忽略外键和遇错继续。只借前者的受控策略选择；后两者会改变正确性，不成为本方案默认提速手段。官方未给内部实现和可比基准，不推导它一定比 NavKit 快多少。
+- [执行 SQL 文件](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/dump_execute_sql.html) 暴露一次执行多条、关闭自动提交、遇错继续等选项；这是产品行为证据，**不能证明任意 SQL 合并仍语义等价或失败后可安全重放**。NavKit 的普通模式保持顺序与原始事务，特殊快模式必须先建立另一份明确契约。
+- [生成配置](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/data_generate_2.html) 允许每表指定数据量、列生成规则及唯一/NULL 等配置，但明确说明生成顺序不自动考虑依赖，需手动调整。可借配方与总量独立表达；不能据此声称自动 FK 拓扑、多线程、百万行性能或常量内存。
+- [同步映射](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/data_sync_2.html) 与[差异查看](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/data_sync_3.html) 分离键/字段映射、比较预览和部署。NavKit 的分页差异报告参考这一契约；官方页面没有披露 hash、排序归并或 CDC 算法，不能从 UI 推断实现。
+- [备份入口](https://www.navkit.com/manual/online_manual/en/navkit_17/win_manual/backup_restore.html) 明确区分内建备份、Oracle Data Pump、SQL Server Backup、MongoDump；借鉴“逻辑 SQL 转储”和“原生备份”的能力区分，不把一种文件包装成所有数据库原生备份。
 
-**E8 — SmartSQL：只借已证明的局部机制，不借同名 ORM 的光环。**
+**E8 — 参考模板：只借已证明的局部机制，不借同名 ORM 的光环。**
 
-- [本地 SQLite 事务批：1445–1485](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL.Framework/SQLite.cs#L1445-L1485) 是事务里 `foreach Insert`，不是多值 SQL；[连接内 prepared cache：1723–1774](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL.Framework/SQLite.cs#L1723-L1774) 和[绑定/Step/Reset：3181–3223](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL.Framework/SQLite.cs#L3181-L3223) 证明本地存储的语句复用。不能扩大为远程导入已批量化；缓存也未在此层证明 DDL 版本失效和 LRU，NavKit 不照抄字典。
-- [模板：31–85](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL.DocUtils/RazorEngine/RazorTpl.cs#L31-L85) 将模板内容哈希作为编译键，但 FileInfo 版本仍每次读文件，包装层未证明旧键淘汰。这是模板编译缓存，不是元数据/数据库计划缓存；本计划只将规则编译缓存列为 profiling 后候选，不无端引入第二套模板引擎。
-- [后台文档导出：985–1053](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL/Views/ExportDoc.xaml.cs#L985-L1053) 分离 DTO、生成器和后台工作，但仍会累计对象/列集合，进度回调还有 `Thread.Sleep(50)`。NavKit 借职责拆分/后台隔离，不借全量 DTO 或人为睡眠；后台运行不等于更少内存、更高吞吐。
-- [查询执行：480–523](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL/UserControl/SqlQuery/UcSqlQueryMain.xaml.cs#L480-L523) 取解析列表最后一条 SQL 执行；[备注导入：92–161](https://gitee.com/dotnetchina/SmartSQL/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/SmartSQL/SmartSQL/Views/ImportMark.xaml.cs#L92-L161) 是 XML 备注的逐项写入，不是数据行导入。二者都不能作为 NavKit 任意脚本执行、原子还原或大数据生成的范例。
+- [本地 SQLite 事务批：1445–1485](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板.Framework/SQLite.cs#L1445-L1485) 是事务里 `foreach Insert`，不是多值 SQL；[连接内 prepared cache：1723–1774](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板.Framework/SQLite.cs#L1723-L1774) 和[绑定/Step/Reset：3181–3223](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板.Framework/SQLite.cs#L3181-L3223) 证明本地存储的语句复用。不能扩大为远程导入已批量化；缓存也未在此层证明 DDL 版本失效和 LRU，NavKit 不照抄字典。
+- [模板：31–85](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板.DocUtils/RazorEngine/RazorTpl.cs#L31-L85) 将模板内容哈希作为编译键，但 FileInfo 版本仍每次读文件，包装层未证明旧键淘汰。这是模板编译缓存，不是元数据/数据库计划缓存；本计划只将规则编译缓存列为 profiling 后候选，不无端引入第二套模板引擎。
+- [后台文档导出：985–1053](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板/Views/ExportDoc.xaml.cs#L985-L1053) 分离 DTO、生成器和后台工作，但仍会累计对象/列集合，进度回调还有 `Thread.Sleep(50)`。NavKit 借职责拆分/后台隔离，不借全量 DTO 或人为睡眠；后台运行不等于更少内存、更高吞吐。
+- [查询执行：480–523](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板/UserControl/SqlQuery/UcSqlQueryMain.xaml.cs#L480-L523) 取解析列表最后一条 SQL 执行；[备注导入：92–161](https://gitee.com/dotnetchina/参考模板/blob/c354096c04c618fe1f05f0a5350e5d7583e51178/参考模板/参考模板/Views/ImportMark.xaml.cs#L92-L161) 是 XML 备注的逐项写入，不是数据行导入。二者都不能作为 NavKit 任意脚本执行、原子还原或大数据生成的范例。
 
-**E9 — dbswitch：驱动化流式读取、可选 COPY，以及有严格前提的有序归并。**
+**E9 — navkit：驱动化流式读取、可选 COPY，以及有严格前提的有序归并。**
 
-- [读取连接与游标：66–84](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-dbcommon/src/main/java/com/gitee/dbswitch/dbcommon/database/AbstractDatabaseOperator.java#L66-L84) 显式设置非自动提交、forward-only/read-only 和 fetch size；不同驱动仍须验证实际是否流式。不是 keyset 分页，也不代表所有 JDBC/SQLx 驱动行为相同。
-- [行/字节缓存：301–339](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-data/src/main/java/com/gitee/dbswitch/data/handler/MigrationHandler.java#L301-L339) 先加入行再估计对象大小，达到行数或 128 MiB 软阈值同步写出；[增量缓存：399–450](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-data/src/main/java/com/gitee/dbswitch/data/handler/MigrationHandler.java#L399-L450) 合计增删改缓存后刷写。不是全局字节背压，超大行、编码副本与多表并发可放大内存，不能把 128 MiB 抄成 NavKit 默认值。
-- [PG 二进制 COPY：52–142](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-pgwriter/src/main/java/com/gitee/dbswitch/pgwriter/row/SimpleRowWriter.java#L52-L142) 使用 `COPY FROM STDIN BINARY`、PGCopyOutputStream 与逐行编码，支持将 COPY 独立为 writer 能力。已追调用链会为上游批新建连接，并有移除 NUL 的处理；本方案**不复制静默改值，也不把资源 close 当成确认 COPY 取消/事务回滚**。
-- [有序归并：199–217、282–338](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-dbchange/src/main/java/com/gitee/dbswitch/dbchange/ChangeCalculatorService.java#L199-L338) 对两端按主键排序，保留当前行、比较后推进游标，输出新增/删除/变更。归并扫描步数为 O(N+M)，但排序、每列比较、驱动缓冲、写批成本另计；这是全量比较计算增量，**不是日志 CDC**。
-- [比较器风险：439–480](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-dbchange/src/main/java/com/gitee/dbswitch/dbchange/ChangeCalculatorService.java#L439-L480) 字符串按 Java 比较，相关数值走 double，部分转换失败返回相等。数据库排序与客户端比较是否同序未获证明。NavKit 必须精确保留 decimal、NULL、二进制和 collation；不关闭类型检查、不用“异常=相等”，不删除现有 typed spill/CAS/MAC/读回。
-- [批写事务：179–202](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-dbsynch/src/main/java/com/gitee/dbswitch/dbsynch/AbstractDatabaseSynchronize.java#L179-L202) 按操作执行 batchUpdate 后提交，update/delete 也各有事务；不等于整个同步或增删改共同原子。不能把这种提交范围、仅按 PK 覆盖更新代替 NavKit 的原子承诺与 CAS。
-- [表任务调度：109–169、204–213](https://gitee.com/cbynd/dbswitch/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/dbswitch-data/src/main/java/com/gitee/dbswitch/data/service/MigrationService.java#L109-L213) 为表提交 CompletableFuture，相关调用没有显式 executor；捕获等待线程中断不证明数据库 worker 已停止。NavKit 只借独立表任务分解，不借无全局预算的铺开并发，取消必须落实到连接与资源回收。
+- [读取连接与游标：66–84](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-dbcommon/src/main/java/com/gitee/navkit/dbcommon/database/AbstractDatabaseOperator.java#L66-L84) 显式设置非自动提交、forward-only/read-only 和 fetch size；不同驱动仍须验证实际是否流式。不是 keyset 分页，也不代表所有 JDBC/SQLx 驱动行为相同。
+- [行/字节缓存：301–339](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-data/src/main/java/com/gitee/navkit/data/handler/MigrationHandler.java#L301-L339) 先加入行再估计对象大小，达到行数或 128 MiB 软阈值同步写出；[增量缓存：399–450](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-data/src/main/java/com/gitee/navkit/data/handler/MigrationHandler.java#L399-L450) 合计增删改缓存后刷写。不是全局字节背压，超大行、编码副本与多表并发可放大内存，不能把 128 MiB 抄成 NavKit 默认值。
+- [PG 二进制 COPY：52–142](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-pgwriter/src/main/java/com/gitee/navkit/pgwriter/row/SimpleRowWriter.java#L52-L142) 使用 `COPY FROM STDIN BINARY`、PGCopyOutputStream 与逐行编码，支持将 COPY 独立为 writer 能力。已追调用链会为上游批新建连接，并有移除 NUL 的处理；本方案**不复制静默改值，也不把资源 close 当成确认 COPY 取消/事务回滚**。
+- [有序归并：199–217、282–338](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-dbchange/src/main/java/com/gitee/navkit/dbchange/ChangeCalculatorService.java#L199-L338) 对两端按主键排序，保留当前行、比较后推进游标，输出新增/删除/变更。归并扫描步数为 O(N+M)，但排序、每列比较、驱动缓冲、写批成本另计；这是全量比较计算增量，**不是日志 CDC**。
+- [比较器风险：439–480](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-dbchange/src/main/java/com/gitee/navkit/dbchange/ChangeCalculatorService.java#L439-L480) 字符串按 Java 比较，相关数值走 double，部分转换失败返回相等。数据库排序与客户端比较是否同序未获证明。NavKit 必须精确保留 decimal、NULL、二进制和 collation；不关闭类型检查、不用“异常=相等”，不删除现有 typed spill/CAS/MAC/读回。
+- [批写事务：179–202](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-dbsynch/src/main/java/com/gitee/navkit/dbsynch/AbstractDatabaseSynchronize.java#L179-L202) 按操作执行 batchUpdate 后提交，update/delete 也各有事务；不等于整个同步或增删改共同原子。不能把这种提交范围、仅按 PK 覆盖更新代替 NavKit 的原子承诺与 CAS。
+- [表任务调度：109–169、204–213](https://gitee.com/cbynd/navkit/blob/555cb0b8c6f32f4ba6d63fa5ba48bdbc2f49e0ce/navkit-data/src/main/java/com/gitee/navkit/data/service/MigrationService.java#L109-L213) 为表提交 CompletableFuture，相关调用没有显式 executor；捕获等待线程中断不证明数据库 worker 已停止。NavKit 只借独立表任务分解，不借无全局预算的铺开并发，取消必须落实到连接与资源回收。
 
 ## 3. NavKit 当前真实入口：哪些已做，哪些确有问题
 
@@ -126,7 +126,7 @@ MySQL 当前单次导出在[专用只读 RR 会话](<../../src-tauri/src/transfe
 
 **依据：E1/E2 的批写与 COPY，E6 的两遍输入代价，E7 的显式批/事务选项，E8 的连接内 prepared 复用，E9 的驱动化 reader/writer。**
 
-输入预扫按任务需要选择：CSV 已知映射不无条件增加整文件预扫；JSON 若必须发现列并集，先固定源、限制列集合和单行预算，再有界预扫，复用安全 spool/固定句柄而不是两遍按可变路径重开。预扫保证、额外 I/O 与首批延迟明确计入结果。转换失败、无法表达的字符或类型必须报错，不借 dbswitch 的改值/置 NULL 换吞吐。
+输入预扫按任务需要选择：CSV 已知映射不无条件增加整文件预扫；JSON 若必须发现列并集，先固定源、限制列集合和单行预算，再有界预扫，复用安全 spool/固定句柄而不是两遍按可变路径重开。预扫保证、额外 I/O 与首批延迟明确计入结果。转换失败、无法表达的字符或类型必须报错，不借 navkit 的改值/置 NULL 换吞吐。
 
 1. 保留现有流式输入；表/列元数据、转换规则在每任务/合法生命周期内准备一次。行映射输出带类型的值，不默认先转 SQL 字面量再解析。
 2. 给现有 writer 增加“参数化逐行”和“受控参数化多行”两种策略。SQLite/MySQL/PG 先逐项验证；其他驱动不因为名称类似而默认具备同样能力。SQL 文件仍走 SQL 执行语义，不能直接套 CSV/JSON 的 typed-row writer。
@@ -154,7 +154,7 @@ MySQL 当前单次导出在[专用只读 RR 会话](<../../src-tauri/src/transfe
 
 **依据：E5 的逐行生成/批包、E6 的分块后等待执行、E7 的配方/总量配置、E1/E2/E9 的 writer 分层。确定性、授权和事务状态机是 NavKit 新设计，不归功于这些项目。**
 
-与 dbx 的区别是生成与 SQL 编码留在后端，而不是长期由 WebView 组 SQL；与 Navicat 手册相同，必须明确生成依赖策略。首版先支持单表/用户确认的表顺序，多表含 FK 时预检引用数据与顺序；循环依赖或无法保证的数据明确拒绝/要求专门计划，不自动关闭 FK。不能把“唯一值选项”当成与库存及并发写入永不冲突的保证。
+与 参考实现 的区别是生成与 SQL 编码留在后端，而不是长期由 WebView 组 SQL；与 通用数据库客户端 手册相同，必须明确生成依赖策略。首版先支持单表/用户确认的表顺序，多表含 FK 时预检引用数据与顺序；循环依赖或无法保证的数据明确拒绝/要求专门计划，不自动关闭 FK。不能把“唯一值选项”当成与库存及并发写入永不冲突的保证。
 
 - 保留当前小任务模式及限制；[当前 shape 限制](<../../src-tauri/src/data_generator.rs#L10-L40>)为 500 行、128 列、单值 16 KiB、值字节和 2 MiB，后者不等于完整 IPC 序列化大小。**不直接抬上限。**
 - 新增独立“大数据生成”入口。前端只提交 recipe：规则版本、总行数、列规则、seed、冻结时间、目标/模式、schema fingerprint、事务策略。后端返回至多 20 行样本和规范化 plan hash；执行复用同一个获授权计划，不传百万 rows。新任务继承[受控批任务的授权与目标约束](<../../src-tauri/src/batch_execution.rs#L107-L151>)：先限定已支持的原生 SQL 通道、owner/目标绑定、只读检查、单次 grant/CAS、真实取消和排空；不切回旧 insert_batch 绕过控制。
@@ -187,7 +187,7 @@ MySQL 当前单次导出在[专用只读 RR 会话](<../../src-tauri/src/transfe
 
 **依据：E3/E4 的快照与协议、E7 的逻辑转储/原生备份分离、E6 的输出工作隔离。**
 
-产品层先明确当前“备份”是逻辑 DDL/数据转储及其已支持对象范围，不宣称等价于全实例原生备份、物理备份或 PITR。原生工具委托属于后续独立能力：另审版本、安装依赖、授权/凭据、输出校验、进程取消与恢复兼容性，不能因为 Navicat 存在该入口就直接新增外部命令。本轮优先修当前逻辑备份的一致性、还原内存和可测吞吐。
+产品层先明确当前“备份”是逻辑 DDL/数据转储及其已支持对象范围，不宣称等价于全实例原生备份、物理备份或 PITR。原生工具委托属于后续独立能力：另审版本、安装依赖、授权/凭据、输出校验、进程取消与恢复兼容性，不能因为 通用数据库客户端 存在该入口就直接新增外部命令。本轮优先修当前逻辑备份的一致性、还原内存和可测吞吐。
 
 1. 现有 backup 的流式写和 stage 原子 publish 保留；**文件原子发布 ≠ 数据库整库快照**。先建立任务级 read session，让数据与必要元数据处在明确的生命周期，并处理并发 DDL。
 2. PG 先单只读快照覆盖任务；未来并行需 export/import snapshot 和对象锁/依赖策略。MySQL 按真实版本、存储引擎、权限和 DDL 协调能力设计；不同连接自行 RR 不够，TiDB 等兼容协议不能照抄 MySQL SQL。SQLite 先单只读事务贯穿所需读取，并监控长读事务对 WAL/写入的影响。
@@ -236,9 +236,9 @@ MySQL 当前单次导出在[专用只读 RR 会话](<../../src-tauri/src/transfe
 
 **可核算的内存模型：** `M_client ≈ M_base + Σ(驱动缓冲 + 在构造/编码的块 + 排队块 + 在写块 + 最大语句/行 + 有界报告/缓存)`。至少分别计入 WebView 与 Rust 进程；客户端之外的服务端缓存、WAL/undo、临时排序与磁盘 spool 单列。配额在分配/入队前核验，未知驱动缓冲不能假装已受控；初期单 writer、短队列，候选预算通过实验决定，不把上游数值当默认答案。
 
-**输出工作与交互隔离：** 当前[导出命令](<../../src-tauri/src/commands.rs#L1341-L1366>)直接 await，而[格式化/写文件](<../../src-tauri/src/transfer.rs#L1753-L1815>)含同步操作；另一些导出/数据库任务已有 blocking 路径，不能全局重复套线程。参考 dbx，先测“大导出同时执行轻量查询/取消”的命令延迟及 runtime 调度延迟，确认饥饿才把同步重段隔离到受限 worker，配合字节背压与完成 join；`spawn_blocking` 本身不会让已启动的工作自动取消。无等待重叠收益时仍用简单顺序实现。
+**输出工作与交互隔离：** 当前[导出命令](<../../src-tauri/src/commands.rs#L1341-L1366>)直接 await，而[格式化/写文件](<../../src-tauri/src/transfer.rs#L1753-L1815>)含同步操作；另一些导出/数据库任务已有 blocking 路径，不能全局重复套线程。参考实现，先测“大导出同时执行轻量查询/取消”的命令延迟及 runtime 调度延迟，确认饥饿才把同步重段隔离到受限 worker，配合字节背压与完成 join；`spawn_blocking` 本身不会让已启动的工作自动取消。无等待重叠收益时仍用简单顺序实现。
 
-**prepared / 元数据缓存边界：** SmartSQL 仅证明局部复用有实现，未证明 NavKit 需要新缓存。先采用任务内列映射与规则编译复用，测 prepare/转换开销；确需额外缓存时，限定连接代际、数据库/schema、完整 SQL、类型签名、必要结构 fingerprint 与容量/淘汰策略。新连接、结构漂移或能力改变应失效；不能用跨事务的缓存替代执行前真实元数据校验。
+**prepared / 元数据缓存边界：** 参考模板 仅证明局部复用有实现，未证明 NavKit 需要新缓存。先采用任务内列映射与规则编译复用，测 prepare/转换开销；确需额外缓存时，限定连接代际、数据库/schema、完整 SQL、类型签名、必要结构 fingerprint 与容量/淘汰策略。新连接、结构漂移或能力改变应失效；不能用跨事务的缓存替代执行前真实元数据校验。
 
 **驱动策略选择（均为待验证能力，不按品牌直接开启）：**
 
@@ -249,7 +249,7 @@ MySQL 当前单次导出在[专用只读 RR 会话](<../../src-tauri/src/transfe
 | PostgreSQL | 同事务参数化逐行 | 多行 INSERT；独立 typed COPY writer；原生 COPY 导出 | 类型编码、NULL/default/identity、trigger/权限、COPY 错误退出/排空、同快照 |
 | 其他通道 | 保留当前明确支持的普通路径及其事务声明 | 对应驱动经测试的 batch/native adapter | 实际 API/事务/取消能力；unsupported 显示原因，不回落到另一个数据库方言 |
 
-**本次新增参考对方案的实质变化：** dbswitch 使同步增加“同序、同型、固定快照才可归并”的明确分支和全局预算；dbx 增加运行时饥饿实验、导出隔离与大行软阈值检查；Navicat 将批量、事务、错误模式和原生备份拆成独立能力选项；SmartSQL 将 prepared/规则复用列为受生命周期约束的局部优化，而非全局缓存重构。
+**本次新增参考对方案的实质变化：** navkit 使同步增加“同序、同型、固定快照才可归并”的明确分支和全局预算；参考实现 增加运行时饥饿实验、导出隔离与大行软阈值检查；通用数据库客户端 将批量、事务、错误模式和原生备份拆成独立能力选项；参考模板 将 prepared/规则复用列为受生命周期约束的局部优化，而非全局缓存重构。
 
 ## 5. 实施阶段与进入条件
 
@@ -303,7 +303,7 @@ MySQL 当前单次导出在[专用只读 RR 会话](<../../src-tauri/src/transfe
 - 不抄 DBeaver 的 10000 行提交、pgloader 的恢复策略、myloader 的所有 retry、sysbench 的建索引/事务假设；它们解决的问题和 NavKit 默认承诺不同。
 - 不为了大数据生成把当前 500 行限制改成百万，不默认全局 PK Set，不把相同 seed 当成安全续传凭证。
 - 不把所有表强塞 COPY/staging/多 worker。小数据常被初始化成本支配，单顺序流水线可能更好。
-- 不抄 dbswitch 的 128 MiB 软阈值、DECIMAL→double、比较失败=相等、转换失败=NULL、无 CAS 覆盖更新和分操作提交；不把“全量归并 diff”包装成 CDC。
-- 不抄 dbx 的前端长期组 SQL、失败后自动逐句重试或以软包阈值冒充 RSS 硬限；不抄 SmartSQL 的全量 DTO、无限字典缓存和人为 sleep；不将 Navicat 的关闭约束/遇错继续选项当默认优化。
+- 不抄 navkit 的 128 MiB 软阈值、DECIMAL→double、比较失败=相等、转换失败=NULL、无 CAS 覆盖更新和分操作提交；不把“全量归并 diff”包装成 CDC。
+- 不抄 参考实现 的前端长期组 SQL、失败后自动逐句重试或以软包阈值冒充 RSS 硬限；不抄 参考模板 的全量 DTO、无限字典缓存和人为 sleep；不将 通用数据库客户端 的关闭约束/遇错继续选项当默认优化。
 
 **最终决策：先交付可测的小步优化，默认路径以等价性和无明显回退为准；大数据、native bulk 和并行分别提供明确契约。没有基准证据，就只叫候选方案，不叫已提速。**

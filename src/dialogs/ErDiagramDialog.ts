@@ -1,5 +1,5 @@
 /**
- * 关系图对话框（需求 1.4，参考 dbx）：数据库可视化建模。
+ * 关系图对话框（需求 1.4，参考实现）：数据库可视化建模。
  *
  *  · 两种视图：表结构图（表卡片 + FK 折线边 + 基数标记，如 N / 1）/ 工程 ER 图（表-列-菱形列级图）
  *  · 交互：拖拽卡片、平移、滚轮缩放（以光标为锚）、适应画布、自动布局、搜索过滤
@@ -314,7 +314,7 @@ export function openErDiagramDialog(
     return !disposed && scope.connection.id === connectionId && scope.namespace === database;
   }
 
-  /** DBX 的 generation/context guard：目录和元数据都只提交最新请求。
+  /** 参考实现 的 generation/context guard：目录和元数据都只提交最新请求。
    * 不用 loading 锁丢弃切换请求，也不让 worker 读取可变的连接/namespace。 */
   async function refresh(preferDb?: string, force = false): Promise<void> {
     const generation = ++loadGeneration;

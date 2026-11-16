@@ -1,5 +1,5 @@
 /**
- * 关系图（ER Diagram）核心模型 —— 纯逻辑，无 DOM 依赖（需求 1.4，参考 dbx）。
+ * 关系图（ER Diagram）核心模型 —— 纯逻辑，无 DOM 依赖（需求 1.4，参考实现）。
  *
  *  · 表卡片图（表结构图）：表为卡片、外键为折线边、乌鸦脚基数标记
  *  · 工程 ER 图：表为矩形、列为椭圆、关系为菱形的列级图
@@ -92,7 +92,7 @@ export function buildRelationships(tables: ErTable[]): ErRelationship[] {
     for (const fk of table.foreignKeys) {
       const target = byIdentity.get(identity(fk.ref_schema || table.schema || "", fk.ref_table));
       if (!target) continue;
-      // DBX: unique key ⊆ FK; a subset of a composite PK is not itself unique.
+      // 参考实现: unique key ⊆ FK; a subset of a composite PK is not itself unique.
       const sourceColumns = new Set(fk.columns);
       const uniqueSource = uniqueKeys.some((key) => key.length > 0 && key.every((c) => sourceColumns.has(c)));
       const sourceColumn = fk.columns[0] ?? "";
@@ -474,7 +474,7 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
 
   // 关系：源属性中心 → 菱形 → 目标属性中心
   for (const rel of relationships) {
-    // DBX fallback: clipped attributes must not silently delete real FK links.
+    // 参考实现 fallback: clipped attributes must not silently delete real FK links.
     const s = attrCenter.get(attributeKey(rel.sourceTable, rel.sourceColumn)) ?? entityCenter.get(rel.sourceTable);
     const t = attrCenter.get(attributeKey(rel.targetTable, rel.targetColumn)) ?? entityCenter.get(rel.targetTable);
     if (!s || !t) continue;
@@ -523,7 +523,7 @@ export function computeEngineeringLayout(tables: ErTable[], relationships: ErRel
 
 // ---------------------------------------------------------------- 基数选择（建模关系面板）
 
-/** 基数选项（dbx：1:1 / 1:N / N:1 / N:N）。 */
+/** 基数选项（参考实现：1:1 / 1:N / N:1 / N:N）。 */
 export const CARDINALITY_CHOICES = [
   { value: "N:1", label: "源 N · 目标 1" },
   { value: "1:1", label: "源 1 · 目标 1" },

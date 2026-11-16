@@ -200,18 +200,18 @@ function treeRow(n) {
 }
 
 /** 默认连接树（演示数据）—— 连接节点一律用官方品牌 logo，库/模式节点用线性图标 */
-export function defaultTree(selected = "dbswitch") {
+export function defaultTree(selected = "navkit") {
   return [
     { label: "本地连接", icon: "folder-open", open: true, depth: 0, strong: true },
     { label: "localhost", logo: "mysql", open: true, depth: 0, connected: true },
-    { label: "dbswitch", icon: "database", open: true, depth: 0, selected: selected === "dbswitch" },
+    { label: "navkit", icon: "database", open: true, depth: 0, selected: selected === "navkit" },
     { label: "表", icon: "table", open: true, depth: 1, count: "19" },
-    { label: "dbswitch_account", icon: "table", depth: 2 },
-    { label: "dbswitch_calendars", icon: "table", depth: 2, selected: selected === "dbswitch_calendars" },
-    { label: "dbswitch_cron_triggers", icon: "table", depth: 2 },
-    { label: "dbswitch_job_details", icon: "table", depth: 2 },
-    { label: "dbswitch_locks", icon: "table", depth: 2 },
-    { label: "dbswitch_system_log", icon: "table", depth: 2 },
+    { label: "navkit_account", icon: "table", depth: 2 },
+    { label: "navkit_calendars", icon: "table", depth: 2, selected: selected === "navkit_calendars" },
+    { label: "navkit_cron_triggers", icon: "table", depth: 2 },
+    { label: "navkit_job_details", icon: "table", depth: 2 },
+    { label: "navkit_locks", icon: "table", depth: 2 },
+    { label: "navkit_system_log", icon: "table", depth: 2 },
     { label: "视图", icon: "view", depth: 1, count: "3" },
     { label: "函数", icon: "function", depth: 1, count: "2" },
     { label: "查询", icon: "code", depth: 1, count: "4" },

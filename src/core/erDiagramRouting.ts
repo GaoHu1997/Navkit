@@ -1,7 +1,7 @@
 /**
  * 关系图正交边避障路由 —— 纯逻辑，无框架依赖。
  *
- * 移植自 dbx `lib/diagram/edge-obstacle-router.ts`，移除了 Vue Flow 的 `Position` 枚举，
+ * 移植自 参考实现 `lib/diagram/edge-obstacle-router.ts`，移除了 Vue Flow 的 `Position` 枚举，
  * 改为本项目的 `ErSide` 字符串联合。解决的问题：连线直接穿过中间的表卡片，图一复杂就不可读。
  *
  * 算法：从源端出口点出发，枚举 12 条正交候选走廊（H 型 / V 型 / 绕行 / 上绕 / 下绕 / 左绕 / 右绕），
@@ -113,7 +113,7 @@ function pointOnRectBorder(p: Point, rect: ObstacleRect): boolean {
  * 只禁止**穿过卡片内部**的段：与卡片矩形有真实重叠（非零面积）才判定为违规。
  * 仅擦到边界（例如从卡片上边竖直引出的线恰好经过矩形边界）不算，否则几乎所有
  * 合法的引出/引入段都会被误判，导致路由全盘返回 null。
- * 例外：短引出段（≤ stubLen）允许贴边，保持与 dbx 一致。
+ * 例外：短引出段（≤ stubLen）允许贴边，保持与 参考实现 一致。
  */
 export function pathSkimsEndpoints(points: readonly Point[], endpointRectsList: readonly ObstacleRect[], stubLen = EDGE_ROUTE_OFFSET): boolean {
   if (endpointRectsList.length === 0 || points.length < 2) return false;
@@ -198,8 +198,8 @@ export function inferTargetSide(source: Point, target: Point): ErSide {
 /**
  * 生成绕开障碍的正交折线；找不到合法走廊时返回 null（调用方回退到直线/普通折线）。
  *
- * 相对 dbx 原实现的增强（都是实测会画出穿卡片连线的情形）：
- *  1. 除固定 offset 通道外，再按**障碍物自身边界**生成通道。dbx 只用固定 offset，
+ * 相对 参考实现 原实现的增强（都是实测会画出穿卡片连线的情形）：
+ *  1. 除固定 offset 通道外，再按**障碍物自身边界**生成通道。参考实现 只用固定 offset，
  *     遇到比 offset 更高的卡片时全部候选都判碰撞，直接返回 null。
  *  2. 每个通道同时尝试「带引出段(stub)」与「不带引出段」两种端点处理。卡片间距小于
  *     offset 时，带 stub 的路径会扎进相邻卡片的膨胀区，此时不带 stub 的直上直下才是

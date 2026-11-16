@@ -356,7 +356,7 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
       </div>
       <div class="ext-hint">整数类型可自增；数值类型可无符号 / 填充零。非 MySQL 协议不显示这一列。</div>
     </div>
-    <div class="status"><span>表结构与读取基线一致</span><span class="dot"></span><span>字段 24 · 索引 4</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+    <div class="status"><span>表结构与读取基线一致</span><span class="dot"></span><span>字段 24 · 索引 4</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · navkit_assignment_config</span></div>
   </div>
 </section>
 
@@ -413,7 +413,7 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
         </tr>
       </tbody>
     </table>
-    <div class="status"><span>有未保存的表结构草稿</span><span class="dot"></span><span>索引 4 · 主键 1</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+    <div class="status"><span>有未保存的表结构草稿</span><span class="dot"></span><span>索引 4 · 主键 1</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · navkit_assignment_config</span></div>
 
     <!-- 浮层：锚定“字段”单元格，替代模态对话框 -->
     <div class="pop" style="top:169px;left:196px">
@@ -564,14 +564,14 @@ body{font:var(--fs-12)/1.5 var(--font-ui);color:var(--text);background:var(--bg-
     <div class="tabs">
       <span class="tab">字段</span><span class="tab">索引</span><span class="tab">外键</span><span class="tab">检查</span><span class="tab">触发器</span><span class="tab">选项</span><span class="tab">注释</span><span class="tab on">SQL 预览</span>
     </div>
-    <pre class="designer-sql" style="max-height:none"><span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
+    <pre class="designer-sql" style="max-height:none"><span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`navkit_assignment_config`</span>
   <span class="ddl-kw">MODIFY COLUMN</span> <span class="ddl-ident">`id`</span> <span class="ddl-type">bigint</span> <span class="ddl-kw">unsigned</span> <span class="ddl-kw">NOT NULL</span> <span class="ddl-kw">COMMENT</span> <span class="ddl-str">'主键'</span>,
   <span class="ddl-kw">ADD COLUMN</span> <span class="ddl-ident">`channel_size`</span> <span class="ddl-type">bigint</span> <span class="ddl-kw">NOT NULL</span> <span class="ddl-kw">DEFAULT</span> <span class="ddl-str">'100'</span> <span class="ddl-kw">COMMENT</span> <span class="ddl-str">'通道队列大小'</span>;
 
-<span class="ddl-kw">DROP INDEX</span> <span class="ddl-ident">`idx_target_connection`</span> <span class="ddl-kw">ON</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>;
-<span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`dbswitch_assignment_config`</span>
+<span class="ddl-kw">DROP INDEX</span> <span class="ddl-ident">`idx_target_connection`</span> <span class="ddl-kw">ON</span> <span class="ddl-ident">`navkit_assignment_config`</span>;
+<span class="ddl-kw">ALTER TABLE</span> <span class="ddl-ident">`navkit_assignment_config`</span>
   <span class="ddl-kw">ADD UNIQUE INDEX</span> <span class="ddl-ident">`uk_assignment`</span> (<span class="ddl-ident">`assignment_id`</span> <span class="ddl-kw">ASC</span>);</pre>
-    <div class="status"><span>有未保存的表结构草稿</span><span class="dot"></span><span>字段 24 · 索引 4</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · dbswitch_assignment_config</span></div>
+    <div class="status"><span>有未保存的表结构草稿</span><span class="dot"></span><span>字段 24 · 索引 4</span><span class="dot"></span><span style="margin-left:auto">MySQL 8.0 · navkit_assignment_config</span></div>
   </div>
 </section>
 

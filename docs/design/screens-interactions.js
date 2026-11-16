@@ -30,10 +30,10 @@ import {
 /* 一个用于承载浮层的画框 */
 function frameWithOverlay(opts) {
   return `<div class="window">
-    ${titlebar({ doc: "dbswitch — localhost", openMenu: opts.openMenu })}
+    ${titlebar({ doc: "navkit — localhost", openMenu: opts.openMenu })}
     ${commandbar({ active: "表" })}
     <div class="workarea">
-      <aside class="sidebar">${tree(defaultTree("dbswitch"))}</aside>
+      <aside class="sidebar">${tree(defaultTree("navkit"))}</aside>
       <div class="splitter"></div>
       <main class="main">
         ${tabstrip([{ label: "对象", icon: "table" }, { label: "note_category @password_manager", icon: "table" }], 0)}
@@ -133,10 +133,10 @@ const MENU_TEXT_FORMAT = [
 
 function menuScreen(title, subtitle, overlays, opts = {}) {
   const frame = `<div class="window">
-    ${titlebar({ doc: "dbswitch — localhost", menu: opts.menu, openMenu: opts.openMenu, menuPopup: overlays })}
+    ${titlebar({ doc: "navkit — localhost", menu: opts.menu, openMenu: opts.openMenu, menuPopup: overlays })}
     ${commandbar({ active: "表" })}
     <div class="workarea">
-      <aside class="sidebar">${tree(defaultTree("dbswitch"))}</aside>
+      <aside class="sidebar">${tree(defaultTree("navkit"))}</aside>
       <div class="splitter"></div>
       <main class="main">
         ${tabstrip([{ label: "对象", icon: "table" }, { label: "note_category @password_manager", icon: "table" }], 0)}
@@ -239,10 +239,10 @@ const CTX_BLANK = [
 
 function ctxScreen(title, subtitle, overlay, contentHtml) {
   const frame = `<div class="window">
-    ${titlebar({ doc: "dbswitch — localhost" })}
+    ${titlebar({ doc: "navkit — localhost" })}
     ${commandbar({ active: "表" })}
     <div class="workarea">
-      <aside class="sidebar">${tree(defaultTree("dbswitch"))}</aside>
+      <aside class="sidebar">${tree(defaultTree("navkit"))}</aside>
       <div class="splitter"></div>
       <main class="main">
         ${tabstrip([{ label: "对象", icon: "table" }, { label: "note_category @password_manager", icon: "table" }], 0)}
@@ -316,9 +316,9 @@ export function statesGroup() {
   const treeStates = `<div class="state-grid">
     ${[
       ["默认 / 悬停 / 选中", `<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">
-        ${treeRowSample("dbswitch_calendars", "")}
-        ${treeRowSample("dbswitch_cron_triggers", "hover")}
-        ${treeRowSample("dbswitch_job_details", "selected")}
+        ${treeRowSample("navkit_calendars", "")}
+        ${treeRowSample("navkit_cron_triggers", "hover")}
+        ${treeRowSample("navkit_job_details", "selected")}
       </div>`],
       ["连接状态", `<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">
         ${treeRowSample("localhost", "connected")}
@@ -381,7 +381,7 @@ export function statesGroup() {
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button class="ptool" style="outline:2px solid var(--accent-500);outline-offset:2px">${icon("save", { size: 14 })}<span>保存</span></button>
           <div class="tab active" style="outline:2px solid var(--accent-500);outline-offset:-2px">${icon("table", { size: 14 })}<span class="tab-label">对象</span></div>
-          <div class="tree-row selected" style="outline:2px solid var(--accent-500);outline-offset:-2px;width:180px;padding-left:8px"><span class="tree-arrow">${icon("chevron-down", { size: 12 })}</span><span class="tree-ico">${icon("database", { size: 15 })}</span><span class="tree-name">dbswitch</span></div>
+          <div class="tree-row selected" style="outline:2px solid var(--accent-500);outline-offset:-2px;width:180px;padding-left:8px"><span class="tree-arrow">${icon("chevron-down", { size: 12 })}</span><span class="tree-ico">${icon("database", { size: 15 })}</span><span class="tree-name">navkit</span></div>
           <input class="input" value="焦点在输入框" style="width:180px;border-color:var(--accent-500);box-shadow:0 0 0 3px var(--accent-50)">
         </div>
       </div>

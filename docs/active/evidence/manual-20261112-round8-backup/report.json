@@ -13,7 +13,7 @@
       "status": "PASS",
       "started": "2026-11-11T21:25:21.052Z",
       "data": {
-        "shot": "D:\\github\\tauri-navicat\\docs\\active\\evidence\\manual-20261112\\001-S00-BOOT.png",
+        "shot": "D:\\github\\tauri-navkit\\docs\\active\\evidence\\manual-20261112\\001-S00-BOOT.png",
         "menus": [
           "文件",
           "编辑",
@@ -640,7 +640,7 @@
       "status": "FAIL",
       "started": "2026-11-11T21:27:36.609Z",
       "error": "AssertionError [ERR_ASSERTION]: 应生成 5 行：0",
-      "stack": "AssertionError [ERR_ASSERTION]: 应生成 5 行：0\n    at file:///D:/github/tauri-navicat/tools/acceptance/e2e/manual-tests-20261112.mjs:1198:3\n    at async step (file:///D:/github/tauri-navicat/tools/acceptance/e2e/manual-tests-20261112.mjs:54:18)\n    at async file:///D:/github/tauri-navicat/tools/acceptance/e2e/manual-tests-20261112.mjs:1168:1"
+      "stack": "AssertionError [ERR_ASSERTION]: 应生成 5 行：0\n    at file:///D:/github/tauri-navkit/tools/acceptance/e2e/manual-tests-20261112.mjs:1198:3\n    at async step (file:///D:/github/tauri-navkit/tools/acceptance/e2e/manual-tests-20261112.mjs:54:18)\n    at async file:///D:/github/tauri-navkit/tools/acceptance/e2e/manual-tests-20261112.mjs:1168:1"
     },
     {
       "id": "S10-MONITOR",
@@ -859,7 +859,7 @@
       "status": "PASS",
       "started": "2026-11-11T21:29:13.252Z",
       "data": {
-        "final": "D:\\github\\tauri-navicat\\docs\\active\\evidence\\manual-20261112\\180-S18-FINAL.png"
+        "final": "D:\\github\\tauri-navkit\\docs\\active\\evidence\\manual-20261112\\180-S18-FINAL.png"
       }
     }
   ],

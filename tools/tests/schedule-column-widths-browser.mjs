@@ -33,7 +33,7 @@ try {
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/preview-bootstrap.js*', route => route.fulfill({ contentType: 'text/javascript', body: preview.slice(0, demo) + '\n} catch (e) { throw e; }\n' }));
   await page.addInitScript(() => {
-    window.fixtureJobs = [{ id: 'width-job', name: '每日日志清理', connection_id: 'c1', database: 'dbswitch', sql: 'SELECT 1', interval_secs: 0, cron: '0 0 8 * * MON-FRI', enabled: true, last_run: '2026-11-13 08:00:00', last_status: '成功', task: null }];
+    window.fixtureJobs = [{ id: 'width-job', name: '每日日志清理', connection_id: 'c1', database: 'navkit', sql: 'SELECT 1', interval_secs: 0, cron: '0 0 8 * * MON-FRI', enabled: true, last_run: '2026-11-13 08:00:00', last_status: '成功', task: null }];
     window.fixtureHistory = [{ job_id: 'width-job', job_name: '日志清理', started_at: '2026-11-13 08:00:00', elapsed_ms: 1234, ok: true, detail: '执行完成，清理 12500 条日志记录' }];
     let mock;
     Object.defineProperty(window, '__PREVIEW_MOCK__', { configurable: true, get: () => mock, set: value => {
@@ -93,7 +93,7 @@ try {
   }
   await page.evaluate(() => { window.fixtureJobs = []; return window.__APP__.activeView().reload(); });
   filled(await metrics(schedule));
-  await page.evaluate(() => { window.fixtureJobs = [{ id: 'width-job', name: '日志清理', connection_id: 'c1', database: 'dbswitch', sql: 'SELECT 1', interval_secs: 0, cron: '0 0 8,12,16,20 * * MON-FRI', enabled: true, last_run: '2026-11-13 08:00:00', last_status: '成功', task: null }]; return window.__APP__.activeView().reload(); });
+  await page.evaluate(() => { window.fixtureJobs = [{ id: 'width-job', name: '日志清理', connection_id: 'c1', database: 'navkit', sql: 'SELECT 1', interval_secs: 0, cron: '0 0 8,12,16,20 * * MON-FRI', enabled: true, last_run: '2026-11-13 08:00:00', last_status: '成功', task: null }]; return window.__APP__.activeView().reload(); });
   const refreshed = await metrics(schedule);
   filled(refreshed); assert(!refreshed.cells[2].clipped, 'new Cron data must be remeasured');
   await mkdir(path.join(root, 'artifacts'), { recursive: true });

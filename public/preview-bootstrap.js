@@ -3,26 +3,26 @@ try {
       // 仅用于开发期的视觉核对，不参与打包产物。
       (function () {
         // 与参考截图一致的数据（Snipaste_2026-11-02_19-27-43.png 树与对象列表）
-        const DBSWITCH_TABLES = [
-          ["dbswitch_assignment_config", 1, 1, "任务配置表"],
-          ["dbswitch_assignment_job", 0, 0, "JOB信息表"],
-          ["dbswitch_assignment_task", 0, 0, "任务信息表"],
-          ["dbswitch_blob_triggers", 0, 0, "TRIGGER作为BLOB类型存储"],
-          ["dbswitch_calendars", 0, 0, "以BLOB类型存储QUARTZ的日历"],
-          ["dbswitch_cron_triggers", 0, 0, "存储CRON类型的触发器"],
-          ["dbswitch_database_connection", 2, 2, "数据库连接表"],
-          ["dbswitch_fired_triggers", 0, 0, "存储与已触发的TRIGGER相关的状态"],
-          ["dbswitch_job_details", 0, 0, "存储每一个已配置的JOB的详细信息"],
-          ["dbswitch_job_logback", 0, 0, "JOB执行日志"],
-          ["dbswitch_locks", 0, 0, "存储程序的非观察锁"],
-          ["dbswitch_paused_trigger_grps", 0, 0, "存储已暂停的TRIGGER组的信息"],
-          ["dbswitch_scheduler_state", 0, 0, "存储所有的与SCHEDULER相关的状态"],
-          ["dbswitch_schema_history", 0, 5, "Flyway表"],
-          ["dbswitch_simple_triggers", 0, 0, "存储已配置的SIMPLE类型的触发器"],
-          ["dbswitch_simprop_triggers", 0, 0, "存储CalendarInterval类型的触发器"],
-          ["dbswitch_system_log", 3, 2, "系统日志"],
-          ["dbswitch_system_user", 1, 0, "系统用户表"],
-          ["dbswitch_triggers", 0, 0, "存储已配置的TRIGGER的信息"],
+        const NAVKIT_TABLES = [
+          ["navkit_assignment_config", 1, 1, "任务配置表"],
+          ["navkit_assignment_job", 0, 0, "JOB信息表"],
+          ["navkit_assignment_task", 0, 0, "任务信息表"],
+          ["navkit_blob_triggers", 0, 0, "TRIGGER作为BLOB类型存储"],
+          ["navkit_calendars", 0, 0, "以BLOB类型存储QUARTZ的日历"],
+          ["navkit_cron_triggers", 0, 0, "存储CRON类型的触发器"],
+          ["navkit_database_connection", 2, 2, "数据库连接表"],
+          ["navkit_fired_triggers", 0, 0, "存储与已触发的TRIGGER相关的状态"],
+          ["navkit_job_details", 0, 0, "存储每一个已配置的JOB的详细信息"],
+          ["navkit_job_logback", 0, 0, "JOB执行日志"],
+          ["navkit_locks", 0, 0, "存储程序的非观察锁"],
+          ["navkit_paused_trigger_grps", 0, 0, "存储已暂停的TRIGGER组的信息"],
+          ["navkit_scheduler_state", 0, 0, "存储所有的与SCHEDULER相关的状态"],
+          ["navkit_schema_history", 0, 5, "Flyway表"],
+          ["navkit_simple_triggers", 0, 0, "存储已配置的SIMPLE类型的触发器"],
+          ["navkit_simprop_triggers", 0, 0, "存储CalendarInterval类型的触发器"],
+          ["navkit_system_log", 3, 2, "系统日志"],
+          ["navkit_system_user", 1, 0, "系统用户表"],
+          ["navkit_triggers", 0, 0, "存储已配置的TRIGGER的信息"],
         ];
         const PM_TABLES = [
           ["account", 0, 15, ""],
@@ -36,8 +36,8 @@ try {
         ];
         // 备份仓库（内存态）
         const backups = {
-          "c1/dbswitch": [
-            { name: "dbswitch_20261102_093000.sql", modified: "2026-11-02 09:30:12", size: 48213, comment: "上线前全量备份" },
+          "c1/navkit": [
+            { name: "navkit_20261102_093000.sql", modified: "2026-11-02 09:30:12", size: 48213, comment: "上线前全量备份" },
           ],
         };
         let backupSeq = 1;
@@ -54,8 +54,8 @@ try {
             id: "job-1",
             name: "日志清理",
             connection_id: "c1",
-            database: "dbswitch",
-            sql: "DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY",
+            database: "navkit",
+            sql: "DELETE FROM `navkit_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY",
             interval_secs: 3600,
             enabled: true,
             last_run: "2026-11-03 07:00:00",
@@ -331,7 +331,7 @@ try {
             const id = args && args.id;
             if (id === "c3") return [];
             return [
-              ["dbswitch", "database"],
+              ["navkit", "database"],
               ["information_schema", "system"],
               ["mysql", "system"],
               ["password_manager", "database"],
@@ -350,24 +350,24 @@ try {
           list_tables: (args) => {
             const id = args && args.id;
             const schema = (args && args.schemaName) || "";
-            if (schema === "dbswitch") {
-              return [...DBSWITCH_TABLES.map(([n]) => [n, "table"]), ["v_job_summary", "view"]];
+            if (schema === "navkit") {
+              return [...NAVKIT_TABLES.map(([n]) => [n, "table"]), ["v_job_summary", "view"]];
             }
             if (schema === "password_manager") return PM_TABLES.map(([n]) => [n, "table"]);
             return [];
           },
           list_routines: (args) => {
             const schema = (args && args.schemaName) || "";
-            if (schema === "dbswitch") {
+            if (schema === "navkit") {
               return [["function", "fn_next_seq"], ["procedure", "sp_cleanup_logs"]];
             }
             return [];
           },
           list_objects: (args) => {
             const schema = (args && args.schemaName) || "";
-            if (schema === "dbswitch") {
+            if (schema === "navkit") {
               return [
-                ...DBSWITCH_TABLES.map(([n, ai, rows, comment]) => ({
+                ...NAVKIT_TABLES.map(([n, ai, rows, comment]) => ({
                   name: n,
                   type: "table",
                   autoIncrement: ai,
@@ -407,7 +407,7 @@ try {
           // Browser-only metadata fixture; the desktop uses real database catalogs.
           get_diagram_metadata: (args) => {
             const schema = (args && args.schemaName) || "";
-            const catalog = schema === "dbswitch" ? DBSWITCH_TABLES : schema === "password_manager" ? PM_TABLES : [];
+            const catalog = schema === "navkit" ? NAVKIT_TABLES : schema === "password_manager" ? PM_TABLES : [];
             return {
               tables: catalog.map(([name]) => ({ ...tableSchemaFixture(schema, name), row_count: null })),
               failures: [],
@@ -607,10 +607,10 @@ try {
             }
             const stmts = [
               "SET FOREIGN_KEY_CHECKS = 0",
-              "DROP TABLE IF EXISTS `dbswitch_assignment_config`",
-              "CREATE TABLE `dbswitch_assignment_config` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `account_name` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
-              "INSERT INTO `dbswitch_assignment_config` VALUES (1,'默认'),(2,'代码'),(3,'权益')",
-              "INSERT INTO `dbswitch_assignment_config` VALUES (33,'测试')",
+              "DROP TABLE IF EXISTS `navkit_assignment_config`",
+              "CREATE TABLE `navkit_assignment_config` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `account_name` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+              "INSERT INTO `navkit_assignment_config` VALUES (1,'默认'),(2,'代码'),(3,'权益')",
+              "INSERT INTO `navkit_assignment_config` VALUES (33,'测试')",
               "SET FOREIGN_KEY_CHECKS = 1",
             ];
             const steps = stmts.map((sql, i) => ({
@@ -627,7 +627,7 @@ try {
             const key = `${(args && args.connectionId) || ""}/${(args && args.schemaName) || ""}`;
             backups[key] = (backups[key] ?? []).filter((b) => b.name !== args.file);
           },
-          open_backup_folder: () => "data/backups/c1/dbswitch",
+          open_backup_folder: () => "data/backups/c1/navkit",
           list_db_users: (args) => {
             if ((args && args.id) !== "c1") return [];
             return users;
@@ -668,13 +668,13 @@ try {
           // ---- 视图 / 函数定义 ----
           get_view_definition: (args) => {
             if ((args && args.view) === "v_job_summary") {
-              return "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `dbswitch_job_details` GROUP BY job_name";
+              return "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `navkit_job_details` GROUP BY job_name";
             }
             return Promise.reject(new Error("视图不存在"));
           },
           get_routine_definition: (args) => {
             if ((args && args.name) === "sp_cleanup_logs") {
-              return "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
+              return "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `navkit_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
             }
             if ((args && args.name) === "fn_next_seq") {
               return "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND";
@@ -806,7 +806,7 @@ try {
           // ---- SQL 执行日志（预览 mock：两条样例，验证历史日志过滤/清空交互）----
           list_sql_log: () => [
             { ts: "2026-11-07 12:00:01", connection_id: "c1", connection_name: "localhost", kind: "SELECT", database: "password_manager", sql: "SELECT * FROM note_category LIMIT 0,1000", ok: true, elapsed_ms: 12, rows: 4, message: "", origin: "grid" },
-            { ts: "2026-11-07 12:00:15", connection_id: "c1", connection_name: "localhost", kind: "SELECT", database: "dbswitch", sql: "SELECT * FROM dbswitch_system_log", ok: false, elapsed_ms: 251, rows: 0, message: "Table 'dbswitch.dbswitch_system_log' doesn't exist", origin: "query" },
+            { ts: "2026-11-07 12:00:15", connection_id: "c1", connection_name: "localhost", kind: "SELECT", database: "navkit", sql: "SELECT * FROM navkit_system_log", ok: false, elapsed_ms: 251, rows: 0, message: "Table 'navkit.navkit_system_log' doesn't exist", origin: "query" },
           ],
           clear_sql_log: () => null,
           about_info: () => ({
@@ -1088,7 +1088,7 @@ try {
 
           // ---- 数据库会话 / 进程 ----
           list_db_processes: () => [
-            { id: "8", user: "root", host: "localhost:52100", db: "dbswitch", command: "Query", state: "Sending data", elapsed_secs: 3, sql: "SELECT * FROM dbswitch_job_details", is_self: false },
+            { id: "8", user: "root", host: "localhost:52100", db: "navkit", command: "Query", state: "Sending data", elapsed_secs: 3, sql: "SELECT * FROM navkit_job_details", is_self: false },
             { id: "9", user: "root", host: "localhost", db: "mysql", command: "Sleep", state: "", elapsed_secs: null, sql: "", is_self: true },
           ],
           kill_db_process: () => "OK",
@@ -1120,9 +1120,9 @@ try {
             const fallback = responses.get_table_ddl({ table: object.name });
             let definition = "";
             if (object.kind === "view" && object.name === "v_job_summary") {
-              definition = "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `dbswitch_job_details` GROUP BY job_name";
+              definition = "CREATE ALGORITHM=UNDEFINED VIEW `v_job_summary` AS SELECT job_name, COUNT(*) AS cnt FROM `navkit_job_details` GROUP BY job_name";
             } else if (object.name === "sp_cleanup_logs") {
-              definition = "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
+              definition = "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `navkit_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND";
             } else if (object.name === "fn_next_seq") {
               definition = "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND";
             }
@@ -1163,7 +1163,7 @@ try {
           read_routine_design: (args) => {
             const name = (args && args.name) || "";
             const definition = name === "sp_cleanup_logs"
-              ? "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `dbswitch_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND"
+              ? "CREATE PROCEDURE `sp_cleanup_logs`()\nBEGIN\n  DELETE FROM `navkit_system_log` WHERE created_at < NOW() - INTERVAL 30 DAY;\nEND"
               : name === "fn_next_seq"
                 ? "CREATE FUNCTION `fn_next_seq`(p_name VARCHAR(64)) RETURNS INT\nBEGIN\n  DECLARE v INT;\n  SET v = 1;\n  RETURN v;\nEND"
                 : `CREATE ROUTINE \`${name}\`（预览模拟）`;
@@ -1360,7 +1360,7 @@ try {
               job_revision: (job && job.revision) || "rev-1", expires_at_utc: isoPlus(600000),
               actions: (job && job.actions || []).map((a, i) => ({
                 action_id: a.id || `action-${i}`, template_name: `模板 ${i + 1}`,
-                connection_label: "预览连接", namespace: "dbswitch", read_only: false,
+                connection_label: "预览连接", namespace: "navkit", read_only: false,
                 details: ["预览模拟动作"], destructive: [],
               })),
             };
@@ -1463,7 +1463,7 @@ try {
         window.__TAURI__ = window.__TAURI__ || { event: { listen: function () { return Promise.resolve(() => {}); } } };
       })();
 
-// 自动演示：展开树到参考截图 1 的状态（本地连接 > localhost > dbswitch(选中,表组展开) + 对象页）
+// 自动演示：展开树到参考截图 1 的状态（本地连接 > localhost > navkit(选中,表组展开) + 对象页）
 (function () {
   const click = (el) => el && el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1480,20 +1480,20 @@ try {
     await wait(300);
     click(byText("localhost")?.querySelector(".tree-arrow"));
     await wait(500);
-    click(byText("dbswitch")?.querySelector(".tree-arrow"));
+    click(byText("navkit")?.querySelector(".tree-arrow"));
     await wait(500);
     click(byExact("表")?.querySelector(".tree-arrow"));
     await wait(300);
-    click(byText("dbswitch"));
+    click(byText("navkit"));
     await wait(700);
     const app = window.__APP__;
     if (app && app.tree) app.tree.render();
     const page = new URLSearchParams(location.search).get("page") || "query";
     if (page === "query") {
       if (app && app.openTableTab) {
-        await app.openTableTab("c1", "dbswitch", "dbswitch_assignment_config", "table");
+        await app.openTableTab("c1", "navkit", "navkit_assignment_config", "table");
         await wait(300);
-        await app.openTableTab("c1", "dbswitch", "dbswitch_calendars", "table");
+        await app.openTableTab("c1", "navkit", "navkit_calendars", "table");
         await wait(300);
         await app.openTableTab("c1", "password_manager", "note_category", "table");
         await wait(400);

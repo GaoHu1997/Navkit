@@ -29,10 +29,10 @@ await page.addInitScript(() => {
       mock["plugin:event|unlisten"] = () => null;
       mock.completion_data = () => ({
         __tables__: ["users", "orders", "active_users"],
-        __views__: ["active_users"], __schemas__: ["dbswitch"],
+        __views__: ["active_users"], __schemas__: ["navkit"],
         users: ["id", "display_name"], orders: ["id", "user_id", "amount"],
         __meta__: {
-          version: 2, schema: "dbswitch",
+          version: 2, schema: "navkit",
           relations: { users: { kind: "table", comment: "用户基础信息", columns_known: true } },
           columns: { users: { id: { type: "INTEGER", comment: "用户编号" }, display_name: { type: "TEXT", comment: null } } },
         },
@@ -56,7 +56,7 @@ try {
   ok("顶部顺序与隐藏入口");
   assert.equal(await page.locator('.ribbon-btn[aria-label="连接"] .ribbon-drop').count(), 0);
   ok("连接无展开标识");
-  await page.evaluate(() => window.__APP__.openQueryTab("c1", "", "dbswitch"));
+  await page.evaluate(() => window.__APP__.openQueryTab("c1", "", "navkit"));
   await page.waitForSelector(".sql-editor .cm-content");
   await page.waitForFunction(() => window.__APP__.activeView().completionLoaded);
   assert.equal(await page.locator('.tab-toolbar [title="文本"]').count(), 0);

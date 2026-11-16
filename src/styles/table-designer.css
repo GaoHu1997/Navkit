@@ -121,7 +121,7 @@
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
-/* 字段/索引等表格：单元格即编辑框——去掉内嵌输入框的独立描边，让单元格本身成为编辑区域（参考 Navicat） */
+/* 字段/索引等表格：单元格即编辑框——去掉内嵌输入框的独立描边，让单元格本身成为编辑区域（参考 通用数据库客户端） */
 .table-designer .designer-grid td { padding: 0; }
 .table-designer .designer-grid th { padding: 4px 8px; }
 /* 列线加强：行线保持发丝线，纵向用 --border，列多的时候也能一眼分清边界 */

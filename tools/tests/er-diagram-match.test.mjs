@@ -1,5 +1,5 @@
 // 关系图智能匹配 / 边避障路由 / ELK 布局：纯逻辑单测（无 DOM、无数据库）。
-// 覆盖移植自 dbx 的匹配策略、路由避障与布局兜底，并锁定相对 dbx 的修正点（四元组去重）。
+// 覆盖移植自 参考实现 的匹配策略、路由避障与布局兜底，并锁定相对 参考实现 的修正点（四元组去重）。
 import test from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
@@ -146,7 +146,7 @@ test("inferRelationships：已有物理外键的源列不再推断（避免重�
   ];
   const existing = er.buildRelationships(tables);
   assert.equal(existing.length, 1);
-  // dbx 原实现此处会产出重复边；本实现必须为空
+  // 参考实现 原实现此处会产出重复边；本实现必须为空
   assert.equal(match.inferRelationships(tables, existing).length, 0);
 });
 
