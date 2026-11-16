@@ -6980,6 +6980,8 @@ class DataTabView extends TabView {
   /** 拖拽排序时记录的源行下标（null 表示不在拖拽中）。 */
   private dragSortFrom: number | null = null;
   private requestVersion = 0;
+  /** 表数据页“下一页”携带的 Keyset 锚点；仅下一页按钮设置，加载后清除。 */
+  private nextPageAnchor: (string | null)[] | null = null;
   private queryAction: "reload" | "filter" | "sort" | "page" = "reload";
   private loadedPageRequest: import("./types").PageRequest | null = null;
   private currentRecord: number | null = null;
@@ -7912,7 +7914,7 @@ class DataTabView extends TabView {
   }
 
   private pageRequest(includeTotal = false): import("./types").PageRequest {
-    return {
+    const request: import("./types").PageRequest = {
       connection_id: this.tab.connectionId,
       schema: this.tab.schema,
       table: this.tab.object,
@@ -7925,6 +7927,9 @@ class DataTabView extends TabView {
       order_rules: this.appliedSortRules(),
       include_total: includeTotal,
     };
+    // Keyset：仅“下一页”按钮设置的锚点携带；跳页/上一页/末页不带，后端回退 OFFSET。
+    if (this.nextPageAnchor) request.after = this.nextPageAnchor;
+    return request;
   }
 
   /** 总数只取决于表和已应用筛选，不取决于页码、页大小或排序。 */
@@ -8125,6 +8130,7 @@ class DataTabView extends TabView {
     }
     const version = ++this.requestVersion;
     const request = this.pageRequest();
+    this.nextPageAnchor = null; // 锚点只对本次下一页请求生效
     if (action === "reload" || action === "filter" || (this.loadedPageRequest && this.totalKey(request) !== this.totalKey())) this.invalidateTotal();
     let received = false;
     this.queryAction = action;
@@ -8373,6 +8379,8 @@ class DataTabView extends TabView {
     pager.appendChild(pagePosition);
 
     mkPage(ICON_PAGE_NEXT, "下一页", !this.hasNextPage(page), () => {
+      // 连续下一页：携带本页锚点，后端用 Keyset 定位，不扫描前缀。
+      this.nextPageAnchor = this.tab.page?.next_after ?? null;
       this.tab.pageOffset += this.tab.pageLimit;
       void this.reload("page");
     });
@@ -9123,6 +9131,21 @@ class QueryTabView extends TabView {
   private completionLoaded = false;
   private completionRequest = 0;
   private disposed = false;
+  /** 服务器分页浏览：记录本次查询原始 SQL；非空表示结果由服务器分页产生，翻页需重查。 */
+  private serverPage: { sql: string; limit: number } | null = null;
+  /**
+   * 已看页缓存：offset → 该页结果集快照（仅当前查询有效）。
+   * 命中时直接显示，不查库；重新执行/清空结果/换连接时整体作废。
+   */
+  private serverPageCache = new Map<number, MultiResult>();
+  /** 缓存页数上限：只保留最近看过的若干页，避免无限增长。 */
+  private static readonly SERVER_PAGE_CACHE_LIMIT = 8;
+  /** 当前页最后一行的唯一键值；仅 Keyset 可用时非空，用于“下一页”锚点。 */
+  private serverPageAnchor: string | null = null;
+  /** Keyset 已被规划拒绝一次后不再重试，直接走 OFFSET。 */
+  private serverPageAnchorDisabled = false;
+  /** 唯一排序列名；非空表示可用锚点续页（需同时有锚点值）。 */
+  private serverPageKeysetColumn: string | null = null;
 
   isExecuting(): boolean { return this.running; }
   resultBusy(): boolean { return this.running || this.exporting || this.resultPages.busy || this.resultEvidenceLoading || this.controlledResult?.busy === true; }
@@ -9674,6 +9697,7 @@ class QueryTabView extends TabView {
     if (!this.allowResultReplacement("清理查询结果")) throw new Error("查询结果草稿或写入证据需要先处理");
     this.releaseResultEditing();
     ++this.executionRevision;
+    this.serverPageCache.clear();
     this.releaseSpool(this.resultPages.replace(null));
     this.tab.results = null; this.activeResultTab = -1; this.lastMessages = [];
     this.renderResults();
@@ -9682,6 +9706,7 @@ class QueryTabView extends TabView {
   /** 执行开始时作废旧结果：网格、消息与导出证据都不再代表当前 SQL 的输出。 */
   private expireResultForNewExecution(): void {
     ++this.executionRevision;
+    this.serverPageCache.clear();
     this.releaseSpool(this.resultPages.replace(null));
     this.tab.results = null;
     this.resultExecution = null;
@@ -9784,6 +9809,10 @@ class QueryTabView extends TabView {
     this.exporting = true; this.syncManualTransactionControls(); this.renderResultPager(); this.app.notifyToolbar?.();
     try {
       const options = { ...opts, connection_id: snapshot.connectionId, schema: snapshot.namespace };
+      if (this.serverPage) {
+        // 服务器分页结果不是全量；导出全量必须重新执行原始 SQL（会重新查询，结果可能与页面不同）。
+        return await api.exportQueryRequery(options, this.serverPage.sql, this.tab.id, snapshot.namespace);
+      }
       return snapshot.scope
         ? await api.exportQuerySpooled(options, snapshot.scope, snapshot.index)
         : await api.exportQueryResult(options, set.columns.map(column => column.name), set.rows);
@@ -9806,6 +9835,7 @@ class QueryTabView extends TabView {
 
   private async loadResultPage(action: "first" | "previous" | "next" | "last" | number, limit = this.resultPages.pageLimit(this.activeResultTab)): Promise<void> {
     if (!this.allowResultReplacement("翻页") || this.resultBusy() || this.disposed) return;
+    if (this.serverPage) { await this.loadServerResultPage(action, limit); return; }
     const index = this.activeResultTab;
     const offset = typeof action === "number" ? this.resultPages.pageOffset(index, action) : this.resultPages.offset(index, action);
     if (offset === null || typeof action === "number" && offset === this.resultPages.page(index)?.offset) { this.renderResultPager(); return; }
@@ -9851,6 +9881,110 @@ class QueryTabView extends TabView {
     this.messagesEl.style.visibility = this.running ? "hidden" : "";
   }
 
+  /** 服务器分页翻页：计算目标 offset 后重新执行当前页（读不到就报错，绝不显示别的页冒充）。 */
+  private async loadServerResultPage(action: "first" | "previous" | "next" | "last" | number, limit: number): Promise<void> {
+    const sp = this.serverPage;
+    if (!sp) return;
+    const index = this.activeResultTab;
+    const page = this.resultPages.page(index);
+    const curOffset = page?.offset ?? 0;
+    const size = sp.limit || limit;
+    let nextOffset: number;
+    if (action === "first") nextOffset = 0;
+    else if (action === "previous") nextOffset = Math.max(0, curOffset - size);
+    else if (action === "next") nextOffset = curOffset + (page?.rows.length ?? size);
+    else if (action === "last") { this.app.toast("info", "服务器分页无精确总数，不支持跳到末页"); return; }
+    else nextOffset = (Math.max(1, action) - 1) * size;
+    if (action !== "first" && nextOffset === curOffset) return;
+    await this.executeServerPage(nextOffset, action === "next");
+  }
+
+  /** 重新执行服务器分页的某一页；只显示该页，不读取也不假装全量。已看过的页直接命中缓存。 */
+  private async executeServerPage(offset: number, forward = false): Promise<void> {
+    const sp = this.serverPage;
+    const connId = this.tab.connectionId;
+    if (!sp || !connId || this.resultBusy() || this.disposed) return;
+    const cached = this.serverPageCache.get(offset);
+    if (cached) { this.showServerPage(cached, offset, true); return; }
+    const namespace = this.tab.schema;
+    const revision = this.executionRevision;
+    let plan: { mode: string; sql: string | null; reason: string | null };
+    try {
+      // 连续“下一页”且排序列是唯一键时用锚点定位（不扫前缀）；否则回退 OFFSET 分页。
+      const anchor = forward && !this.serverPageAnchorDisabled ? this.serverPageAnchor : null;
+      plan = anchor
+        ? await api.planQueryKeysetPage(connId, sp.sql, anchor, sp.limit)
+        : await api.planQueryPagination(connId, sp.sql, sp.limit, offset);
+    } catch (error) { this.app.toast("error", `分页查询规划失败：${String(error)}`); return; }
+    if (plan.mode !== "page" || !plan.sql) {
+      // Keyset 规划失败不算错误：回退普通分页再试一次。
+      if (forward && this.serverPageAnchor) { this.serverPageAnchorDisabled = true; return this.executeServerPage(offset, false); }
+      this.app.toast("info", "该查询不支持服务器分页，请重新执行"); return;
+    }
+    this.running = true; this.runBtn.disabled = true; this.stopBtn.disabled = false; this.explainBtn.disabled = true;
+    this.connSelect.disabled = true; this.dbSelect.disabled = true;
+    this.runbar.setAttribute("aria-busy", "true"); this.markExecutionRunning(); this.startExecutionClock();
+    this.lastMessages = [{ text: this.runningMessageText("0.000 s"), error: false }];
+    this.renderResults(); this.app.notifyToolbar?.();
+    try {
+      const outcome = await this.execution.run({ execution_id: crypto.randomUUID(), connection_id: connId, namespace,
+        owner_id: this.tab.id, sql: plan.sql, transaction_owner: null, origin: "query" });
+      if (this.disposed || revision !== this.executionRevision || !outcome) return;
+      if (outcome.state !== "succeeded" || !outcome.result) {
+        this.executionNeedsReview = outcome.state === "unknown";
+        this.lastMessages = [{ text: `${this.executionStatusText()}。${outcome.error?.message ?? ""} 本页没有可用结果。`, error: true }];
+        this.renderResults(); this.app.toast(outcome.state === "unknown" ? "error" : "info", this.lastMessages[0].text); return;
+      }
+      const res = outcome.result;
+      this.rememberServerPage(offset, res);
+      this.showServerPage(res, offset, false);
+      this.renderResults();
+    } catch (error) {
+      if (!this.disposed && revision === this.executionRevision) {
+        this.lastMessages = [{ text: `服务器分页读取失败：${String(error)}`, error: true }];
+        this.renderResults(); this.app.toast("error", String(error));
+      }
+    } finally {
+      if (!this.disposed && revision === this.executionRevision) this.freezeExecutionClock();
+      this.running = false; this.stopBtn.disabled = true;
+      if (!this.disposed) { this.renderResults(); this.app.renderStatus?.(); this.renderResultPager(); }
+      this.app.notifyToolbar?.(); this.runbar.setAttribute("aria-busy", "false");
+    }
+  }
+
+  /** 写入已看页缓存，并淘汰最旧的页，避免无限增长。 */
+  private rememberServerPage(offset: number, res: MultiResult): void {
+    this.serverPageCache.delete(offset);
+    this.serverPageCache.set(offset, res);
+    while (this.serverPageCache.size > QueryTabView.SERVER_PAGE_CACHE_LIMIT) {
+      const oldest = this.serverPageCache.keys().next();
+      if (oldest.done) break;
+      this.serverPageCache.delete(oldest.value);
+    }
+  }
+
+  /** 显示某一页（命中缓存或刚查回）：只替换当前页，不声称全量。 */
+  private showServerPage(res: MultiResult, offset: number, fromCache: boolean): void {
+    const sp = this.serverPage;
+    const previousSpool = this.resultPages.replace(res, { connectionId: this.tab.connectionId, ownerId: this.tab.id, namespace: this.tab.schema }, offset);
+    this.tab.results = res; this.releaseSpool(previousSpool);
+    this.activeResultTab = res.sets.length ? 0 : -1;
+    // 记录本页最后一行的唯一键值，作为“下一页”的锚点；列不可用或值为空则不给锚点。
+    const keyColumn = this.serverPageKeysetColumn;
+    const firstSet = res.sets[0];
+    const columnIndex = keyColumn ? (firstSet?.columns.findIndex(c => c.name === keyColumn) ?? -1) : -1;
+    const lastRow = firstSet?.rows.length ? firstSet.rows[firstSet.rows.length - 1] : null;
+    const lastKey = columnIndex >= 0 && lastRow ? lastRow[columnIndex] ?? null : null;
+    this.serverPageAnchor = this.serverPageAnchorDisabled ? null : lastKey;
+    const rowsHere = res.sets[0]?.rows.length ?? 0;
+    const pageNo = sp ? Math.floor(offset / sp.limit) + 1 : 1;
+    this.lastMessages = [{
+      text: `服务器分页第 ${pageNo} 页，本页 ${rowsHere} 行${fromCache ? "（已看页缓存，未访问数据库）" : ""}；`
+        + "翻页会重新执行当前页查询，不读取全量。导出请用“导出全量（重查）”。",
+      error: false,
+    }];
+  }
+
   private renderResultPager(): void {
     this.updateResultLoading();
     const page = this.resultPages.page(this.activeResultTab), scope = this.resultPages.scope;
@@ -9860,6 +9994,24 @@ class QueryTabView extends TabView {
     this.pageControls.style.display = visible ? "flex" : "none";
     this.pageSizeSelect.parentElement!.style.display = visible ? "inline-flex" : "none";
     this.resultPager.setAttribute("aria-busy", String(!!page?.loading));
+    if (this.serverPage) {
+      const size = this.serverPage.limit;
+      const off = page?.offset ?? 0;
+      const busy = this.resultBusy();
+      const hasPrev = off > 0;
+      const hasNext = (page?.rows.length ?? 0) >= size;
+      this.pageNumberInput.value = String(Math.floor(off / size) + 1);
+      this.pageNumberInput.disabled = true;
+      this.pageSizeSelect.value = String(size);
+      this.pageSizeSelect.disabled = true;
+      this.pageNumberInput.removeAttribute("aria-invalid"); this.pageErrorEl.hidden = true;
+      this.footerStatusEl.textContent = `服务器分页 · 第 ${Math.floor(off / size) + 1} 页 · 本页 ${page?.rows.length ?? 0} 行`;
+      this.pageButtons.forEach((button, index) => {
+        button.disabled = busy || (index <= 1 ? !hasPrev : index === 3 ? true : !hasNext);
+        button.title = index === 3 ? "服务器分页无精确总数，不支持末页" : "服务器分页：翻页会重新执行当前页查询";
+      });
+      return;
+    }
     const blocked = this.resultBusy() || this.controlledResult?.dirty === true || !scope || !page;
     this.pageNumberInput.value = String(this.resultPages.pageNumber(this.activeResultTab));
     this.pageNumberInput.disabled = blocked || !page?.total;
@@ -10101,8 +10253,17 @@ class QueryTabView extends TabView {
     try {
       this.executionCapabilities = await api.executionCapabilities(connId);
       if (this.disposed || revision !== this.executionRevision) return;
+      // 查询页服务器分页：只执行当前页 SQL；不能安全改写则回退原全量路径。
+      const serverPageSize = this.resultPages.limit;
+      let execSql = sql;
+      let serverPaged = false;
+      try {
+        const plan = await api.planQueryPagination(connId, sql, serverPageSize, 0);
+        if (plan.mode === "page" && plan.sql) { execSql = plan.sql; serverPaged = true; }
+      } catch { serverPaged = false; }
+      if (this.disposed || revision !== this.executionRevision) return;
       const outcome = await this.execution.run({ execution_id: crypto.randomUUID(), connection_id: connId, namespace,
-        owner_id: this.tab.id, sql, transaction_owner: transaction?.active ? this.tab.id : null, origin: "query" });
+        owner_id: this.tab.id, sql: execSql, transaction_owner: transaction?.active ? this.tab.id : null, origin: "query" });
       if (this.disposed || revision !== this.executionRevision || !outcome) return;
       if (outcome.state !== "succeeded" || !outcome.result) {
         this.executionNeedsReview = outcome.state === "unknown";
@@ -10111,6 +10272,19 @@ class QueryTabView extends TabView {
         this.renderResults(); this.app.toast(outcome.state === "unknown" ? "error" : "info", this.lastMessages[0].text); return;
       }
       const res: MultiResult = outcome.result;
+      this.serverPageCache.clear();
+      this.serverPage = serverPaged ? { sql, limit: serverPageSize } : null;
+      this.serverPageAnchor = null; this.serverPageAnchorDisabled = false;
+      if (serverPaged) {
+        this.rememberServerPage(0, res);
+        // 只有单表 SELECT + 单列 ORDER BY 命中单列唯一主键时才启用锚点续页。
+        try {
+          const keyset = await api.planQueryKeyset(connId, sql);
+          this.serverPageKeysetColumn = keyset.supported ? (keyset.column ?? null) : null;
+        } catch { this.serverPageKeysetColumn = null; }
+      } else {
+        this.serverPageKeysetColumn = null;
+      }
       const previousSpool = this.resultPages.replace(res, { connectionId: connId, ownerId: this.tab.id, namespace });
       this.tab.results = res;
       this.resultExecution = { context: { execution_id: outcome.execution_id, connection_id: connId, owner_id: this.tab.id, namespace }, result: res };

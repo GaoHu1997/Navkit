@@ -782,6 +782,8 @@ async fn table_schema_impl(db: &Db, kind: DbKind, schema: &str, table: &str, inc
 
 #[path="schema_page.rs"]
 mod pagination;
+/// 列类型是否为数字（Keyset 锚点值是否需要数字校验）。
+pub(crate) use pagination::is_numeric_type;
 #[path="table_workflows_filter.rs"]
 mod typed_table_filter;
 #[path="table_workflows_filter_comparisons.rs"]
@@ -847,9 +849,8 @@ pub async fn page_table(
     };
     let where_sql = sensitive_table_filter::typed_clause(db, &kind, req).await?;
     let order_sql = order_clause(&kind, req);
-    let rows_sql = pagination::rows_sql(&kind, req, &full, &where_sql, &order_sql);
 
-    // 表元数据：列定义 + 主键（失败则退回按行推导）。
+    // 表元数据先取：列定义 + 主键（失败则退回按行推导）。Keyset 判断依赖主键与列类型。
     let meta = table_schema_for_page(db, kind.clone(), &req.schema, &req.table).await.ok();
     let meta_cols: Vec<ResultColumn> = meta
         .as_ref()
@@ -868,6 +869,15 @@ pub async fn page_table(
         .unwrap_or_default();
     let meta_pks: Vec<String> = meta.as_ref().map(crate::design::ordered_primary_key).transpose()?.unwrap_or_default();
     let col_count = meta_cols.len();
+
+    // Keyset：单列唯一主键 + 有效锚点时启用（锚点已定位起点，忽略 OFFSET）；否则按 OFFSET。
+    let keyset = pagination::keyset_for_page(&kind, req, &meta_pks, &meta_cols);
+    let keyset_req = keyset.as_ref().map(|_| { let mut r = req.clone(); r.offset = 0; r });
+    let rows_req: &crate::models::PageRequest = keyset_req.as_ref().unwrap_or(req);
+    let rows_where = keyset.as_ref().map(|(pred, _)| {
+        if where_sql.trim().is_empty() { format!(" WHERE ({pred})") } else { format!("{} AND ({pred})", where_sql) }
+    });
+    let rows_sql = pagination::rows_sql(&kind, rows_req, &full, rows_where.as_deref().unwrap_or(where_sql.as_str()), &order_sql);
 
     let (rows, total, pks) = match db {
         Db::Sqlite(pool) => {
@@ -960,7 +970,7 @@ pub async fn page_table(
     };
 
     let mut rows = rows;
-    let (total, total_exact, has_more) = pagination::finish(req, &mut rows, total);
+    let (total, total_exact, has_more) = pagination::finish(rows_req, &mut rows, total);
     // 列结构：优先元数据；没有元数据时按行推导（兜底）。
     let columns = if !meta_cols.is_empty() {
         meta_cols
@@ -981,7 +991,7 @@ pub async fn page_table(
     };
     // 行宽对齐列数（元数据比 SELECT * 多出表达式列时不至于越界）。
     let width = columns.len().max(col_count);
-    let rows = rows
+    let rows: Vec<Vec<Option<String>>> = rows
         .into_iter()
         .map(|mut r| {
             if width > r.len() {
@@ -991,6 +1001,16 @@ pub async fn page_table(
         })
         .collect();
 
+    // 单列唯一键且还有下一页时，给出下一页锚点（本页最后一行排序列值）。
+    let next_after: Option<Vec<Option<String>>> = match (&keyset, has_more) {
+        (Some((_, key_col)), Some(true)) => columns
+            .iter()
+            .position(|c| &c.name == key_col)
+            .and_then(|index| rows.last().and_then(|row| row.get(index).cloned()))
+            .map(|value| vec![value]),
+        _ => None,
+    };
+
     Ok(PageResult {
         columns,
         rows,
@@ -999,6 +1019,7 @@ pub async fn page_table(
         has_more,
         primary_keys: pks,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        next_after,
     })
 
     }).await
@@ -1966,6 +1987,7 @@ async fn generic_page_table(db: &Db, kind: &DbKind, req: &PageRequest) -> Result
         has_more,
         primary_keys: Vec::new(),
         elapsed_ms: 0,
+        next_after: None,
     })
 
     }).await
@@ -2131,6 +2153,7 @@ async fn http_page_table(h: &crate::http_db::HttpDb, req: &PageRequest) -> Resul
         has_more,
         primary_keys: Vec::new(),
         elapsed_ms: 0,
+        next_after: None,
     })
 }
 
@@ -2226,6 +2249,7 @@ async fn redis_key_page(r: &crate::redis_db::RedisDb, req: &PageRequest) -> Resu
         has_more: if req.limit == 0 { None } else { Some(false) },
         primary_keys: vec!["key".into()],
         elapsed_ms: 0,
+        next_after: None,
     })
 }
 
@@ -2303,6 +2327,7 @@ async fn mongo_doc_page(m: &crate::mongo_db::MongoDb, req: &PageRequest) -> Resu
         has_more,
         primary_keys: vec!["_id".into()],
         elapsed_ms: 0,
+        next_after: None,
     })
 }
 

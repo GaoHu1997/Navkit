@@ -26,7 +26,7 @@ export class QueryResultPages {
   get busy(): boolean { return this.pages.some(page => page.loading); }
   page(index: number): QueryResultPage | null { return this.pages[index] ?? null; }
 
-  replace(result: MultiResult | null, context?: Omit<QuerySpoolScope, "spoolId">): QuerySpoolScope | null {
+  replace(result: MultiResult | null, context?: Omit<QuerySpoolScope, "spoolId">, baseOffset = 0): QuerySpoolScope | null {
     const old = this.scope;
     ++this.generation;
     this.result = result;
@@ -34,7 +34,7 @@ export class QueryResultPages {
     this.pages = result?.sets.map(set => {
       // 快照路径只保留首屏；历史无 spool 路径保留原有已加载行，绝不声称全量。
       if (this.scope) set.rows = set.rows.slice(0, this.limit);
-      return { offset: 0, limit: this.limit, rows: set.rows, total: Math.max(set.total, set.rows.length), loading: false,
+      return { offset: baseOffset, limit: this.limit, rows: set.rows, total: Math.max(set.total, set.rows.length), loading: false,
         truncated: false, message: set.message || "", request: 0, previous: [] };
     }) ?? [];
     return old?.spoolId !== this.scope?.spoolId ? old : null;

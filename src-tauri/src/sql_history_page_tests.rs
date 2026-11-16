@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "sql_history_page_generic_tests.rs"]
 mod generic_tests;
+#[path = "sql_history_keyset_tests.rs"]
+mod keyset_tests;
 
 fn request(table: &str, offset: u64, limit: u64, include_total: bool) -> PageRequest {
     serde_json::from_value(serde_json::json!({

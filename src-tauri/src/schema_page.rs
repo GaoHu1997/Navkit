@@ -1,5 +1,5 @@
 //! 分页探测契约：无 COUNT 时 total 仅是已证明下界，不能由越界 offset 推测总数。
-use crate::models::{DbKind, PageRequest};
+use crate::models::{DbKind, PageRequest, ResultColumn};
 
 /// SQLite's unqualified lookup prefers temp over main. Resolve the selected real
 /// namespace explicitly, keeping the metadata path's display-label fallback.
@@ -37,6 +37,45 @@ pub(super) fn finish<T>(req: &PageRequest, rows: &mut Vec<T>, counted: Option<u6
     let total = req.offset.saturating_add(n).saturating_add(u64::from(more));
     // 已拿到不足一页的非空尾页（或首个空页）才足以证明总数。
     (total, !more, Some(more))
+}
+
+/// 单列唯一主键 + 有效锚点时，生成 Keyset 谓词与用于取下一页锚点的排序列名；
+/// 否则返回 None，调用方继续用 OFFSET。锚点已定位起点，调用方据此忽略 OFFSET。
+pub(super) fn keyset_for_page(
+    kind: &DbKind,
+    req: &PageRequest,
+    meta_pks: &[String],
+    meta_cols: &[ResultColumn],
+) -> Option<(String, String)> {
+    let after = req.after.as_ref()?;
+    let rules = req.order_rules.as_ref()?;
+    if rules.len() != 1 {
+        return None;
+    }
+    let rule = &rules[0];
+    if meta_pks.len() != 1 || meta_pks[0] != rule.column {
+        return None;
+    }
+    let after_value = after.first()?;
+    let numeric = meta_cols
+        .iter()
+        .find(|c| c.name == rule.column)
+        .map(|c| is_numeric_type(&c.data_type))
+        .unwrap_or(false);
+    let col = crate::db::quote_ident(kind, &rule.column);
+    let predicate =
+        crate::query_pagination::keyset_predicate(&col, rule.ascending, after_value.as_deref(), numeric)?;
+    Some((predicate, rule.column.clone()))
+}
+
+pub(crate) fn is_numeric_type(data_type: &str) -> bool {
+    let t = data_type.to_ascii_uppercase();
+    [
+        "INT", "BIGINT", "SMALLINT", "TINYINT", "MEDIUMINT", "DECIMAL", "NUMERIC", "FLOAT",
+        "DOUBLE", "REAL", "BIT", "SERIAL", "NUMBER",
+    ]
+    .iter()
+    .any(|k| t.contains(k))
 }
 
 /// 各 SQL 方言共用同一探测行预算；无 OFFSET 的 TOP/Hive 由调用者跳过前缀。

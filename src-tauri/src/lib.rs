@@ -84,6 +84,7 @@ pub use driver_manager::escape_value as escape_odbc_connection_value;
 pub use odbc_db::default_connection_string as default_odbc_connection_string;
 mod redis_db;
 pub mod schema;
+pub mod query_pagination;
 mod schema_diagram;
 pub mod storage;
 pub mod sql_history;
@@ -244,6 +245,10 @@ pub fn run() {
             commands::execute_sql,
             commands::issue_execution_grant,
             commands::execute_sql_v2,
+            commands::plan_query_pagination,
+            commands::plan_query_keyset,
+            commands::plan_query_keyset_page,
+            commands::export_query_requery,
             commands::execute_sql_streaming,
             commands::execution_stream_snapshot,
             commands::cancel_execution,

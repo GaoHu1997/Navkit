@@ -23,6 +23,15 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 ## 三、当前验证状态
 
+### 2026-11-15 查询服务器分页 / 导出重查 / 表数据 Keyset（分支 feature/query-server-pagination）
+
+**✅ 代码 + 单元/集成/真实 MySQL 测试通过；未合并主树，未替换运行中程序。**
+
+- 查询页服务器分页：[query_pagination.rs](<../../src-tauri/src/query_pagination.rs>)（`plan_query_page`，引入 sqlparser 0.62）+ `plan_query_pagination` 命令；前端 `execute` 先规划当前页并记录原始 SQL，翻页走 `loadServerResultPage`/`executeServerPage`。
+- 导出重查全量：`rerunnable_read` + `export_query_requery`（仅可安全重跑的单条只读语句；超配额经 `ensure_complete` 明确拒绝）；前端服务器分页模式导出走重查并提示结果可能不同。
+- 表数据 Keyset：`keyset_for_page` 接入 `page_table`（单列唯一主键 + 锚点时启用，锚点已定位故忽略 OFFSET）；新增 `PageRequest.after` / `PageResult.next_after`；前端仅“下一页”携带锚点，跳页/末页回退 OFFSET。
+- 测试：后端 `query_pagination::` 20 单元、`requery_tests::` 3 + `page_tests::` 8（真实 SQLite）、新增真实 MySQL 端到端 1 项（分页执行、用户 LIMIT 包装、Keyset `id>500` 定位）；前端 `npm run build` 通过 + `query-result-host`/`execution-controller`/`query-execution`/`data-grid-filter-sort` 128 项通过。PostgreSQL 与桌面 E2E 尚未运行（⏳）；完整 `test:ui` 未跑。
+
 ### 2026-11-14 公开 recipe 预览完成判定修复（最新）
 
 **上一轮确定的发布阻断已消除，新修复快照的本轮验证通过。** [完成判定](<../../src-tauri/src/generated_recipe_runtime.rs#L36-L48>)复用正式批任务 finish/outcome，不再把停止确认布尔值当成功标志；只有成功、资源已排空、事务为 none 且没有发送生成写入才返回样本。原失败诊断、取消/超时、未确认停止、未知清理和在途资源均严格拒绝，不重放。

@@ -532,6 +532,27 @@ export const api = {
     names: string[],
     rows: (string | null)[][],
   ) => call<number>("export_query_result", { opts, names, rows }),
+  /** 查询页服务器分页规划：只生成当前页 SQL，不执行、不发 SQL。 */
+  planQueryPagination: (connectionId: string, sql: string, limit: number, offset: number) =>
+    call<{ mode: "page" | "unsupported"; sql: string | null; reason: string | null }>(
+      "plan_query_pagination",
+      { connectionId, sql, limit, offset },
+    ),
+  /** 查询页 Keyset 判定：SQL 形状命中唯一键时可用锚点续页，否则继续 OFFSET。 */
+  planQueryKeyset: (connectionId: string, sql: string) =>
+    call<{ supported: boolean; reason: string | null; column?: string; ascending?: boolean; numeric?: boolean }>(
+      "plan_query_keyset",
+      { connectionId, sql },
+    ),
+  /** 按 Keyset 锚点生成查询页 SQL：只生成、不执行。 */
+  planQueryKeysetPage: (connectionId: string, sql: string, after: string, limit: number) =>
+    call<{ mode: "page" | "unsupported"; sql: string | null; reason: string | null }>(
+      "plan_query_keyset_page",
+      { connectionId, sql, after, limit },
+    ),
+  /** 导出时重新查询全量（仅可安全重跑的单条只读语句；超配额明确拒绝）。 */
+  exportQueryRequery: (opts: ExportOptions, sql: string, ownerId: string, namespace: string) =>
+    call<number>("export_query_requery", { opts, sql, ownerId, namespace }),
   previewCsv: (path: string, delimiter: string, encoding: string, limit: number) =>
     call<[string[], string[][]]>("preview_csv", { path, delimiter, encoding, limit }),
   runTransfer: (opts: TransferOptions) => call<number>("run_transfer", { opts }),
