@@ -122,7 +122,7 @@ pub(super) async fn mysql_keys(pool: &MySqlPool, namespace: &str, table: &str) -
     Ok((indexes.into_values().collect(), foreign.into_values().collect()))
 }
 
-const PG_INDEX_SQL: &str = "SELECT idx.relname::text AS index_name, x.indisprimary AS is_primary, x.indisunique AS is_unique, am.amname::text AS method, a.attname::text AS column_name, k.ordinal::bigint AS ordinal, opt.bits::int AS option_bits, x.indisvalid, x.indisready, x.indnatts::int AS all_columns, COALESCE((to_jsonb(x)->>'indnkeyatts')::int, x.indnatts::int) AS key_columns, pg_get_expr(x.indpred,x.indrelid) AS predicate, pg_get_expr(x.indexprs,x.indrelid) AS expressions FROM pg_index x JOIN pg_class c ON c.oid = x.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_class idx ON idx.oid = x.indexrelid JOIN pg_am am ON am.oid = idx.relam JOIN LATERAL unnest(x.indkey::smallint[]) WITH ORDINALITY k(attnum,ordinal) ON true LEFT JOIN LATERAL unnest(x.indoption::smallint[]) WITH ORDINALITY opt(bits,ordinal) ON opt.ordinal = k.ordinal LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum WHERE n.nspname = $1 AND c.relname = $2 AND k.ordinal <= COALESCE((to_jsonb(x)->>'indnkeyatts')::int,x.indnatts::int) ORDER BY idx.relname,k.ordinal LIMIT 8193";
+const PG_INDEX_SQL: &str = "SELECT idx.relname::text AS index_name, x.indisprimary AS is_primary, x.indisunique AS is_unique, am.amname::text AS method, a.attname::text AS column_name, k.ordinal::bigint AS ordinal, opt.bits::int AS option_bits, x.indisvalid, x.indisready, x.indnatts::int AS all_columns, COALESCE((to_json(x)->>'indnkeyatts')::int, x.indnatts::int) AS key_columns, pg_get_expr(x.indpred,x.indrelid) AS predicate, pg_get_expr(x.indexprs,x.indrelid) AS expressions FROM pg_index x JOIN pg_class c ON c.oid = x.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_class idx ON idx.oid = x.indexrelid JOIN pg_am am ON am.oid = idx.relam JOIN LATERAL unnest(x.indkey::smallint[]) WITH ORDINALITY k(attnum,ordinal) ON true LEFT JOIN LATERAL unnest(x.indoption::smallint[]) WITH ORDINALITY opt(bits,ordinal) ON opt.ordinal = k.ordinal LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum WHERE n.nspname = $1 AND c.relname = $2 AND k.ordinal <= COALESCE((to_json(x)->>'indnkeyatts')::int,x.indnatts::int) ORDER BY idx.relname,k.ordinal LIMIT 8193";
 const PG_FK_SQL: &str = "SELECT tc.conname::text AS constraint_name, a.attname::text AS local_column, c2.relname::text AS ref_table, n2.nspname::text AS ref_schema, af.attname::text AS ref_column, local_key.ordinal::bigint AS ordinal, tc.confupdtype::text AS update_action, tc.confdeltype::text AS delete_action FROM pg_constraint tc JOIN pg_class c ON c.oid = tc.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_class c2 ON c2.oid = tc.confrelid JOIN pg_namespace n2 ON n2.oid = c2.relnamespace JOIN LATERAL unnest(tc.conkey) WITH ORDINALITY local_key(attnum,ordinal) ON true JOIN LATERAL unnest(tc.confkey) WITH ORDINALITY ref_key(attnum,ordinal) ON ref_key.ordinal = local_key.ordinal JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = local_key.attnum JOIN pg_attribute af ON af.attrelid = c2.oid AND af.attnum = ref_key.attnum WHERE tc.contype = 'f' AND n.nspname = $1 AND c.relname = $2 ORDER BY tc.conname,local_key.ordinal LIMIT 8193";
 
 pub(super) async fn pg_keys(pool: &PgPool, namespace: &str, table: &str) -> Result<(Vec<IndexInfo>, Vec<ForeignKeyInfo>)> {
@@ -197,5 +197,12 @@ mod tests {
         assert!(PG_INDEX_SQL.contains("WITH ORDINALITY")); assert!(!PG_FK_SQL.contains("ANY(")); assert!(!PG_INDEX_SQL.contains("ANY("));
         for (code,expected) in [("a","NO ACTION"),("r","RESTRICT"),("c","CASCADE"),("n","SET NULL"),("d","SET DEFAULT")] { assert_eq!(pg_action(code).unwrap(),expected); }
         assert!(pg_action("unknown").is_err());
+    }
+    #[test] fn postgres_index_sql_avoids_to_jsonb_for_opengauss() {
+        // openGauss 7.0（9.2.4 内核）没有 to_jsonb(record)，会 42883；to_json 在 PG 9.x/10/11+/openGauss 均存在。
+        // 保留 COALESCE 回退：PG 10 无 indnkeyatts 时 to_json(x)->>'indnkeyatts' 为 NULL，退回 indnatts 仍正确。
+        assert!(!PG_INDEX_SQL.contains("to_jsonb"), "openGauss 不支持 to_jsonb");
+        assert!(PG_INDEX_SQL.contains("to_json(x)->>'indnkeyatts'"));
+        assert!(PG_INDEX_SQL.contains("COALESCE((to_json(x)->>'indnkeyatts')::int, x.indnatts::int)"));
     }
 }

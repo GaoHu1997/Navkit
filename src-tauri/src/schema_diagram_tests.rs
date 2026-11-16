@@ -299,3 +299,10 @@ fn native_queries_are_namespace_bounded_without_count_or_mysql_catalog_join() {
     assert_eq!(pg_action("c").as_deref(), Some("CASCADE"));
     assert_eq!(pg_action("unknown"), None);
 }
+
+#[test]
+fn postgres_index_query_avoids_to_jsonb_for_opengauss() {
+    // openGauss 7.0（9.2.4 内核）没有 to_jsonb(record)（42883）；to_json 在 PG 9.x/10/11+/openGauss 均可用。
+    assert!(!PG_INDEXES.contains("to_jsonb"), "openGauss 不支持 to_jsonb");
+    assert!(PG_INDEXES.contains("to_json(x)->>'indnkeyatts'"));
+}

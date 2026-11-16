@@ -257,6 +257,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 表设计读取按服务端实际能力探测，不按连接类型等同：
 - MySQL 协议族：MySQL 8 用 `@@server_uuid` + `information_schema.INNODB_TABLES`；MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID`。TiDB 没有触发器，其空目录按方言事实处理；TiDB 的 `GET_LOCK`/`LOCK TABLES` 是 noop 兼容功能，**表结构保存明确拒绝**（读取、预览仍可用）。
 - PostgreSQL 协议族：`attgenerated`/`attidentity`/`attcompression`/`indnkeyatts`/`pg_sequence`/`relrowsecurity` 等版本相关列逐个探测，缺失时降级并在设计器 limitations 中标注；解构约束/索引改用所有版本都接受的单参数 `pg_get_*`。
+  - openGauss 7.0.0-RC3（9.2.4 内核）实测没有 `to_jsonb(record)`（42883），索引键列改用 `to_json(x)->>'indnkeyatts'`：openGauss 与 PG 11+ 直接取到 `indnkeyatts`，PG 10 取不到时回退 `indnatts`（PG 10 无 INCLUDE，语义等价）。`WITH ORDINALITY` 实测支持，无需替换 `generate_subscripts`。
 - Doris/StarRocks/SelectDB/Databend/Manticore、CockroachDB/Redshift/Cloudberry/QuestDB 的表目录/DDL 与 MySQL/PostgreSQL 不兼容，表设计入口明确拒绝，不把 1054/1146/42703 裸抛给界面。
 
 目录共 101 个条目（34 个 ODBC）。其余 90+ 类型仅提供图标与协议探测，**未做厂商实库认证**，
