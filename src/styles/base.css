@@ -1207,6 +1207,18 @@ svg {
   border-right: 0;
 }
 
+.grid-table tbody td.grid-cell-pinned {
+  position: sticky;
+  z-index: 1;
+}
+.grid-table thead th.grid-cell-pinned {
+  z-index: calc(var(--z-sticky) + 2);
+  color: var(--text);
+}
+.grid-table .grid-cell-pinned-edge {
+  box-shadow: 1px 0 0 var(--border);
+}
+
 .grid-th-inner {
   display: flex;
   align-items: center;
@@ -1978,18 +1990,6 @@ svg {
 }
 .query-page-size:disabled { color: var(--text-disabled); }
 .query-page-size:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
-.query-page-number {
-  width: 44px;
-  height: var(--h-control-sm);
-  padding: 0 var(--sp-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-2);
-  background: var(--bg-subtle);
-  color: var(--text);
-  font: inherit;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
 .query-page-number:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
 .query-page-number[aria-invalid="true"] { border-color: var(--danger-500); }
 .query-page-number:disabled { color: var(--text-disabled); }

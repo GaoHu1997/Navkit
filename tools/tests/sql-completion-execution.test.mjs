@@ -216,7 +216,7 @@ class Element {
   }
   set innerHTML(value) { this.children = []; this._html = value; }
   get innerHTML() { return this._html ?? ''; }
-  appendChild(child) { this.children.push(child); return child; }
+  appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
   // 新代码使用 replaceChildren 管理结果面板；桩提供等价实现
   replaceChildren(...children) { this.children = [...children]; }
@@ -571,8 +571,9 @@ test('real query result controls page from spool and keep exact keyboard accessi
   await view.loadResultPage('next'); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.grid.data.rows.length, 200); assert.equal(view.grid.data.rows[0][0], '200');
   assert.equal(view.grid.data.rowNumberOffset, 200);
-  assert.match(view.statusInfo().pageText, /第 2\/51 页/);
-  assert.equal(view.pageNumberInput.value, "2"); assert.match(view.footerStatusEl.textContent, /运行时间: 0.001s.*第 2\/51 页/);
+  assert.equal(view.statusInfo().pageText, '共 10001 行');
+  assert.equal(view.pageNumberInput.value, "2"); assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 共 10001 行');
+  assert.equal(view.pageCountEl.textContent, '/ 51 页');
   view.resultTabsEl.children[2].fire('click'); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(tab.activeResult, 1); assert.equal(view.grid.data.rows[0][0], '0');
   assert.equal(view.grid.data.rowNumberOffset, 0);
@@ -580,6 +581,62 @@ test('real query result controls page from spool and keep exact keyboard accessi
   assert.equal(tab.activeResult, 0); assert.equal(view.grid.data.rows[0][0], '200');
   assert.equal(view.grid.data.rowNumberOffset, 200);
   assert.equal(calls.filter(call => call[0] === 'fetch').length, 1);
+});
+
+for (const sql of ['UPDATE t SET value = 1', 'DELETE FROM t', 'INSERT INTO t VALUES (1)', 'CREATE TABLE t (value INT)']) {
+  test(`non-rowset execution shows only messages and affected rows: ${sql}`, async () => {
+    for (const affected of [0, 7]) {
+      const { view, api, tab, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
+      api.executeSql = async () => ({ elapsed_ms: 125, messages: [], sets: [{ columns: [], rows: [], total: 0, affected, message: 'statement completed' }] });
+      await view.execute(sql, false);
+      assert.equal(tab.activeResult, -1);
+      assert.deepEqual(view.resultTabsEl.children.map(child => child.textContent), ['消息']);
+      assert.equal(view.grid.el.style.display, 'none'); assert.equal(view.messagesEl.style.display, '');
+      assert.equal(view.footerStatusEl.textContent, `运行耗时 0.125s | 影响 ${affected} 行`);
+      assert.equal(view.resultPager.style.display, 'flex'); assert.equal(view.pageControls.style.display, 'none');
+      assert.equal(view.pageSizeSelect.parentElement.style.display, 'none');
+      assert.match(view.lastMessages[0].text, new RegExp(`影响 ${affected} 行`));
+      assert.equal(evidenceCalls.some(call => call[0] === 'snapshot'), false);
+      view.destroy();
+    }
+  });
+}
+
+test('empty SELECT and writes with RETURNING remain real result sets', async () => {
+  for (const [sql, rows] of [['SELECT value FROM t WHERE 1 = 0', []], ['UPDATE t SET value = 1 RETURNING value', [['1']]]]) {
+    const { view, api, tab, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
+    api.executeSql = async () => ({ elapsed_ms: 125, messages: [], sets: [{ columns: [{ name: 'value' }], rows, total: rows.length, affected: rows.length, message: '' }] });
+    await view.execute(sql, false); await readOnlyResultsSettled(view, evidenceCalls);
+    assert.equal(tab.activeResult, 0);
+    assert.deepEqual(view.resultTabsEl.children.map(child => child.textContent), ['消息', '结果 1']);
+    assert.equal(view.footerStatusEl.textContent, `运行耗时 0.125s | 共 ${rows.length} 行`);
+    assert.equal(view.pageControls.style.display, 'flex');
+    view.destroy();
+  }
+});
+
+test('mixed batches hide receipts without renumbering cache, evidence and export indexes', async () => {
+  const { view, api, tab, calls, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
+  const result = spoolResult('mixed', [10001, 700]);
+  const receipt = affected => ({ columns: [], rows: [], total: 0, affected, message: 'write completed' });
+  result.sets = [receipt(3), result.sets[0], receipt(4), result.sets[1]];
+  api.executeSql = async () => result;
+  await view.execute('UPDATE t SET value = 1; SELECT * FROM t; DELETE FROM t; SELECT * FROM other', false);
+  await readOnlyResultsSettled(view, evidenceCalls);
+  assert.equal(tab.activeResult, 1);
+  assert.deepEqual(view.resultTabsEl.children.map(child => child.textContent), ['消息', '结果 1', '结果 2']);
+  await view.loadResultPage('next'); await readOnlyResultsSettled(view, evidenceCalls);
+  assert.equal(calls.find(call => call[0] === 'fetch')[2], 1);
+  assert.equal(evidenceCalls.find(call => call[0] === 'snapshot')[1].result_index, 1);
+  await view.exportResultSnapshot(exportOptions, view.captureResultExport());
+  assert.equal(calls.find(call => call[0] === 'export-spool')[3], 1);
+  view.resultTabsEl.children[0].fire('click');
+  assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 影响 7 行');
+  assert.equal(view.pageControls.style.display, 'none');
+  view.resultTabsEl.children[2].fire('click'); await readOnlyResultsSettled(view, evidenceCalls);
+  assert.equal(tab.activeResult, 3); assert.equal(view.pageCountEl.textContent, '/ 4 页');
+  assert.equal(view.resultTabsEl.children[2].focused, true);
+  view.destroy();
 });
 
 test('spooled export writes all execution rows with pinned scope and never sends loaded rows', async () => {
@@ -694,9 +751,10 @@ test('manual page entry validates boundaries and jumps via cached offsets withou
   const { view, api, calls, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
   api.executeSql = async (_id, sql) => { calls.push(['execute', sql]); return spoolResult('numbered', [10001]); }; await view.execute('SELECT value FROM t', false);
   await readOnlyResultsSettled(view, evidenceCalls);
-  assert.equal(view.pageNumberInput.value, '1'); assert.match(view.footerStatusEl.textContent, /运行时间: 0.001s.*第 1\/51 页/);
+  assert.equal(view.pageNumberInput.value, '1'); assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 共 10001 行');
   assert.equal(view.resultPager.children[0], view.footerStatusEl);
-  assert.equal(view.pageCountEl, undefined);
+  assert.equal(view.pageCountEl.textContent, '/ 51 页');
+  assert.equal(view.pageControls.children[2].className, 'grid-pager-position');
   for (const value of ['', '0', '-1', '1.5', 'abc', '52', '1e1', '9007199254740993']) {
     view.pageNumberInput.value = value; await view.jumpResultPage();
     assert.equal(view.pageNumberInput.attributes['aria-invalid'], 'true'); assert.equal(view.pageErrorEl.hidden, false);
@@ -706,7 +764,7 @@ test('manual page entry validates boundaries and jumps via cached offsets withou
   await readOnlyResultsSettled(view, evidenceCalls); await new Promise(resolve => setImmediate(resolve));
   await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.resultPages.page(0).offset, 10000); assert.equal(view.pageNumberInput.value, '51');
-  assert.match(view.statusInfo().pageText, /第 51\/51 页/);
+  assert.equal(view.statusInfo().pageText, '共 10001 行');
   view.pageNumberInput.value = '2'; view.pageNumberInput.fire('blur');
   await new Promise(resolve => setImmediate(resolve)); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.resultPages.page(0).offset, 200);
@@ -726,7 +784,7 @@ test('ordinary cached completion notices no longer appear above the grid; incomp
     const result = spoolResult(); result.sets[0].message = message; api.executeSql = async () => result;
     await view.execute('SELECT value FROM t', false); await readOnlyResultsSettled(view, evidenceCalls);
     assert.equal(view.gridPreviewNoteEl.style.display, visible ? 'block' : 'none');
-    assert.equal(view.statusInfo().elapsed, '运行时间: 0.001s');
+    assert.equal(view.statusInfo().elapsed, '运行耗时 0.001s');
   }
 });
 
@@ -779,7 +837,7 @@ function queryClockFixture() {
   const timers = new Map();
   const h = queryHarness({
     performance: { now: () => now },
-    setInterval: callback => { const id = ++next; timers.set(id, callback); return id; },
+    setInterval: (callback, ms) => { assert.equal(ms, 50); const id = ++next; timers.set(id, callback); return id; },
     clearInterval: id => timers.delete(id),
   });
   return { ...h, timers, advance(ms) { now += ms; for (const callback of [...timers.values()]) callback(); } };
@@ -805,11 +863,18 @@ test('rerun clears old grid, selection, preview and spool before capability resp
   assert.equal(view.grid.data.columns.length, 0);
   assert.equal(view.cellPreviewEl.children.length, 0);
   assert.equal(view.executionLabelEl.textContent, '查询中');
+  assert.equal(view.runbar.querySelector('.query-transaction-status'), null);
+  assert.equal(view.resultLoadingLabelEl.textContent, '正在查询… ');
+  assert.equal(view.resultLoadingTimerEl.textContent, '0.000 s');
+  assert.equal(view.resultLoadingTimerEl.attributes['aria-hidden'], 'true');
+  const centralTimer = view.resultLoadingTimerEl;
   assert.equal(timers.size, 1);
   assert.deepEqual(calls.filter(c => c[0] === 'drop').map(c => c[1].spoolId), ['previous']);
   await assert.rejects(view.exportResultSnapshot(exportOptions, oldExport), /已经替换/);
   advance(372);
   assert.equal(view.executionTimerEl.textContent, '0.372 s');
+  assert.equal(view.resultLoadingTimerEl, centralTimer);
+  assert.equal(view.resultLoadingTimerEl.textContent, '0.372 s');
   assert.equal(view.executionMessageTimerEl.textContent, '0.372 s');
   assert.equal(view.executionMessageTimerEl.attributes['aria-hidden'], 'true');
   assert.equal(view.lastMessages[0].text, '查询中… 0.372 s');
@@ -819,10 +884,14 @@ test('rerun clears old grid, selection, preview and spool before capability resp
   await view.execution.cancel();
   advance(128);
   assert.equal(view.executionMessageLabelEl.textContent, '停止中…');
+  assert.equal(view.resultLoadingLabelEl.textContent, '正在停止查询… ');
+  assert.equal(view.resultLoadingTimerEl.textContent, '0.500 s');
   assert.equal(view.executionMessageTimerEl.textContent, '0.500 s');
   outcome.resolve({ execution_id: sent.execution_id, state: 'cancelled', result: null, error: null });
   await task;
   assert.equal(timers.size, 0);
+  assert.equal(view.resultLoadingEl.hidden, true);
+  assert.equal(view.resultLoadingTimerEl.textContent, '');
   assert.equal(view.executionTimerEl.textContent, '0.500 s');
   advance(1000);
   assert.equal(view.executionTimerEl.textContent, '0.500 s');

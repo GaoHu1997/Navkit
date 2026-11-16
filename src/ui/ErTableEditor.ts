@@ -1,6 +1,6 @@
 import { api, type TableDesignSnapshot, type TableDesignResponse, type ForeignKeyDesign } from "../core/api";
 import type { ConnectionConfig } from "../core/types";
-import { ExecutionController } from "../core/execution";
+import { ExecutionController, formatError } from "../core/execution";
 import { assertDesignSnapshot, designClone, draftFromSnapshot, draftSignature, payloadFromDraft, verifiedDesignResponse, type TableDesignerDraft, type DesignerColumn } from "../core/table-design-draft";
 import { reviewErSyncPlan } from "../dialogs/ErSyncDialog";
 import "../styles/er-table-editor.css";
@@ -37,10 +37,13 @@ export class ErTableEditor {
   private draft: TableDesignerDraft | null = null;
   private baseline = "";
   private tab: "字段" | "索引" | "外键" = "字段";
-  private loading = false;
+  private loadState: "idle" | "loading" | "error" | "ready" = "idle";
+  private loadError = "";
+  private metadataVersion = 0;
   private saving = false;
   private disposed = false;
   private message = "";
+  private messageTone: "error" | "success" = "error";
   private execution: ExecutionController | null = null;
   private readonly fkCardinality = new Map<object, string>();
   private refTables: { values: string[] | null; loading: boolean; error: string } = { values: null, loading: false, error: "" };
@@ -54,31 +57,48 @@ export class ErTableEditor {
     this.render();
   }
 
-  activate(): void { if (!this.snapshot && !this.loading) void this.load(); }
+  activate(): void { if (this.loadState === "idle") void this.load(); }
+  /** 图数据刷新只能更新干净基线，切表、刷新与重试都不能丢弃已有草稿。 */
+  reload(): void { if (!this.draftDirty()) void this.load(); }
   draftDirty(): boolean { return !!this.draft && draftSignature(this.draft) !== this.baseline; }
-  dispose(): void { this.disposed = true; this.execution?.dispose(); }
+  saveReason(): string | null {
+    return this.editReason() || (!this.snapshot || !this.draft ? "完整表设计尚未载入，请先读取或重试。" : !this.draftDirty() ? "没有待保存的结构修改。" : null);
+  }
+  dispose(): void { this.disposed = true; ++this.metadataVersion; this.execution?.dispose(); }
   destroy(): void { this.dispose(); }
 
   private async load(): Promise<void> {
-    if (this.loading || this.disposed) return;
-    this.loading = true; this.render(); this.host.changed();
+    if (this.loadState === "loading" || this.saving || this.disposed || this.draftDirty()) return;
+    ++this.metadataVersion;
+    this.refTables = { values: null, loading: false, error: "" };
+    this.refColumns.clear();
+    this.loadState = "loading"; this.loadError = ""; this.message = "";
+    this.render(); this.host.changed();
     try {
       const s = await api.readTableDesignSnapshot(this.opts.connectionId, this.opts.schema, this.opts.table, this.opts.ownerId);
       if (this.disposed) return;
       assertDesignSnapshot(s);
       this.accept(s);
-      this.message = "";
+      this.loadState = "ready";
     } catch (e) {
-      this.message = "读取表设计失败：" + String(e);
+      if (this.disposed) return;
+      this.loadState = "error";
+      this.loadError = "读取表设计失败：" + formatError(e);
     } finally {
-      this.loading = false; this.render(); this.host.changed();
+      if (!this.disposed) { this.render(); this.host.changed(); }
     }
   }
 
   private accept(s: TableDesignSnapshot): void {
+    // 校验与草稿转换全部完成后再提交，异常不能留下半个基线。
+    const draft = draftFromSnapshot(s);
+    const baseline = draftSignature(draft);
     this.snapshot = designClone(s);
-    this.draft = draftFromSnapshot(s);
-    this.baseline = draftSignature(this.draft);
+    this.draft = draft;
+    this.baseline = baseline;
+    ++this.metadataVersion;
+    this.refTables = { values: null, loading: false, error: "" };
+    this.refColumns.clear();
     this.fkCardinality.clear();
     for (const fk of this.draft.foreign_keys ?? []) this.fkCardinality.set(fk, this.deriveCardinality(fk));
     const first = this.draft.columns.find(c => !c.deleted);
@@ -92,7 +112,7 @@ export class ErTableEditor {
   }
 
   private editReason(): string | null {
-    return this.host.writeReason() || (this.loading ? "正在读取表结构。" : this.saving ? "正在保存表结构。" : null);
+    return this.disposed ? "表设计器已关闭。" : this.host.writeReason() || (this.loadState === "loading" ? "正在读取表结构。" : this.loadState !== "ready" ? "完整表设计尚未载入，请先读取或重试。" : this.saving ? "正在保存表结构。" : null);
   }
 
   private changed(): void {
@@ -103,6 +123,8 @@ export class ErTableEditor {
 
   private render(): void {
     if (this.disposed) return;
+    this.el.dataset.loadState = this.loadState;
+    this.el.setAttribute("aria-busy", String(this.loadState === "loading" || this.saving));
     this.el.replaceChildren();
     const tabs = elem("div", "er-te-tabs");
     tabs.setAttribute("role", "tablist");
@@ -115,21 +137,47 @@ export class ErTableEditor {
     this.el.appendChild(tabs);
     const body = elem("div", "er-te-body");
     this.el.appendChild(body);
+    if (this.loadError) {
+      const error = elem("div", "er-te-notice", this.loadError);
+      error.setAttribute("role", "alert");
+      body.appendChild(error);
+    }
+    if (this.loadState === "idle" || this.loadState === "error") {
+      const retry = elem("button", "er-te-btn er-te-retry", this.loadState === "error" ? "重试读取表设计" : "读取表设计");
+      retry.type = "button";
+      retry.addEventListener("click", () => this.reload());
+      body.appendChild(retry);
+    }
     if (!this.snapshot || !this.draft) {
-      body.appendChild(elem("p", "er-te-empty", this.loading ? "正在读取完整表设计…" : "表设计元数据尚未完整读取。"));
+      const status = elem("p", "er-te-empty", this.loadState === "loading" ? "正在读取完整表设计…" : this.loadState === "error" ? "尚未取得完整表设计，请重试读取。" : "选择表后读取完整表设计。");
+      status.setAttribute("role", "status");
+      body.appendChild(status);
       return;
     }
-    if (this.message) body.appendChild(elem("div", "er-te-notice", this.message));
+    if (this.loadState === "loading") {
+      const status = elem("p", "er-te-empty", "正在重新读取完整表设计…");
+      status.setAttribute("role", "status");
+      body.appendChild(status);
+    }
+    if (this.message) {
+      const notice = elem("div", "er-te-notice", this.message);
+      notice.dataset.tone = this.messageTone;
+      notice.setAttribute("role", this.messageTone === "error" ? "alert" : "status");
+      body.appendChild(notice);
+    }
+    const reason = this.host.writeReason();
+    if (reason) body.appendChild(elem("p", "er-te-empty", reason));
     const nameField = elem("div", "er-te-namefield");
     nameField.appendChild(elem("p", "er-te-lbl", "表名"));
     const ni = elem("input", "er-te-input");
-    ni.value = this.opts.table; ni.disabled = true; ni.title = "表名修改请使用表结构编辑器";
+    ni.value = this.opts.table; ni.disabled = true; ni.title = "表名修改请使用表结构编辑器"; ni.setAttribute("aria-label", "表名");
     nameField.appendChild(ni);
     body.appendChild(nameField);
     if (this.tab === "字段") this.renderFields(body);
     else if (this.tab === "索引") this.renderIndexes(body);
     else this.renderForeignKeys(body);
-    const status = elem("div", "er-te-status", this.draftDirty() ? "有未保存的表结构草稿。" : "表结构与读取基线一致。");
+    const status = elem("div", "er-te-status", this.loadState === "error" ? "重新读取失败，已保留上次基线。" : this.loadState === "loading" ? "正在读取表结构。" : this.saving ? "正在保存表结构。" : this.draftDirty() ? "有未保存的表结构草稿。" : "完整表设计已读取，表结构与读取基线一致。");
+    status.setAttribute("role", "status");
     this.el.appendChild(status);
   }
 
@@ -183,7 +231,7 @@ export class ErTableEditor {
       col.name = v;
     }, col.deleted);
     nameI.classList.add("er-fedit-name");
-    const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.title = "删除字段"; del.disabled = !!this.editReason();
+    const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.title = col.deleted ? "恢复字段" : "删除字段"; del.setAttribute("aria-label", del.title); del.disabled = !!this.editReason();
     del.addEventListener("click", () => { col.deleted = !col.deleted; this.render(); this.changed(); });
     l1.append(nameI, del);
     const l2 = elem("div", "er-fedit-l2");
@@ -238,7 +286,7 @@ export class ErTableEditor {
         colI.setAttribute("data-search-token", ",");
       }
       const uniq = this.fieldSelect(idx.unique ? "UNIQUE" : "NORMAL", ["NORMAL", "UNIQUE"], "索引类型", v => { idx.unique = v === "UNIQUE"; });
-      const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.disabled = !!this.editReason();
+      const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.title = "删除索引"; del.setAttribute("aria-label", del.title); del.disabled = !!this.editReason();
       del.addEventListener("click", () => { draft.indexes!.splice(i, 1); this.render(); this.changed(); });
       row.append(nameI, colI, uniq, del);
       body.appendChild(row);
@@ -246,7 +294,8 @@ export class ErTableEditor {
   }
 
   private renderForeignKeys(body: HTMLElement): void {
-    if (!this.refTables.values && !this.refTables.loading) void this.ensureRefTables();
+    if (this.loadState === "ready" && !this.refTables.values && !this.refTables.loading && !this.refTables.error) void this.ensureRefTables();
+    if (this.loadState === "ready" && this.refTables.values?.includes(this.form.refTable) && !this.refColumns.has(this.form.refTable)) void this.ensureRefColumns(this.form.refTable);
     const head = elem("div", "er-te-subhead");
     head.appendChild(elem("h4", undefined, "外键关系"));
     body.appendChild(head);
@@ -260,7 +309,7 @@ export class ErTableEditor {
     const card = elem("div", "er-fkitem");
     const r1 = elem("div", "er-fkitem-r1");
     r1.appendChild(elem("span", "er-fkitem-name", "🔗 " + (fk.name || "（未命名外键）")));
-    const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.title = "删除外键"; del.disabled = !!this.editReason();
+    const del = elem("button", "er-fedit-del", "🗑"); del.type = "button"; del.title = "删除外键"; del.setAttribute("aria-label", del.title); del.disabled = !!this.editReason();
     del.addEventListener("click", () => { const arr = this.draft!.foreign_keys!; const at = arr.indexOf(fk); if (at >= 0) arr.splice(at, 1); this.render(); this.changed(); });
     r1.appendChild(del);
     const r2 = elem("div", "er-fkitem-r2");
@@ -287,6 +336,9 @@ export class ErTableEditor {
     const onUpd = this.fieldSelect(this.form.onUpdate, ["CASCADE", "RESTRICT", "SET NULL", "NO ACTION", ""], "更新时 ON UPDATE", v => { this.form.onUpdate = v; });
     grid.append(field("本表字段", local), field("引用表", refTable), field("引用字段", refCol), field("关系基数", card), field("删除时 (ON DELETE)", onDel), field("更新时 (ON UPDATE)", onUpd));
     form.appendChild(grid);
+    this.renderReferenceStatus(form, this.refTables, "引用表", () => void this.ensureRefTables());
+    const reference = this.refColumns.get(this.form.refTable);
+    if (reference) this.renderReferenceStatus(form, reference, "引用字段", () => void this.ensureRefColumns(this.form.refTable));
     const btns = elem("div", "er-fkform-btns");
     const cancel = elem("button", "er-te-btn", "取消"); cancel.type = "button"; cancel.addEventListener("click", () => { this.resetForm(); });
     const ok = elem("button", "er-te-btn pri", "确定并连线"); ok.type = "button"; ok.disabled = !!this.editReason();
@@ -297,6 +349,21 @@ export class ErTableEditor {
   }
 
   private resetForm(): void { this.form = { local: this.form.local, refTable: "", refCol: "", cardinality: "N:1", onDelete: "RESTRICT", onUpdate: "CASCADE" }; this.render(); }
+
+  private renderReferenceStatus(body: HTMLElement, state: { loading: boolean; error: string }, label: string, retry: () => void): void {
+    if (state.loading) {
+      const status = elem("p", "er-fkform-hint", `正在读取${label}…`);
+      status.setAttribute("role", "status");
+      body.appendChild(status);
+    } else if (state.error) {
+      const error = elem("div", "er-te-notice", `读取${label}失败：${state.error}`);
+      error.setAttribute("role", "alert");
+      const button = elem("button", "er-te-btn er-te-retry", `重试读取${label}`);
+      button.type = "button";
+      button.addEventListener("click", retry);
+      body.append(error, button);
+    }
+  }
 
   private commitFk(): void {
     const reason = this.editReason(); if (reason) { this.host.toast("info", reason); return; }
@@ -316,48 +383,54 @@ export class ErTableEditor {
   }
 
   private async ensureRefTables(): Promise<void> {
-    if (this.refTables.loading || this.refTables.values) return;
+    if (this.disposed || this.refTables.loading || this.refTables.values) return;
+    const version = this.metadataVersion;
     this.refTables = { values: null, loading: true, error: "" };
+    // 在微任务中渲染加载状态，避免从 renderForeignKeys 递归重建 DOM。
+    void Promise.resolve().then(() => { if (!this.disposed && version === this.metadataVersion && this.tab === "外键") this.render(); });
     try {
       const list = await api.listTables(this.opts.connectionId, this.opts.schema);
-      if (this.disposed) return;
+      if (this.disposed || version !== this.metadataVersion) return;
       this.refTables = { values: list.filter(([, k]) => k === "table").map(([n]) => n), loading: false, error: "" };
     } catch (e) {
-      if (this.disposed) return;
-      this.refTables = { values: null, loading: false, error: String(e) };
+      if (this.disposed || version !== this.metadataVersion) return;
+      this.refTables = { values: null, loading: false, error: formatError(e) };
     }
     if (this.tab === "外键") this.render();
   }
 
   private async ensureRefColumns(table: string): Promise<void> {
-    if (!table) return;
+    if (!table || this.disposed) return;
+    const version = this.metadataVersion;
     const cur = this.refColumns.get(table);
     if (cur?.loading || cur?.values) return;
     this.refColumns.set(table, { values: null, loading: true, error: "" });
+    void Promise.resolve().then(() => { if (!this.disposed && version === this.metadataVersion && this.tab === "外键" && this.form.refTable === table) this.render(); });
     try {
       const s = await api.getTableSchema(this.opts.connectionId, this.opts.schema, table);
-      if (this.disposed) return;
+      if (this.disposed || version !== this.metadataVersion) return;
       this.refColumns.set(table, { values: s.columns.map(c => c.name), loading: false, error: "" });
     } catch (e) {
-      if (this.disposed) return;
-      this.refColumns.set(table, { values: null, loading: false, error: String(e) });
+      if (this.disposed || version !== this.metadataVersion) return;
+      this.refColumns.set(table, { values: null, loading: false, error: formatError(e) });
     }
     if (this.tab === "外键" && this.form.refTable === table) this.render();
   }
 
   /** 生成后端计划、按设计稿弹窗确认、受控执行并读回校验。 */
   async save(): Promise<void> {
+    if (this.disposed || this.saving) return;
+    const reason = this.saveReason(); if (reason) { this.host.toast("info", reason); return; }
     if (!this.snapshot || !this.draft) return;
-    if (!this.draftDirty()) { this.host.toast("info", "没有待保存的结构修改。"); return; }
-    if (this.saving) return;
-    const reason = this.editReason(); if (reason) { this.host.toast("error", reason); return; }
     this.saving = true; this.render(); this.host.changed();
     let sent = false;
     try {
+      const signature = draftSignature(this.draft);
       const design = payloadFromDraft(this.snapshot, this.draft);
       const preview = await api.previewTableDesign(this.opts.connectionId, design, this.opts.ownerId);
+      if (this.disposed) return;
+      if (signature !== draftSignature(this.draft)) throw new Error("预览期间草稿发生变化，请重新预览，未发送修改。");
       if (!preview.request_sql || preview.revision !== this.snapshot.revision) throw new Error("后端预览缺少绑定载荷或基线版本不一致。");
-      const signature = draftSignature(this.draft);
       const confirmed = await reviewErSyncPlan({ connectionName: this.host.connection()?.name ?? "", schema: this.opts.schema, table: this.opts.table, preview });
       if (!confirmed || this.disposed) return;
       if (signature !== draftSignature(this.draft)) throw new Error("确认期间草稿发生变化，未发送修改。");
@@ -365,17 +438,22 @@ export class ErTableEditor {
       let response: TableDesignResponse | null = null;
       this.execution = new ExecutionController({ ...api, executeSqlV2: async (request) => { sent = true; response = await api.executeTableDesign(request, design); return response.outcome; } }, () => this.host.changed());
       await this.execution.run({ execution_id: crypto.randomUUID(), connection_id: this.opts.connectionId, namespace: design.schema, owner_id: this.opts.ownerId, sql: preview.request_sql, origin: "table-design" });
+      if (this.disposed) return;
       if (!response) throw new Error("缺少表结构执行回执。");
       const snapshot = verifiedDesignResponse(response);
       this.accept(snapshot);
+      this.loadState = "ready"; this.loadError = "";
       this.message = "表结构已保存，完整读回验证通过。";
+      this.messageTone = "success";
       this.host.toast("success", this.message);
     } catch (e) {
-      if (sent) this.message = String(e) + " 请核对真实状态后重新载入。";
-      else this.message = String(e);
+      if (this.disposed) return;
+      this.message = formatError(e) + (sent ? " 请核对真实状态后重新载入。" : "");
+      this.messageTone = "error";
       this.host.toast("error", this.message);
     } finally {
-      this.saving = false; this.render(); this.host.changed();
+      this.saving = false;
+      if (!this.disposed) { this.render(); this.host.changed(); }
     }
   }
 }

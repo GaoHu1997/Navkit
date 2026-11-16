@@ -529,7 +529,8 @@ test('header ASC/DESC applies immediately, preserves priorities, resets paginati
   view.applyHeaderSort('missing', 'asc'); assert.equal(reloads, 1);
   view.applyHeaderSort('name', 'remove'); assert.equal(reloads, 2); assert.equal(tab.order_rules.length, 1);
   let menu; view.app.showContextMenu = entries => { menu = entries; }; view.grid.cb.onHeaderContextMenu('id', 0, 5, 10);
-  assert.match(menu[0].label, /ASC/); assert.match(menu[1].label, /DESC/);
+  assert.match(menu.find(item => item.id === 'header-sort-asc').label, /ASC/); assert.match(menu.find(item => item.id === 'header-sort-desc').label, /DESC/);
+  assert.match(menu.find(item => item.id === 'header-pin-toggle').label, /固定列到最左侧/);
 });
 
 test('loading, manual transactions and newly flushed cell drafts block applied filter/sort changes', () => {
@@ -556,7 +557,8 @@ test('sort choices exclude duplicates and add control is below the priority list
 test('table column sidebar works for empty results and flushes hidden editable column drafts by name', () => {
   const { view, tab, document } = harness(); const trigger = document.createElement('button'); view.toggleColumnSidebar(trigger);
   assert.equal(view.columnSidebar.el.hidden, false); assert.equal(trigger.getAttribute('aria-expanded'), 'true'); assert.equal(view.columnToolDisabled(), false);
-  assert.equal(view.columnSidebar.el.parentElement.children[0], view.grid.el);
+  assert.equal(view.columnSidebar.el.parentElement.children[0].children[0], view.grid.el);
+  assert.equal(view.loadingOverlay.parentElement.children[0], view.grid.el);
   tab.page.rows = [['1', 'red', 'Alice']]; tab.page.total = 1; view.applyData();
   let flushes = 0; view.grid.flushEditing = () => { flushes++; view.pendingUpdates.set(0, new Map([['team', 'draft-red']])); };
   view.toggleColumn('team'); assert.equal(flushes, 1); assert.deepEqual(plain(view.grid.rows), [['1', 'Alice']]);
@@ -699,7 +701,7 @@ function queryTimingFixture(t) {
   let now = 0, nextId = 0;
   const timers = new Map(), updates = [];
   h.context.performance = { now: () => now };
-  h.context.setInterval = (fn, ms) => { assert.equal(ms, 100); timers.set(++nextId, fn); return nextId; };
+  h.context.setInterval = (fn, ms) => { assert.equal(ms, 50); timers.set(++nextId, fn); return nextId; };
   h.context.clearInterval = id => timers.delete(id);
   h.tab.id = 'timed-table';
   h.view.app.updateTableQueryElapsed = (id, text) => updates.push({ id, text });
@@ -713,8 +715,14 @@ test('query timer appears before results, ticks, freezes on success and resets f
   h.api.pageTable = () => new Promise(resolve => pending.push(resolve));
   const first = h.view.reload();
   assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.000s（查询中）');
+  assert.equal(h.view.loadingLabelEl.textContent, '正在查询… ');
+  assert.equal(h.view.loadingTimerEl.textContent, '0.000 s');
+  assert.equal(h.view.loadingTimerEl.attributes['aria-hidden'], 'true');
+  const timerNode = h.view.loadingTimerEl;
   assert.equal(h.timers.size, 1);
   h.advance(350);
+  assert.equal(h.view.loadingTimerEl, timerNode);
+  assert.equal(h.view.loadingTimerEl.textContent, '0.350 s');
   assert.deepEqual(h.updates.at(-1), { id: 'timed-table', text: '查询耗时: 0.350s（查询中）' });
   pending[0]({ columns: h.columns, rows: [], total: 0, primary_keys: [], elapsed_ms: 1 });
   await first;
@@ -722,6 +730,7 @@ test('query timer appears before results, ticks, freezes on success and resets f
   assert.equal(h.timers.size, 0, 'backend elapsed_ms must not replace the visible elapsed time');
   h.advance(5000); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.350s');
   const second = h.view.reload(); assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.000s（查询中）');
+  assert.equal(h.view.loadingTimerEl.textContent, '0.000 s');
   h.advance(120); pending[1]({ columns: h.columns, rows: [], total: 0, primary_keys: [] }); await second;
   assert.equal(h.view.statusInfo().elapsed, '查询耗时: 0.120s');
 });
@@ -778,8 +787,9 @@ test('first page paints before automatic metadata-only total count and repeated 
   const pending = []; api.pageTable = req => new Promise(resolve => pending.push({ req, resolve }));
   const loading = view.reload();
   assert.equal(pending.length, 1); assert.equal(pending[0].req.include_total, false);
-  assert.equal(view.loadStatus.hidden, false); assert.match(view.loadStatus.textContent, /正在加载/);
-  assert.equal(view.loadStatus.attributes.role, 'status'); assert.equal(view.el.attributes['aria-busy'], 'true');
+  assert.equal(view.loadStatus.hidden, true);
+  assert.equal(view.loadingOverlay.hidden, false); assert.equal(view.loadingLabelEl.textContent, '正在查询… '); assert.match(view.loadingTimerEl.textContent, /^\d+\.\d{3} s$/);
+  assert.equal(view.loadingOverlay.attributes.role, 'status'); assert.equal(view.el.attributes['aria-busy'], 'true');
   view.activate(); view.activate(); assert.equal(pending.length, 1);
   pending[0].resolve({ columns, rows: Array.from({ length: 20 }, () => ['1', 'red', 'Alice']), total: 21, total_exact: false, has_more: true, primary_keys: [] });
   await loading;
@@ -1013,6 +1023,64 @@ test('destroy cancels either queued animation frame before any count IPC', async
     let calls = 0; api.pageTable = async () => { calls++; return { total: 100, total_exact: true }; };
     if (afterFirstFrame) flushFrame(); view.destroy(); flushFrame(); flushFrame();
     assert.equal(calls, 0); assert.equal(frames.size, 0);
+  }
+});
+
+test('pinning columns reorders only the display mapping, keeps widths/drafts and restores source order on unpin', () => {
+  const { view, tab, columns } = harness();
+  tab.page.rows = [['1', 'red', 'Alice']]; view.applyData();
+  const original = plain(tab.page);
+  view.grid.colWidths[2] = 180; view.grid.userSizedCols.add(2);
+  view.grid.selectedColumn = 2;
+  view.grid.flushEditing = () => view.pendingUpdates.set(0, new Map([['name', 'draft-name']]));
+  view.togglePinnedColumn('name');
+  assert.deepEqual(plain(view.grid.columns.map(c => c.name)), ['name', 'id', 'team']);
+  assert.deepEqual(plain(view.grid.rows), [['draft-name', '1', 'red']]);
+  assert.equal(view.grid.selectedColumn, 0); assert.equal(view.grid.colWidths[0], 180);
+  assert.equal(view.grid.getOptions().dirtyCells.has('0:0'), true);
+  assert.deepEqual(plain(tab.page), original);
+  view.togglePinnedColumn('id');
+  const headers = view.grid.el.querySelectorAll('th[data-col]');
+  assert.equal(headers[0].style.left, '0px'); assert.equal(headers[1].style.left, '180px');
+  assert.equal(headers[1].classList.contains('grid-cell-pinned-edge'), true);
+  assert.equal(view.grid.buildRow(0).children[0].dataset.col, '0');
+  view.toggleColumn('name'); assert.equal(view.grid.columns[0].name, 'id');
+  view.toggleColumn('name'); assert.equal(view.grid.columns[0].name, 'name');
+  view.togglePinnedColumn('name'); view.togglePinnedColumn('id');
+  assert.deepEqual(plain(view.grid.columns.map(c => c.name)), columns.map(c => c.name));
+  assert.equal(view.grid.colWidths[2], 180); assert.equal(view.grid.getOptions().dirtyCells.has('0:2'), true);
+  assert.equal(view.grid.el.querySelectorAll('.grid-cell-pinned').length, 0);
+  view.loading = true; view.togglePinnedColumn('team'); assert.equal(view.pinnedCols.size, 0);
+  view.destroy();
+});
+
+test('field sidebar loads real metadata without COUNT and ignores metadata after disposal', async () => {
+  const { view, api, columns } = harness(); let resolve; const calls = [];
+  api.getTableSchema = (...args) => { calls.push(args); return new Promise(yes => { resolve = yes; }); };
+  view.toggleColumnSidebar(); const load = view.loadColumnMetadata();
+  assert.equal(calls.length, 1); assert.equal(calls[0][3], false);
+  resolve({ columns: columns.map(c => ({ ...c, comment: c.name === 'team' ? '所属团队' : null })) }); await load;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(view.columnComments.get('team'), '所属团队');
+  assert.equal(view.columnSidebar.el.querySelector('small').textContent, '所属团队');
+  view.columnMetadataLoaded = false;
+  const late = view.loadColumnMetadata(); view.destroy();
+  view.columnSidebar.render = () => assert.fail('disposed sidebar must not rerender');
+  resolve({ columns: columns.map(c => ({ ...c, comment: 'late' })) }); await late;
+  assert.equal(view.columnComments.get('team'), '所属团队');
+});
+
+test('all successful reload actions hide the centered overlay and never leave a completion notice', async () => {
+  for (const action of ['reload', 'filter', 'sort', 'page']) {
+    const { view, tab, api, columns } = harness(); let resolve;
+    api.pageTable = () => new Promise(yes => { resolve = yes; });
+    const task = view.reload(action);
+    assert.equal(view.loadingOverlay.hidden, false); assert.equal(view.loadStatus.hidden, true);
+    assert.equal(view.grid.el.inert, true); assert.equal(view.columnSidebar.el.inert, true);
+    resolve({ columns, rows: [], total: 0, total_exact: true, has_more: false, primary_keys: [] }); await task;
+    assert.equal(view.loadingOverlay.hidden, true); assert.equal(view.loadingLabelEl.textContent, ''); assert.equal(view.loadingTimerEl.textContent, '');
+    assert.equal(view.loadStatus.hidden, true); assert.equal(view.loadStatus.textContent, '');
+    assert.equal(view.grid.el.inert, false); assert.equal(tab.page.rows.length, 0); view.destroy();
   }
 });
 

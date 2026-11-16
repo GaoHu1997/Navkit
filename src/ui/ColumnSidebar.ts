@@ -1,5 +1,5 @@
 /** 内嵌字段侧栏；键由调用方提供，查询结果必须使用 column.id。 */
-export interface SidebarColumn { id: string; name: string }
+export interface SidebarColumn { id: string; name: string; comment?: string | null }
 export class ColumnSidebar {
   readonly el = document.createElement("aside");
   private readonly search = document.createElement("input");
@@ -38,7 +38,17 @@ export class ColumnSidebar {
         const next = this.hidden(); if (input.checked) next.delete(column.id); else next.add(column.id);
         try { this.change([...next]); } finally { input.checked = !this.hidden().has(column.id); this.render(); }
       });
-      const name = document.createElement("span"); name.textContent = column.name; row.append(input, name); this.list.append(row);
+      const name = document.createElement("span"); name.className = "column-sidebar-name"; name.textContent = column.name;
+      const text = document.createElement("div"); text.className = "column-sidebar-text"; text.append(name);
+      input.setAttribute("aria-label", column.name);
+      const comment = column.comment?.trim();
+      if (comment) {
+        const note = document.createElement("small"); note.className = "column-sidebar-comment"; note.textContent = comment;
+        note.id = `${this.id}-comment-${columns.indexOf(column)}`;
+        input.setAttribute("aria-describedby", note.id); text.append(note);
+        row.title = `${column.name}\n${comment}`;
+      }
+      row.append(input, text); this.list.append(row);
     }
     if (!this.list.children.length) { const empty = document.createElement("p"); empty.textContent = "没有匹配字段"; this.list.append(empty); }
   }

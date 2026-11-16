@@ -199,7 +199,7 @@ function gridView(hidden = []) {
   const columns = ['id', 'name', 'score', 'note'].map(name => ({ name }));
   Object.assign(view, {
     tab: { page: { columns, rows: [['1', 'Alice 中文', '10', '首行'], ['2', 'Bob', '20', null]], primary_keys: ['id'] }, selectedRows: new Set() },
-    hiddenCols: new Set(hidden), pendingInserts: [], pendingInsertEdits: new Map(), pendingUpdates: new Map(), pendingDeletes: new Set(), txAppliedInserts: [], txAppliedUpdates: new Map(), txAppliedDeletes: new Set(),
+    hiddenCols: new Set(hidden), pinnedCols: new Set(), pendingInserts: [], pendingInsertEdits: new Map(), pendingUpdates: new Map(), pendingDeletes: new Set(), txAppliedInserts: [], txAppliedUpdates: new Map(), txAppliedDeletes: new Set(),
     app: { renderStatus() {}, showGridLinesState: () => false, skipNullState: () => false, toast() {} },
     appliedSortRules: () => [], renderFooter() {},
     grid: { setData(options) { this.columns = options.columns; this.rows = options.rows; }, beginEdit(row, col, value) { this.edit = { row, col, value }; } },
@@ -208,7 +208,7 @@ function gridView(hidden = []) {
 }
 function queryView() {
   const context = environment();
-  runTs(`${stripImports(fs.readFileSync(path.join(root, 'src/core/queryResultPages.ts'), 'utf8'))}\nglobalThis.QueryView = class { ${members('QueryTabView', ['resultPages', 'exporting', 'pageButtons', 'resultBusy', 'activeResultTab', 'currentSet', 'statusInfo', 'releaseSpool', 'renderResultPager', 'renderResults', 'renderMessages', 'runningMessageText', 'requestControlledResult', 'disposeControlledResult', 'allowResultReplacement'])} };`, context);
+  runTs(`${stripImports(fs.readFileSync(path.join(root, 'src/core/queryResultPages.ts'), 'utf8'))}\nglobalThis.QueryView = class { ${members('QueryTabView', ['resultPages', 'exporting', 'pageButtons', 'resultBusy', 'activeResultTab', 'currentSet', 'statusInfo', 'releaseSpool', 'updateResultLoading', 'renderResultPager', 'renderResults', 'renderMessages', 'runningMessageText', 'requestControlledResult', 'disposeControlledResult', 'allowResultReplacement'])} };`, context);
   const view = new context.QueryView(); const make = () => context.document.createElement('div');
   let statuses = 0, toolbars = 0;
   const first = { columns: [{ name: 'first_marker' }], rows: [['FIRST']], total: 1, has_rows: true };
@@ -217,7 +217,7 @@ function queryView() {
   Object.assign(view, { tab: { activeResult: 0, title: 'Query', results: { sets: [first, second], elapsed_ms: 25 } },
     executionClockStartedAt: null, executionLabelEl: make(), executionTimerEl: make(),
     editor: { getSelection: () => '', getSql: () => 'SELECT' }, running: false, lastMessages: [{ text: 'OK', error: false }], resultRatio: 0.5,
-    resultTabsEl: make(), resultSplitter: make(), resultBody: make(), messagesEl: make(), cellPreviewEl: make(), gridPreviewNoteEl: make(), resultPager: make(), pageNumberInput: make(), pageSizeSelect: make(), footerStatusEl: make(), pageErrorEl: make(),
+    resultTabsEl: make(), resultSplitter: make(), resultBody: make(), messagesEl: make(), cellPreviewEl: make(), gridPreviewNoteEl: make(), resultPager: make(), pageControls: make(), pageCountEl: make(), pageNumberInput: make(), pageSizeSelect: Object.assign(make(), { parentElement: make() }), footerStatusEl: make(), pageErrorEl: make(),
     // 结果证据面板宿主（工作树新增）；fixture 提供空元素，证据请求走显式拒绝
     resultPanelHost: make(), resultRecoveryTools: make(), resultEvidenceRequest: 0, resultEvidenceLoading: false,
     app: { renderStatus: () => statuses++, notifyToolbar: () => toolbars++, skipNullState: () => false, showGridLinesState: () => false },
@@ -271,7 +271,7 @@ test('query: result 2 shares the same source for grid, export, and record count'
   assert.equal(view.currentSet(), view.tab.results.sets[1]); assert.deepEqual(plain(view.grid.options.rows), [['SECOND_A'], ['SECOND_B']]);
   // 「创建图表」已按需求移除：查询视图不再提供 chartSource
   assert.equal(view.chartSource, undefined); assert.match(view.statusInfo().pageText, /共 4 行/);
-  assert.match(view.statusInfo().pageText, /无完整快照，仅可导出已加载行/);
+  assert.equal(view.statusInfo().pageText, '共 4 行');
   assert.equal(view.gridPreviewNoteEl.textContent, '无完整缓存，仅已加载 2 / 4 行；复制、筛选与导出只含已加载行，不会重新执行 SQL。');
   assert.equal(view.gridPreviewNoteEl.style.display, 'block');
   assert.deepEqual(view.notifications(), { statuses: 1, toolbars: 1 });

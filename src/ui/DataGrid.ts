@@ -72,6 +72,8 @@ export interface GridOptions {
   fillWidth?: boolean;
   /** 行标记（未提交状态：insert=新增行 / delete=待删除行 / dirty=已修改行）。 */
   rowFlags?: Record<number, "insert" | "delete" | "dirty">;
+  /** 已在显示映射中移到最左侧的固定列；这里只负责粘性定位，不改写行或列身份。 */
+  pinnedColumns?: string[];
   /** 待提交单元格集合（"row:col" 键）。 */
   dirtyCells?: Set<string>;
 }
@@ -133,6 +135,7 @@ export class DataGrid {
   private baseWidths: number[] = [];
   /** 用户手动调过宽度的列：fillWidth 时固定为用户宽，不参与剩余空间分摊。 */
   private userSizedCols = new Set<number>();
+  private userWidthsByName = new Map<string, number>();
   private defaultWidth = 96;
   /** 列宽自适应下限 / 上限（逻辑px）。 */
   private static readonly MIN_COL_WIDTH = 64;
@@ -277,12 +280,25 @@ export class DataGrid {
     const columnsChanged =
       opts.columns.length !== this.opts.columns.length ||
       opts.columns.some((c, i) => c.name !== this.opts.columns[i]?.name);
+    const uniqueNames = new Set(this.opts.columns.map(column => column.name)).size === this.opts.columns.length
+      && new Set(opts.columns.map(column => column.name)).size === opts.columns.length;
+    const sizedByName = uniqueNames ? this.userWidthsByName : new Map<string, number>();
+    if (uniqueNames) {
+      this.opts.columns.forEach((column, index) => {
+        if (this.userSizedCols.has(index)) sizedByName.set(column.name, this.colWidths[index]);
+        else sizedByName.delete(column.name);
+      });
+    }
     this.opts = { ...this.opts, ...opts };
     if (columnsChanged) {
       // 列宽自适应：按列名与样本数据量宽，至少完整展示列名（不再均分固定宽）。
       this.baseWidths = this.measureColumnWidths();
       this.colWidths = this.baseWidths.slice();
       this.userSizedCols.clear();
+      this.opts.columns.forEach((column, index) => {
+        const width = sizedByName.get(column.name);
+        if (width !== undefined) { this.colWidths[index] = width; this.userSizedCols.add(index); }
+      });
       this.renderHeader();
     } else {
       if (this.opts.fillWidth) {
@@ -338,6 +354,7 @@ export class DataGrid {
 
   /** 设置显式列宽（逻辑px，按参考截图实测）。 */
   setColWidths(ws: number[]): void {
+    this.userWidthsByName.clear();
     this.colWidths = ws.slice(0, this.opts.columns.length);
     while (this.colWidths.length < this.opts.columns.length) this.colWidths.push(this.defaultWidth);
     this.baseWidths = this.colWidths.slice();
@@ -468,6 +485,21 @@ export class DataGrid {
         td.style.width = `${widths[i]}px`;
       });
     });
+    const pinned = new Set(this.opts.pinnedColumns ?? []);
+    const offsets = new Map<number, number>();
+    let left = this.rowHeaderPx();
+    this.opts.columns.forEach((column, index) => {
+      if (pinned.has(column.name)) { offsets.set(index, left); left += widths[index]; }
+    });
+    const lastPinned = [...offsets.keys()][offsets.size - 1];
+    const position = (cell: HTMLElement, index: number) => {
+      const offset = offsets.get(index);
+      cell.classList.toggle("grid-cell-pinned", offset !== undefined);
+      cell.classList.toggle("grid-cell-pinned-edge", index === lastPinned);
+      cell.style.left = offset === undefined ? "" : `${offset}px`;
+    };
+    this.thead.querySelectorAll<HTMLElement>("th[data-col]").forEach((th) => position(th, Number(th.dataset.col)));
+    this.tbody.querySelectorAll<HTMLElement>("td[data-col]").forEach((td) => position(td, Number(td.dataset.col)));
     const sum = widths.reduce((a, b) => a + b, 0);
     const rowHeader = this.rowHeaderPx();
     this.table.style.setProperty("--grid-row-header-width", `${rowHeader}px`);

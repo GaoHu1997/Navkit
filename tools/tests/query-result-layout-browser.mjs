@@ -110,6 +110,38 @@ try {
   await page.evaluate(() => { window.__APP__.activeView().grid.scroll.scrollTop = 0; });
   await page.waitForFunction(() => document.querySelector("tbody tr[data-row] .grid-row-header")?.textContent === "1001");
   assert.equal(await page.evaluate(() => window.__PAGER_CALLS__.filter(c => c[0] === 'sql').length), 1);
+  // 执行与缓存分页都只在结果区域中心显示遮罩，不再弹常规成功提示。
+  await page.evaluate(() => {
+    const mock = window.__PREVIEW_MOCK__, execute = mock.execute_sql_v2;
+    mock.execute_sql_v2 = args => new Promise(resolve => { window.completeQuery = () => resolve(execute(args)); });
+    void window.__APP__.activeView().executeSelection(false);
+  });
+  const overlay = page.locator('.query-result-loading');
+  await overlay.waitFor({ state: 'visible' }); assert.match(await overlay.textContent(), /^正在查询… \d+\.\d{3} s$/);
+  assert.equal(await page.locator('.query-runbar .query-transaction-status').count(), 0);
+  const timer = overlay.locator('.query-loading-timer');
+  const initialTime = await timer.textContent();
+  await page.waitForFunction(first => document.querySelector('.query-result-loading .query-loading-timer')?.textContent !== first, initialTime);
+  assert.match(await timer.textContent(), /^\d+\.\d{3} s$/);
+  assert.equal(await timer.getAttribute('aria-hidden'), 'true');
+  assert.equal(await timer.evaluate(el => getComputedStyle(el).fontVariantNumeric), 'tabular-nums');
+  const overlayPosition = await overlay.evaluate(el => { const a = el.getBoundingClientRect(), b = el.parentElement.getBoundingClientRect(); return { x: Math.abs(a.x + a.width / 2 - b.x - b.width / 2), y: Math.abs(a.y + a.height / 2 - b.y - b.height / 2), align: getComputedStyle(el).alignItems }; });
+  assert(overlayPosition.x < 1 && overlayPosition.y < 1); assert.equal(overlayPosition.align, 'center');
+  await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
+  await page.screenshot({ path: path.join(root, 'artifacts/query-result-loading-overlay.png') });
+  await page.evaluate(() => completeQuery());
+  await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
+  assert.equal(await overlay.isVisible(), false); assert.equal(await page.locator('.result-preview-note:visible').count(), 0);
+  assert.equal(await page.locator('.toast-success:visible').count(), 0);
+  await page.evaluate(() => {
+    const mock = window.__PREVIEW_MOCK__, fetch = mock.fetch_query_rows;
+    mock.fetch_query_rows = args => new Promise(resolve => { window.completePage = () => resolve(fetch(args)); });
+  });
+  await pager.getByRole('button', { name: '下一页（读取本次执行缓存，不重新执行 SQL）' }).click();
+  await overlay.waitFor({ state: 'visible' }); assert.equal(await overlay.textContent(), '正在加载结果页…');
+  assert.equal(await page.evaluate(() => window.__APP__.activeView().grid.el.inert), true);
+  await page.evaluate(() => completePage()); await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
+  assert.equal(await overlay.isVisible(), false); assert.equal(await page.evaluate(() => window.__APP__.activeView().grid.el.inert), false);
   await input.press('Tab');
   await page.locator('.toast').waitFor({ state: 'detached', timeout: 15000 });
   await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
@@ -138,7 +170,7 @@ try {
   assert.equal(await page.locator('.cell-preview:visible').count(), 0);
   assert.deepEqual(errors, []);
   console.log('PASS browser table preview: query isolation, other table isolation, original-table restoration, close remains closed');
-  console.log(JSON.stringify({ passed: ['compact controls', 'left result-footer time and row range', 'no page-count suffix', '200/500/1000 page-size selection', 'absolute row numbers across pages', 'hidden completion banner', 'Enter and blur jumps', 'invalid-page validation', 'no SQL rerun'], dimensions, screenshot: 'artifacts/query-result-pagination.png' }));
+  console.log(JSON.stringify({ passed: ['central millisecond timer grows every 50ms', 'top execution status removed', 'execution and page-loading centered overlays', 'no success toast or top running message', 'compact controls', 'left result-footer time and row range', 'no page-count suffix', '200/500/1000 page-size selection', 'absolute row numbers across pages', 'hidden completion banner', 'Enter and blur jumps', 'invalid-page validation', 'no SQL rerun'], dimensions, screenshot: 'artifacts/query-result-pagination.png' }));
 } catch (error) {
   console.log(await page.evaluate(() => ({ errors: document.body.innerText.slice(-4000), tab: window.__APP__?.activeTab, status: window.__APP__?.activeView()?.executionStatusEl?.textContent })));
   throw error;

@@ -2484,6 +2484,8 @@ export class App {
           /* 结构获取失败留空 */
         }
         this.tableMetaCache.set(key, entry);
+        const view = this.views?.get(tab.id);
+        if (entry.schema && view instanceof DataTabView && !tab.datasourceStale) view.setColumnMetadata(entry.schema.columns);
         if (this.activeTab?.id === tab.id && request === this.infoRequest) build();
       })();
     }
@@ -3390,6 +3392,13 @@ export class App {
         case "grid-sort":
           this.cmdSort();
           break;
+        case "header-pin-toggle": {
+          const col = this.headerSortColumn;
+          this.headerSortColumn = null;
+          const view = this.activeView();
+          if (col && view instanceof DataTabView) view.togglePinnedColumn(col);
+          break;
+        }
         case "header-sort-asc":
         case "header-sort-desc":
         case "header-sort-remove": {
@@ -6947,6 +6956,10 @@ class DataTabView extends TabView {
   private reloadingAfterLeave = false;
   /** 表字段以真实 name 标识，隐藏列不移除行草稿。 */
   private hiddenCols = new Set<string>();
+  private pinnedCols = new Set<string>();
+  private columnComments = new Map<string, string>();
+  private columnMetadataLoaded = false;
+  private columnMetadataLoading = false;
   /** 表单视图容器与当前记录索引（仅表单模式使用）。 */
   private formHost!: HTMLElement;
   private formIndex = 0;
@@ -6981,6 +6994,9 @@ class DataTabView extends TabView {
   private totalCountFrame: number | null = null;
   private disposed = false;
   private loadStatus!: HTMLElement;
+  private loadingOverlay!: HTMLElement;
+  private loadingLabelEl!: HTMLElement;
+  private loadingTimerEl!: HTMLElement;
   private filterBarEl!: HTMLElement;
   private filterRowsEl!: HTMLElement;
   private filterPlaceholderEl!: HTMLElement;
@@ -7047,6 +7063,8 @@ class DataTabView extends TabView {
         this.app.headerSortColumn = name;
         const cur = this.sortRows.find((r) => r.column === name);
         this.app.showContextMenu([
+          { id: "header-pin-toggle", label: this.pinnedCols.has(name) ? "取消固定列" : "固定列到最左侧", checked: this.pinnedCols.has(name), disabled: this.loading || this.committing },
+          { separator: true },
           { id: "header-sort-asc", label: "ASC 升序排序", checked: cur?.ascending === true },
           { id: "header-sort-desc", label: "DESC 降序排序", checked: cur?.ascending === false },
           { id: "header-sort-remove", label: "移除排序", disabled: !cur },
@@ -7067,16 +7085,24 @@ class DataTabView extends TabView {
     });
     this.loadStatus = document.createElement("div");
     this.loadStatus.className = "data-load-status";
-    this.loadStatus.setAttribute("role", "status");
-    this.loadStatus.setAttribute("aria-live", "polite");
+    this.loadStatus.setAttribute("role", "alert");
     this.loadStatus.hidden = true;
     this.el.appendChild(this.loadStatus);
     const body = document.createElement("div"); body.className = "data-grid-body";
-    this.columnSidebar = new ColumnSidebar(`data-columns-${crypto.randomUUID()}`, () => this.allColumns().map(name => ({ id: name, name })), () => this.hiddenColumns(), ids => this.setHiddenColumns(ids));
+    const surface = document.createElement("div"); surface.className = "data-grid-surface";
+    const loadingOverlay = document.createElement("div"); loadingOverlay.className = "grid-loading-overlay data-loading-overlay";
+    loadingOverlay.setAttribute("role", "status"); loadingOverlay.setAttribute("aria-live", "polite"); loadingOverlay.hidden = true;
+    this.loadingOverlay = loadingOverlay;
+    this.loadingLabelEl = document.createElement("span");
+    this.loadingTimerEl = document.createElement("span"); this.loadingTimerEl.className = "data-loading-timer";
+    this.loadingTimerEl.setAttribute("aria-hidden", "true");
+    loadingOverlay.append(this.loadingLabelEl, this.loadingTimerEl);
+    this.columnSidebar = new ColumnSidebar(`data-columns-${crypto.randomUUID()}`, () => this.allColumns().map(name => ({ id: name, name, comment: this.columnComments.get(name) })), () => this.hiddenColumns(), ids => this.setHiddenColumns(ids));
     this.formHost = document.createElement("div");
     this.formHost.className = "data-form-view-host";
     this.formHost.hidden = true;
-    body.append(this.grid.el, this.formHost, this.columnSidebar.el); this.el.appendChild(body);
+    surface.append(this.grid.el, this.formHost, loadingOverlay);
+    body.append(surface, this.columnSidebar.el); this.el.appendChild(body);
 
     // 单元格内容面板
     this.cellPreviewEl = document.createElement("div");
@@ -7218,6 +7244,36 @@ class DataTabView extends TabView {
     return new Set(this.hiddenCols);
   }
 
+  /** 仅调整显示顺序；底层页数据和所有待提交草稿仍按字段名映射。 */
+  togglePinnedColumn(name: string): void {
+    if (this.loading || this.committing || !this.allColumns().includes(name)) return;
+    const selectedName = this.grid.columns[this.grid.selectedColumn]?.name;
+    this.grid.flushEditing();
+    if (this.pinnedCols.has(name)) this.pinnedCols.delete(name); else this.pinnedCols.add(name);
+    this.applyData();
+    this.grid.selectedColumn = selectedName === undefined ? -1 : this.grid.columns.findIndex(column => column.name === selectedName);
+    this.app.handleColumnSelected(this.tab, this.grid.columns[this.grid.selectedColumn]?.name ?? "");
+    this.app.renderStatus();
+  }
+
+  setColumnMetadata(columns: import("./types").ColumnInfo[]): void {
+    if (this.disposed) return;
+    this.columnComments = new Map(columns.flatMap(column => column.comment?.trim() ? [[column.name, column.comment] as [string, string]] : []));
+    this.columnMetadataLoaded = true;
+    this.columnSidebar.render();
+  }
+
+  private async loadColumnMetadata(): Promise<void> {
+    if (this.columnMetadataLoaded || this.columnMetadataLoading || this.disposed) return;
+    const { connectionId, schema, object } = this.tab;
+    this.columnMetadataLoading = true;
+    try {
+      const metadata = await api.getTableSchema(connectionId, schema, object, false);
+      if (!this.disposed && !this.tab.datasourceStale && connectionId === this.tab.connectionId && schema === this.tab.schema && object === this.tab.object) this.setColumnMetadata(metadata.columns);
+    } catch { /* 备注不可用时保留字段名；下次打开侧栏可重试，不影响数据页加载。 */ }
+    finally { this.columnMetadataLoading = false; }
+  }
+
   /** 切换列显示。 */
   toggleColumn(name: string): void {
     if (!this.allColumns().includes(name)) return;
@@ -7254,6 +7310,7 @@ class DataTabView extends TabView {
     if (!this.allColumns().length) return;
     this.grid.flushEditing();
     this.columnSidebar.toggle(trigger);
+    if (!this.columnSidebar.el.hidden) void this.loadColumnMetadata();
   }
 
   /** 原生按钮保留既有紧凑样式，同时支持键盘和清晰可访问名称。 */
@@ -7986,8 +8043,10 @@ class DataTabView extends TabView {
     this.queryElapsedMs = 0;
     this.queryStartedAt = performance.now();
     this.queryTimer = setInterval(() => {
+      if (this.disposed || !this.loading) return;
+      this.loadingTimerEl.textContent = this.queryLoadingElapsed();
       this.app.updateTableQueryElapsed(this.tab.id, this.queryElapsedText());
-    }, 100);
+    }, 50);
   }
 
   private stopQueryTiming(version: number): void {
@@ -8002,6 +8061,10 @@ class DataTabView extends TabView {
   /** 发起后同步反馈并锁定旧数据与查询草稿；不依赖后端首次响应。 */
   private updateQueryBusy(): void {
     this.el.classList.toggle("data-query-busy", this.loading);
+    this.loadingOverlay.hidden = !this.loading;
+    this.loadingLabelEl.textContent = this.loading ? "正在查询… " : "";
+    this.loadingTimerEl.textContent = this.loading ? this.queryLoadingElapsed() : "";
+    this.columnSidebar.el.inert = this.loading;
     this.grid.el.inert = this.loading;
     this.formHost.inert = this.loading;
     this.filterBarEl.inert = this.loading;
@@ -8016,11 +8079,9 @@ class DataTabView extends TabView {
     });
   }
 
-  private queryLoadingMessage(): string {
-    const pageNo = Math.floor(this.tab.pageOffset / this.tab.pageLimit) + 1;
-    const action = this.queryAction === "filter" ? "正在应用筛选…" : this.queryAction === "sort" ? "正在应用排序…"
-      : this.queryAction === "page" ? `正在加载第 ${pageNo} 页…` : "正在加载当前页…";
-    return `${action} 返回后自动更新，请勿重复操作。${this.tab.page ? " 下方暂为上次结果。" : ""}`;
+  private queryLoadingElapsed(): string {
+    const elapsed = this.queryStartedAt === null ? this.queryElapsedMs ?? 0 : performance.now() - this.queryStartedAt;
+    return `${(Math.max(0, elapsed) / 1000).toFixed(3)} s`;
   }
 
   /** 状态栏信息。 */
@@ -8036,7 +8097,7 @@ class DataTabView extends TabView {
     return {
       sql: `SELECT * FROM ${full} LIMIT ${this.tab.pageOffset},${this.tab.pageLimit}`,
       elapsed: this.queryElapsedText(),
-      pageText: this.loading ? this.queryLoadingMessage().split(" 返回后")[0] : page
+      pageText: this.loading ? "正在查询…" : page
         ? `${recordText}（${totalText}），第 ${pageNo} 页`
         : "",
     };
@@ -8071,8 +8132,8 @@ class DataTabView extends TabView {
     this.el.setAttribute("aria-busy", "true");
     this.startQueryTiming();
     this.updateQueryBusy();
-    this.loadStatus.hidden = false;
-    this.loadStatus.textContent = this.queryLoadingMessage();
+    this.loadStatus.hidden = true;
+    this.loadStatus.textContent = "";
     if (this.tab.page) this.renderFooter(this.tab.page);
     this.app.notifyToolbar();
     this.app.renderStatus();
@@ -8102,9 +8163,8 @@ class DataTabView extends TabView {
       this.tab.selectedRows.clear();
       // 请求已完成，解除载入态后再渲染网格页脚操作。
       this.loading = false;
-      this.loadStatus.hidden = action === "reload";
-      this.loadStatus.textContent = action === "filter" ? `筛选已应用，当前页 ${res.rows.length} 条记录。` : action === "sort"
-        ? `排序已应用，当前页 ${res.rows.length} 条记录。` : `第 ${Math.floor(request.offset / request.limit) + 1} 页已加载，${res.rows.length} 条记录。`;
+      this.loadStatus.hidden = true;
+      this.loadStatus.textContent = "";
       this.applyData();
       this.renderFilterLines();
       this.renderSortRows();
@@ -8147,7 +8207,12 @@ class DataTabView extends TabView {
     if (!page) return;
     this.hiddenCols = new Set([...this.hiddenCols].filter(name => page.columns.some(column => column.name === name)));
     if (page.columns.length && page.columns.every(column => this.hiddenCols.has(column.name))) this.hiddenCols.delete(page.columns[0].name);
-    const cols = page.columns.filter((c) => !this.hiddenCols.has(c.name));
+    this.pinnedCols = new Set([...this.pinnedCols].filter(name => page.columns.some(column => column.name === name)));
+    const visible = page.columns.filter(column => !this.hiddenCols.has(column.name));
+    const cols = [
+      ...[...this.pinnedCols].flatMap(name => visible.filter(column => column.name === name)),
+      ...visible.filter(column => !this.pinnedCols.has(column.name)),
+    ];
     // 全列索引 -> 显示列索引（隐藏列后 dirty 高亮才不会标错列）
     const displayIdx = new Map<string, number>();
     cols.forEach((c, di) => displayIdx.set(c.name, di));
@@ -8181,6 +8246,7 @@ class DataTabView extends TabView {
       dirtyCells,
       // 表数据不再显示左侧 rowid/行号列。
       showRowNumbers: false,
+      pinnedColumns: [...this.pinnedCols],
     });
     const formMode = this.tab.viewMode === "form" && !!this.formHost;
     if (formMode) {
@@ -9012,8 +9078,13 @@ class QueryTabView extends TabView {
   private resultRatio = 1 / 3;
   grid: DataGrid;
   private gridPreviewNoteEl: HTMLElement;
+  private resultLoadingEl: HTMLElement | null = null;
+  private resultLoadingLabelEl: HTMLElement | null = null;
+  private resultLoadingTimerEl: HTMLElement | null = null;
   private resultPager: HTMLElement;
   private pageNumberInput: HTMLInputElement;
+  private pageControls: HTMLElement;
+  private pageCountEl: HTMLElement;
   private pageSizeSelect: HTMLSelectElement;
   private footerStatusEl: HTMLElement;
   private pageErrorEl: HTMLElement;
@@ -9153,7 +9224,7 @@ class QueryTabView extends TabView {
     };
     this.runbar.appendChild(this.connSelect);
     this.runbar.appendChild(this.dbSelect);
-    // 运行 / 停止 / 解释并排一组；「执行完成」等状态显示推到运行条最右端。
+    // 运行 / 停止 / 解释并排一组；执行状态和实时计时显示在中央结果遮罩。
     this.runBtn = mkRunBtn("run_sel", "运行");
     this.runBtn.classList.add("primary");
     this.stopBtn = mkRunBtn("stop_sel", "停止");
@@ -9187,8 +9258,8 @@ class QueryTabView extends TabView {
     this.executionTimerEl = document.createElement("span");
     this.executionTimerEl.className = "query-status-timer";
     this.executionTimerEl.setAttribute("aria-hidden", "true");
+    // 执行状态保留用于消息和错误文案；可见计时只显示在中央查询遮罩。
     this.executionStatusEl.append(statusDot, this.executionLabelEl, this.executionTimerEl);
-    this.runbar.appendChild(this.executionStatusEl);
     this.execution = new ExecutionController({ ...api,
       cancelExecution: context => api.cancelExecution(context),
       executionStatus: context => api.executionStatus(context),
@@ -9282,6 +9353,7 @@ class QueryTabView extends TabView {
     this.resultTabsEl.setAttribute("aria-label", "查询输出页");
     this.resultTabsEl.style.display = "none";
     this.resultBody = document.createElement("div");
+    this.resultBody.className = "query-result-body";
     this.resultBody.style.flex = "0 0 auto";
     this.resultBody.style.height = `${this.resultRatio * 100}%`;
     this.resultBody.style.minHeight = "0";
@@ -9345,7 +9417,14 @@ class QueryTabView extends TabView {
     this.pageNumberInput.addEventListener("input", () => {
       this.pageNumberInput.removeAttribute("aria-invalid"); this.pageErrorEl.hidden = true;
     });
-    // 与表数据页同一套网格页脚图标按钮：首页 / 上一页 / 下一页 / 末页。
+    // 页码与总页数使用表数据页相同的布局和控件尺寸。
+    this.pageControls = document.createElement("div");
+    this.pageControls.className = "grid-pager";
+    this.pageCountEl = document.createElement("span");
+    this.pageCountEl.className = "grid-page-count";
+    const pagePosition = document.createElement("div");
+    pagePosition.className = "grid-pager-position";
+    pagePosition.append(this.pageNumberInput, this.pageCountEl);
     const pageIcons = { first: ICON_PAGE_FIRST, previous: ICON_PAGE_PREV, next: ICON_PAGE_NEXT, last: ICON_PAGE_LAST } as const;
     for (const [action, label] of [["first", "首页"], ["previous", "上一页"], ["next", "下一页"], ["last", "末页"]] as const) {
       const button = document.createElement("button");
@@ -9354,10 +9433,10 @@ class QueryTabView extends TabView {
       button.title = `${label}（读取本次执行缓存，不重新执行 SQL）`;
       button.setAttribute("aria-label", button.title);
       button.addEventListener("click", () => void this.loadResultPage(action));
-      this.pageButtons.push(button); this.resultPager.appendChild(button);
-      if (action === "previous") this.resultPager.appendChild(this.pageNumberInput);
+      this.pageButtons.push(button); this.pageControls.appendChild(button);
+      if (action === "previous") this.pageControls.appendChild(pagePosition);
     }
-    this.resultPager.appendChild(this.pageErrorEl);
+    this.resultPager.append(this.pageControls, this.pageErrorEl);
     this.messagesEl = document.createElement("div");
     this.messagesEl.setAttribute("role", "log");
     this.messagesEl.setAttribute("aria-live", "polite");
@@ -9567,11 +9646,15 @@ class QueryTabView extends TabView {
   /** 结果页底部统计。 */
   statusInfo(): { sql: string; pageText: string; elapsed: string } {
     const set = this.currentSet(), page = this.resultPages.page(this.activeResultTab);
+    const result = this.tab.results;
+    const receipts = result?.sets.filter(item => !item.columns.length) ?? [];
     const progress = page?.loading ? " · 正在读取缓存…" : this.exporting ? " · 正在导出完整缓存…" : "";
+    const rows = set ? `共 ${page?.total ?? set.total} 行`
+      : receipts.length ? `影响 ${receipts.reduce((sum, item) => sum + item.affected, 0)} 行` : "";
     return {
       sql: this.editor.getSelection() || this.editor.getSql(),
-      pageText: set ? (this.resultPages.range(this.activeResultTab) || `已加载 ${set.rows.length} / 共 ${set.total} 行（仅可导出已加载行）`) + progress : "",
-      elapsed: set && this.tab.results ? `运行时间: ${(this.tab.results.elapsed_ms / 1000).toFixed(3)}s` : "",
+      pageText: rows + progress,
+      elapsed: rows && result ? `运行耗时 ${(result.elapsed_ms / 1000).toFixed(3)}s` : "",
     };
   }
 
@@ -9616,7 +9699,7 @@ class QueryTabView extends TabView {
     this.executionStatusEl.setAttribute("data-state", "running");
   }
 
-  /** 运行条与消息页共用的状态文案；终态时带定格耗时。 */
+  /** 执行状态与消息页共用的文案；终态时带定格耗时。 */
   private executionStatusText(): string {
     const label = this.executionLabelEl.textContent ?? "";
     const elapsed = this.executionTimerEl.textContent ?? "";
@@ -9653,6 +9736,11 @@ class QueryTabView extends TabView {
     if (startedAt === null) return;
     const elapsed = this.formatExecutionElapsed(this.executionNow() - startedAt);
     this.executionTimerEl.textContent = elapsed;
+    if (this.resultLoadingTimerEl && this.running && !this.resultLoadingEl?.hidden) {
+      this.resultLoadingTimerEl.textContent = elapsed;
+      const label = this.executionState === "cancel_requested" ? "正在停止查询… " : "正在查询… ";
+      if (this.resultLoadingLabelEl && this.resultLoadingLabelEl.textContent !== label) this.resultLoadingLabelEl.textContent = label;
+    }
     if (this.running && this.lastMessages[0] && !this.lastMessages[0].error) {
       this.lastMessages[0].text = this.runningMessageText(elapsed);
     }
@@ -9663,10 +9751,13 @@ class QueryTabView extends TabView {
     if (this.executionMessageTimerEl) this.executionMessageTimerEl.textContent = elapsed;
   }
 
-  /** 终态定格最终耗时并停表；数值保留在运行条上，不归零。 */
+  /** 终态定格最终耗时并停表；保留消息证据与结果页脚读数，不归零。 */
   private freezeExecutionClock(): void {
     const startedAt = this.executionClockStartedAt;
-    if (startedAt !== null) this.executionTimerEl.textContent = this.formatExecutionElapsed(this.executionNow() - startedAt);
+    if (startedAt !== null) {
+      this.executionTimerEl.textContent = this.formatExecutionElapsed(this.executionNow() - startedAt);
+      if (this.resultLoadingTimerEl && this.running) this.resultLoadingTimerEl.textContent = this.executionTimerEl.textContent;
+    }
     this.stopExecutionClock();
   }
 
@@ -9728,10 +9819,43 @@ class QueryTabView extends TabView {
     }
   }
 
+  private updateResultLoading(): void {
+    const page = this.resultPages.page(this.activeResultTab);
+    const loading = this.running || !!page?.loading;
+    if (!this.resultLoadingEl) {
+      this.resultLoadingEl = document.createElement("div");
+      this.resultLoadingEl.className = "grid-loading-overlay query-result-loading";
+      this.resultLoadingEl.setAttribute("role", "status");
+      this.resultLoadingEl.setAttribute("aria-live", "polite");
+      this.resultLoadingLabelEl = document.createElement("span");
+      this.resultLoadingLabelEl.className = "query-loading-label";
+      this.resultLoadingTimerEl = document.createElement("span");
+      this.resultLoadingTimerEl.className = "query-loading-timer";
+      // 数字每 50ms 更新，仅作视觉辅助，避免读屏反复播报。
+      this.resultLoadingTimerEl.setAttribute("aria-hidden", "true");
+      this.resultLoadingEl.append(this.resultLoadingLabelEl, this.resultLoadingTimerEl);
+      this.resultBody.appendChild(this.resultLoadingEl);
+    }
+    this.resultLoadingEl.hidden = !loading;
+    const queryLabel = this.executionState === "cancel_requested" ? "正在停止查询…" : "正在查询…";
+    this.resultLoadingLabelEl!.textContent = loading ? this.running ? `${queryLabel} ` : "正在加载结果页…" : "";
+    this.resultLoadingTimerEl!.hidden = !loading || !this.running;
+    this.resultLoadingTimerEl!.textContent = loading && this.running ? this.executionTimerEl.textContent || "0.000 s" : "";
+    this.resultBody.setAttribute("aria-busy", String(loading));
+    this.grid.el.inert = loading;
+    this.resultPanelHost.inert = loading;
+    this.messagesEl.inert = loading;
+    this.messagesEl.style.visibility = this.running ? "hidden" : "";
+  }
+
   private renderResultPager(): void {
+    this.updateResultLoading();
     const page = this.resultPages.page(this.activeResultTab), scope = this.resultPages.scope;
-    const visible = this.activeResultTab >= 0 && !!this.currentSet();
-    this.resultPager.style.display = visible ? "flex" : "none";
+    const visible = !!this.currentSet()?.columns.length;
+    const info = this.statusInfo();
+    this.resultPager.style.display = visible || !!info.elapsed ? "flex" : "none";
+    this.pageControls.style.display = visible ? "flex" : "none";
+    this.pageSizeSelect.parentElement!.style.display = visible ? "inline-flex" : "none";
     this.resultPager.setAttribute("aria-busy", String(!!page?.loading));
     const blocked = this.resultBusy() || this.controlledResult?.dirty === true || !scope || !page;
     this.pageNumberInput.value = String(this.resultPages.pageNumber(this.activeResultTab));
@@ -9740,9 +9864,9 @@ class QueryTabView extends TabView {
     this.pageSizeSelect.disabled = blocked || !page?.total;
     this.pageNumberInput.removeAttribute("aria-invalid"); this.pageErrorEl.hidden = true;
     const count = this.resultPages.pageCount(this.activeResultTab);
+    this.pageCountEl.textContent = `/ ${count} 页`;
     this.pageNumberInput.setAttribute("aria-description", `共 ${count} 页；输入页码后按 Enter 或移开焦点跳转`);
-    const info = this.statusInfo();
-    this.footerStatusEl.textContent = [info.elapsed, info.pageText].filter(Boolean).join(" · ");
+    this.footerStatusEl.textContent = [info.elapsed, info.pageText].filter(Boolean).join(" | ");
     this.pageButtons.forEach((button, index) => {
       // 首屏0行时允许首页读取重试（超大单行也可直接导出）。
       button.disabled = blocked || page!.total === 0 || (index <= 1 ? page!.offset === 0 && page!.rows.length > 0 : index === 2
@@ -9988,15 +10112,14 @@ class QueryTabView extends TabView {
       this.tab.results = res;
       this.resultExecution = { context: { execution_id: outcome.execution_id, connection_id: connId, owner_id: this.tab.id, namespace }, result: res };
       this.releaseSpool(previousSpool);
-      this.activeResultTab = res.sets.length ? 0 : -1;
-      const affected = res.sets.reduce((a, s) => a + s.affected, 0);
-      const previewed = res.sets.find(set => set.total > set.rows.length);
-      const completionText = `执行完成，用时 ${res.elapsed_ms} 毫秒${affected ? `，${affected} 行受影响` : ""}`;
+      // 无返回列的 DML/DDL 回执只展示消息；保留原 sets 索引供分页与导出。
+      this.activeResultTab = res.sets.findIndex(set => set.columns.length > 0);
       // 消息页与「执行记录」窗口共用同一格式：[时间][连接][库][驱动] + SQL + Time。
       const cfg = this.app.connectionById(connId);
       const record = [
         `[${logStamp()}][${cfg?.name ?? connId}][${namespace || "—"}][${(cfg?.kind ?? "").toUpperCase()}]`,
         sql.trim(),
+        ...res.sets.filter(set => !set.columns.length).map(set => `影响 ${set.affected} 行${set.message ? ` · ${set.message}` : ""}`),
         `Time: ${(res.elapsed_ms / 1000).toFixed(3)}s`,
       ].join("\n");
       this.lastMessages = [
@@ -10004,10 +10127,8 @@ class QueryTabView extends TabView {
         ...res.messages.map((m) => ({ text: m, error: false })),
       ];
       this.renderResults();
-      this.app.toast(
-        "success",
-        `${completionText}${previewed ? res.spool_id ? "；结果按页读取本次执行缓存，导出使用完整缓存" : `；无完整缓存，仅已加载 ${previewed.rows.length} / ${previewed.total} 行` : ""}`,
-      );
+      // 正常完成不弹提示；耗时/行数保留在状态栏，执行记录保留在消息页。
+
     } catch (e) {
       if (this.disposed || revision !== this.executionRevision) return;
       // 能力读取失败发生在控制器启动之前，也必须解除“查询中”并停止计时。
@@ -10042,8 +10163,11 @@ class QueryTabView extends TabView {
     }
     if (res !== this.resultPages.result) this.releaseSpool(this.resultPages.replace(res, { connectionId: this.tab.connectionId, ownerId: this.tab.id, namespace: this.tab.schema }));
     this.resultTabsEl.innerHTML = "";
-    const hasMessages = this.lastMessages.length > 0;
-    const setCount = res?.sets.length ?? 0;
+    const receiptSets = res?.sets.filter(set => !set.columns.length) ?? [];
+    const resultIndexes = res?.sets.flatMap((set, index) => set.columns.length ? [index] : []) ?? [];
+    if (this.activeResultTab >= 0 && !res?.sets[this.activeResultTab]?.columns.length) this.activeResultTab = -1;
+    const hasMessages = this.lastMessages.length > 0 || receiptSets.length > 0;
+    const setCount = resultIndexes.length;
     const hasOutput = this.running || hasMessages || setCount > 0;
     if (!hasOutput) {
       this.resultSplitter.style.display = "none";
@@ -10079,14 +10203,15 @@ class QueryTabView extends TabView {
         this.renderResults();
         this.app.renderStatus();
         this.app.notifyToolbar?.();
-        this.resultTabsEl.querySelector<HTMLButtonElement>(`.result-tab:nth-child(${index < 0 ? 1 : index + (hasMessages ? 2 : 1)})`)?.focus();
+        const position = index < 0 ? 1 : resultIndexes.indexOf(index) + (hasMessages ? 2 : 1);
+        this.resultTabsEl.querySelector<HTMLButtonElement>(`.result-tab:nth-child(${position})`)?.focus();
       });
       this.resultTabsEl.appendChild(t);
     };
     if (hasMessages) mkTab("消息", -1);
-    res?.sets.forEach((_s, i) => mkTab(`结果 ${i + 1}`, i));
-    // 内容切换
-    const showGrid = this.activeResultTab >= 0 && !!res?.sets[this.activeResultTab];
+    resultIndexes.forEach((index, position) => mkTab(`结果 ${position + 1}`, index));
+    // 返回列而非行数决定结果集：空 SELECT 和 DML RETURNING 仍保留结果页。
+    const showGrid = this.activeResultTab >= 0 && !!res?.sets[this.activeResultTab]?.columns.length;
     const showPanel = showGrid && !!this.controlledResult;
     this.resultPanelHost.style.display = showPanel ? "flex" : "none";
     this.resultRecoveryTools.style.display = showPanel ? "flex" : "none";
@@ -10137,7 +10262,11 @@ class QueryTabView extends TabView {
     this.messagesEl.innerHTML = "";
     this.executionMessageLabelEl = null;
     this.executionMessageTimerEl = null;
-    this.lastMessages.forEach((m, index) => {
+    const messages = this.lastMessages.length ? this.lastMessages
+      : this.tab.results?.sets.filter(set => !set.columns.length).map(set => ({
+        text: `影响 ${set.affected} 行${set.message ? ` · ${set.message}` : ""}`, error: false,
+      })) ?? [];
+    messages.forEach((m, index) => {
       const line = document.createElement("div");
       line.className = m.error ? "msg-error" : "msg-ok";
       // 活计时只属于尚未结束的执行；完成日志不能被轮询改写。

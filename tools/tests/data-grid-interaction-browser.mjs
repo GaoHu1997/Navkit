@@ -35,7 +35,10 @@ try {
     Object.defineProperty(window, '__PREVIEW_MOCK__', { configurable: true, get: () => mock, set: value => {
       mock = value; mock['plugin:event|listen'] = () => 1; mock['plugin:event|unlisten'] = () => null;
       mock.list_editing_drafts = () => [];
-      mock.page_table = args => new Promise((resolve, reject) => window.requests.push({ req: args.req, resolve, reject }));
+      mock.get_table_schema = () => ({ table: 'interaction_fixture', database: 'navkit',
+         columns: ['id', 'tradeType', 'applyStatus', 'tradeStatus', ...Array.from({ length: 150 }, (_, i) => 'extra_' + i)].map(name => ({ name, type: 'INTEGER', comment: name === 'tradeType' ? '交易类型：现金 / 转账' : null })),
+         indexes: [], foreign_keys: [], comment: null });
+       mock.page_table = args => new Promise((resolve, reject) => window.requests.push({ req: args.req, resolve, reject }));
     } });
     window.resolvePage = index => {
       const pending = window.requests[index];
@@ -49,9 +52,46 @@ try {
   await page.waitForFunction(() => window.__APP__?.connections?.length);
   await page.evaluate(() => { void window.__APP__.openTableTab('c1', 'navkit', 'interaction_fixture', 'table'); });
   await page.waitForFunction(() => requests.length === 1);
-  assert.match(await page.locator('.data-load-status').textContent(), /正在加载当前页.*返回后自动更新/);
+  assert.match(await page.locator('.data-grid-surface > .grid-loading-overlay').textContent(), /^正在查询… \d+\.\d{3} s$/);
+  const checkOverlay = async () => {
+    const geometry = await page.locator('.data-grid-surface > .grid-loading-overlay').evaluate(el => {
+      const a = el.getBoundingClientRect(), b = el.parentElement.getBoundingClientRect(), css = getComputedStyle(el);
+      return { position: css.position, align: css.alignItems, justify: css.justifyContent, dx: Math.abs(a.x + a.width / 2 - b.x - b.width / 2), dy: Math.abs(a.y + a.height / 2 - b.y - b.height / 2) };
+    });
+    assert.equal(geometry.position, 'absolute'); assert.equal(geometry.align, 'center'); assert.equal(geometry.justify, 'center');
+    assert(geometry.dx < 1 && geometry.dy < 1); assert.equal(await page.locator('.data-load-status:visible').count(), 0);
+    const timer = page.locator('.data-loading-timer');
+    const before = await timer.textContent();
+    await page.waitForFunction(value => document.querySelector('.data-loading-timer')?.textContent !== value, before);
+    assert.match(await timer.textContent(), /^\d+\.\d{3} s$/);
+    assert.equal(await timer.getAttribute('aria-hidden'), 'true');
+    assert.equal(await timer.evaluate(el => getComputedStyle(el).fontVariantNumeric), 'tabular-nums');
+  };
+  await checkOverlay();
   await page.evaluate(() => resolvePage(0));
   await page.waitForFunction(() => !window.__APP__.activeView().loading);
+  await page.locator('.tab-toolbar [data-command="columns"]').click();
+  await page.locator('.column-sidebar-comment').getByText('交易类型：现金 / 转账', { exact: true }).waitFor();
+  const commentStyle = await page.locator('.column-sidebar-comment').first().evaluate(el => ({ tag: el.tagName, color: getComputedStyle(el).color, muted: getComputedStyle(el).getPropertyValue('--text-secondary').trim(), direction: getComputedStyle(el.parentElement).flexDirection }));
+  assert.equal(commentStyle.tag, 'SMALL'); assert.equal(commentStyle.direction, 'column');
+  await page.locator('.tab-toolbar [data-command="columns"]').click();
+  const header = name => page.locator(`th[data-name="${name}"]`).last();
+  await header('tradeType').click({ button: 'right' }); await page.getByText('固定列到最左侧', { exact: true }).click();
+  assert.equal(await page.locator('th[data-col]').last().evaluate(el => el.parentElement.querySelector('th[data-col]').dataset.name), 'tradeType');
+  await header('tradeStatus').click({ button: 'right' }); await page.getByText('固定列到最左侧', { exact: true }).click();
+  await page.evaluate(() => { window.__APP__.activeView().grid.scroll.scrollLeft = 1000; });
+  const pinned = await page.evaluate(() => {
+    const grid = window.__APP__.activeView().grid, origin = grid.scroll.getBoundingClientRect().left;
+    const headers = [...grid.el.querySelectorAll('th.grid-cell-pinned')];
+    return headers.map(el => ({ name: el.dataset.name, offset: el.getBoundingClientRect().left - origin, width: el.getBoundingClientRect().width, body: grid.el.querySelector(`td[data-row="0"][data-col="${el.dataset.col}"]`).getBoundingClientRect().left - origin }));
+  });
+  assert.deepEqual(pinned.map(c => c.name), ['tradeType', 'tradeStatus']);
+  assert(Math.abs(pinned[0].offset) < 1); assert(Math.abs(pinned[1].offset - pinned[0].width) < 1);
+  assert(pinned.every(c => Math.abs(c.offset - c.body) < 1));
+  await mkdir(path.join(root, 'artifacts'), { recursive: true });
+  await page.screenshot({ path: path.join(root, 'artifacts/data-grid-pinned-columns.png'), fullPage: true, animations: 'disabled' });
+  for (const name of ['tradeType', 'tradeStatus']) { await header(name).click({ button: 'right' }); await page.getByText('取消固定列', { exact: true }).click(); }
+  await page.evaluate(() => { window.__APP__.activeView().grid.scroll.scrollLeft = 0; });
   await page.evaluate(() => { const v = window.__APP__.activeView(); v.tab.pageLimit = 20; v.loadedPageRequest.limit = 20; v.renderFooter(v.tab.page); });
   const record = () => page.locator('.statusbar-query-elapsed + .statusbar-cell').textContent();
   // Cell selectors are scoped through the actual grid host, not the tab class convention.
@@ -78,11 +118,12 @@ try {
   await page.waitForFunction(() => requests.length === 2);
   assert.equal(await applyFilter.isDisabled(), true);
   assert.equal(await applyFilter.textContent(), '应用筛选中…');
-  assert.match(await page.locator('.data-load-status').textContent(), /正在应用筛选.*下方暂为上次结果/);
-  assert.match(await record(), /正在应用筛选/);
+  assert.match(await page.locator('.data-grid-surface > .grid-loading-overlay').textContent(), /^正在查询… \d+\.\d{3} s$/);
+  assert.match(await record(), /正在查询…/);
   assert.equal(await page.evaluate(() => window.__APP__.activeView().grid.el.inert), true);
   assert.equal(await page.locator('tbody').last().evaluate(el => getComputedStyle(el).opacity), '0.55');
   await mkdir(path.join(root, 'artifacts'), { recursive: true });
+  await checkOverlay();
   await page.screenshot({ path: path.join(root, 'artifacts/data-grid-filter-loading.png'), fullPage: true, animations: 'disabled' });
   // Deliberately exercise disabled/stale event paths in addition to the real first click.
   await applyFilter.dispatchEvent('click');
@@ -93,7 +134,7 @@ try {
   await page.waitForFunction(() => !window.__APP__.activeView().loading);
   assert.equal(await applyFilter.isDisabled(), false);
   assert.equal(await applyFilter.textContent(), '应用筛选');
-  assert.match(await page.locator('.data-load-status').textContent(), /筛选已应用/);
+  assert.equal(await page.locator('.grid-loading-overlay:visible, .data-load-status:visible').count(), 0);
   assert.match(await record(), /^第 1 条记录/);
 
   // Long-list sort field search and slow response failure retain old applied order + editable draft.
@@ -109,18 +150,19 @@ try {
   await applySort.click();
   await page.waitForFunction(() => requests.length === 3);
   assert.equal(await applySort.textContent(), '应用排序中…'); assert.equal(await applySort.isDisabled(), true);
-  assert.match(await page.locator('.data-load-status').textContent(), /正在应用排序/);
+  assert.match(await page.locator('.data-grid-surface > .grid-loading-overlay').textContent(), /^正在查询… \d+\.\d{3} s$/);
   await applySort.dispatchEvent('click');
   assert.equal(await page.evaluate(() => requests.length), 3);
   await page.evaluate(() => requests[2].reject(new Error('offline fixture')));
   await page.waitForFunction(() => !window.__APP__.activeView().loading);
   assert.match(await page.locator('.data-load-status').textContent(), /失败.*重试.*上次结果/);
+  assert.equal(await page.locator('.grid-loading-overlay:visible').count(), 0);
   assert.equal(await applySort.isDisabled(), false);
   assert.deepEqual(await page.evaluate(() => window.__APP__.activeView().tab.order_rules ?? []), []);
   assert.equal(await page.getByLabel('排序字段 1', { exact: true }).inputValue(), 'extra_111');
   await applySort.click(); await page.waitForFunction(() => requests.length === 4);
   await page.evaluate(() => resolvePage(3)); await page.waitForFunction(() => !window.__APP__.activeView().loading);
-  assert.match(await page.locator('.data-load-status').textContent(), /排序已应用/);
+  assert.equal(await page.locator('.grid-loading-overlay:visible, .data-load-status:visible').count(), 0);
   // Wait for the deliberately induced failure toast to expire before the pagination capture.
   await page.getByText('offline fixture', { exact: false }).waitFor({ state: 'hidden', timeout: 15000 });
 
@@ -129,7 +171,8 @@ try {
   await next.evaluate(el => { window.staleNext = el; });
   await next.click(); await page.waitForFunction(() => requests.length === 5);
   assert.equal(await next.isDisabled(), true); assert.equal(await page.getByLabel('当前页码', { exact: true }).isDisabled(), true);
-  assert.match(await page.locator('.data-load-status').textContent(), /正在加载第 2 页/);
+  assert.match(await page.locator('.data-grid-surface > .grid-loading-overlay').textContent(), /^正在查询… \d+\.\d{3} s$/);
+  await checkOverlay();
   await page.screenshot({ path: path.join(root, 'artifacts/data-grid-page-loading.png'), fullPage: true, animations: 'disabled' });
   await page.evaluate(() => { staleNext.click(); staleNext.dispatchEvent(new Event('click')); });
   assert.equal(await page.evaluate(() => requests.length), 5);
@@ -154,7 +197,7 @@ try {
   assert(narrow.scroll <= narrow.width);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ mode: 'production-ui-delayed-mock-ipc', requests: await page.evaluate(() => requests.length),
-    passed: ['点击即时反馈/禁用与去重', '查询期间旧结果不可编辑且变淡', '筛选排序字段输入搜索', '失败保留旧结果与草稿并支持重试', '翻页旧按钮去重与失败页码恢复', '单选/多选/分页记录序号跟随最后点击行', '表单导航与返回网格序号同步'], narrow }, null, 2));
+    passed: ['表数据统一正在查询文案和中央毫秒计时', '列头右键固定/取消固定及多列最左侧粘性定位', '字段真实备注在名称下方灰色小字显示', '加载遮罩居中且完成后无结果提示', '点击即时反馈/禁用与去重', '查询期间旧结果不可编辑且变淡', '筛选排序字段输入搜索', '失败保留旧结果与草稿并支持重试', '翻页旧按钮去重与失败页码恢复', '单选/多选/分页记录序号跟随最后点击行', '表单导航与返回网格序号同步'], narrow }, null, 2));
 } finally {
   try { if (browser) await browser.close(); }
   finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

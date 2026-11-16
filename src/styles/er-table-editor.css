@@ -1,10 +1,14 @@
 /* 关系图右侧紧凑表设计器（按设计稿视觉） */
-.er-te { display: flex; flex-direction: column; min-height: 0; height: 100%; font-size: 12px; color: var(--text-primary); }
+.er-te { display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; font-size: 12px; color: var(--text-primary); }
 .er-te-tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border-subtle); padding: 0 12px; flex: 0 0 auto; }
 .er-te-tab { height: 36px; border: 0; background: transparent; color: var(--text-secondary); font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
 .er-te-tab.active { color: var(--accent-600, #2f7de1); font-weight: 600; border-bottom-color: var(--accent-600, #2f7de1); }
 .er-te-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
-.er-te-notice { background: var(--danger-50, #fdeceb); color: var(--danger-600, #b23b36); border: 1px solid var(--danger-200, #f3c4c1); border-radius: 6px; padding: 7px 9px; margin-bottom: 10px; }
+.er-te-notice { background: var(--danger-50); color: var(--danger-600); border: 1px solid var(--danger-100); border-radius: 6px; padding: 7px 9px; margin-bottom: 10px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.er-te-notice[data-tone="success"] { background: var(--ok-50); color: var(--ok-600); border-color: var(--ok-100); }
+.er-te-retry { margin-bottom: 10px; }
+.er-te button:disabled { opacity: .5; cursor: default; }
+.er-te button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
 .er-te-empty { color: var(--text-tertiary); padding: 12px 0; }
 .er-te-namefield { margin-bottom: 12px; }
 .er-te-lbl { font-size: 11px; color: var(--text-tertiary); margin: 0 0 4px; }
@@ -33,10 +37,8 @@
 .er-te-pkrow { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-subtle); margin-bottom: 9px; }
 .er-te-pklabel { font-weight: 600; white-space: nowrap; }
 .er-te-pkcols { color: var(--text-secondary); font-family: var(--font-mono); }
-.er-te-idxrow { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-.er-te-idxrow .er-te-mini:nth-child(1) { width: 130px; flex: 0 0 130px; }
-.er-te-idxrow .er-te-mini:nth-child(2) { flex: 1; min-width: 0; }
-.er-te-idxrow .er-te-mini:nth-child(3) { width: 96px; flex: 0 0 96px; }
+.er-te-idxrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 86px 24px; align-items: center; gap: 6px; margin-bottom: 8px; }
+.er-te-idxrow .er-te-mini { width: 100%; min-width: 0; }
 .er-fkitem { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 9px 10px; margin-bottom: 9px; background: var(--bg-surface); }
 .er-fkitem-r1 { display: flex; align-items: center; gap: 7px; }
 .er-fkitem-name { font-weight: 600; font-size: 12.5px; }
@@ -47,13 +49,18 @@
 .er-tag { font-size: 11px; padding: 2px 7px; border-radius: 5px; background: var(--bg-subtle); color: var(--text-secondary); }
 .er-tag.b { background: var(--accent-50, #eef4fe); color: var(--accent-600, #2f7de1); font-weight: 600; }
 .er-fkform { border: 1px solid var(--accent-200, #cfe0fb); border-radius: 9px; padding: 11px; background: var(--accent-50, #f8fbff); margin-top: 4px; }
-.er-fkform-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.er-fkform-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px; }
 .er-fkform-field .er-te-mini { width: 100%; }
 .er-fkform-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 11px; }
 .er-te-btn { height: 27px; padding: 0 11px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-surface); font-size: 12px; cursor: pointer; color: var(--text-primary); }
 .er-te-btn.pri { background: var(--accent-500, #2f7de1); border-color: var(--accent-500, #2f7de1); color: #fff; font-weight: 600; }
 .er-fkform-hint { color: var(--text-tertiary); font-size: 11px; margin: 9px 0 0; line-height: 1.5; }
 .er-te-status { flex: 0 0 auto; padding: 8px 12px; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 11px; }
+
+@media (max-width: 1000px) {
+  .er-te-idxrow { grid-template-columns: minmax(0, 1fr) 86px 24px; }
+  .er-te-idxrow .er-te-mini:first-child { grid-column: 1 / -1; }
+}
 
 /* 同步到数据库弹窗 */
 .er-sync-body { padding: 0; }

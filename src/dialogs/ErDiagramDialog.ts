@@ -120,9 +120,17 @@ export function openErDiagramDialog(
   // ---------------------------------------------------------------- 工具栏
   const toolbar = document.createElement("div");
   toolbar.className = "er-toolbar";
+  toolbar.setAttribute("role", "group");
+  toolbar.setAttribute("aria-label", "关系图操作");
+  const sourceRow = document.createElement("div");
+  sourceRow.className = "er-toolbar-row er-toolbar-source";
+  sourceRow.setAttribute("role", "group");
+  sourceRow.setAttribute("aria-label", "数据源与浏览");
+  const toolsRow = document.createElement("div");
+  toolsRow.className = "er-toolbar-row er-toolbar-tools";
 
   const connSelect = document.createElement("select");
-  connSelect.className = "er-select";
+  connSelect.className = "er-select er-conn-select";
   connSelect.setAttribute("aria-label", "连接");
   for (const c of connections) {
     const opt = document.createElement("option");
@@ -133,7 +141,7 @@ export function openErDiagramDialog(
   if (current) connSelect.value = current.id;
 
   const dbSelect = document.createElement("select");
-  dbSelect.className = "er-select";
+  dbSelect.className = "er-select er-db-select";
   dbSelect.setAttribute("aria-label", "数据库");
 
   const search = document.createElement("input");
@@ -220,6 +228,7 @@ export function openErDiagramDialog(
   refreshBtn.type = "button";
   refreshBtn.className = "er-tool-btn icon";
   refreshBtn.setAttribute("aria-label", "刷新");
+  refreshBtn.title = "刷新关系图与当前表设计（保留未保存草稿）";
   refreshBtn.innerHTML = iconSvgByName("dbn_refresh");
   const zoomOutBtn = document.createElement("button");
   zoomOutBtn.type = "button";
@@ -236,13 +245,30 @@ export function openErDiagramDialog(
   stats.className = "er-stats";
   stats.textContent = "未加载数据";
 
-  toolbar.append(connSelect, dbSelect, search, modeGroup, newTableBtn, layoutBtn, dirSelect, matchBtn, fitBtn, copySqlBtn, syncBtn, refreshBtn, stats, zoomOutBtn, zoomInBtn);
+  function toolGroup(className: string, label: string, ...controls: HTMLElement[]): HTMLElement {
+    const group = document.createElement("div");
+    group.className = className;
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", label);
+    group.append(...controls);
+    return group;
+  }
+  sourceRow.append(connSelect, dbSelect, search, modeGroup, refreshBtn);
+  toolsRow.append(
+    toolGroup("er-toolbar-write", "数据库写操作", newTableBtn, syncBtn),
+    toolGroup("er-toolbar-canvas", "画布工具", layoutBtn, dirSelect, matchBtn, fitBtn, copySqlBtn),
+    toolGroup("er-toolbar-metrics", "统计与缩放", stats, zoomOutBtn, zoomInBtn),
+  );
+  toolbar.append(sourceRow, toolsRow);
   dlg.body.appendChild(toolbar);
 
   // 自动匹配面板（复用现有面板的视觉与折叠模式，位于工具栏与画布之间）
   const matchPanel = document.createElement("div");
   matchPanel.className = "er-match-panel";
+  matchPanel.id = `er-match-${instanceId}`;
   matchPanel.hidden = true;
+  matchBtn.setAttribute("aria-controls", matchPanel.id);
+  matchBtn.setAttribute("aria-expanded", "false");
   dlg.body.appendChild(matchPanel);
 
   // 画布与右侧表设计器左右分栏。
@@ -277,6 +303,7 @@ export function openErDiagramDialog(
   inspTitle.textContent = "表设计";
   const inspMessage = document.createElement("div");
   inspMessage.className = "er-insp-message";
+  inspMessage.setAttribute("role", "status");
   const deleteTableBtn = document.createElement("button");
   deleteTableBtn.type = "button";
   deleteTableBtn.className = "er-insp-delete";
@@ -291,15 +318,29 @@ export function openErDiagramDialog(
   // 状态覆盖层（加载 / 错误）
   const overlay = document.createElement("div");
   overlay.className = "er-overlay";
-  dlg.body.appendChild(overlay);
+  // 覆盖层只遮住画布，加载失败时工具栏的刷新与切库仍可操作。
+  canvas.appendChild(overlay);
 
   function showOverlay(text: string, isError = false): void {
     overlay.hidden = false;
     overlay.classList.toggle("error", isError);
-    overlay.textContent = text;
+    overlay.setAttribute("role", isError ? "alert" : "status");
+    canvas.setAttribute("aria-busy", String(!isError));
+    const message = document.createElement("p");
+    message.textContent = text;
+    overlay.replaceChildren(message);
+    if (isError) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "er-tool-btn er-overlay-retry";
+      retry.textContent = "重试加载关系图";
+      retry.addEventListener("click", () => void refresh(undefined, true));
+      overlay.appendChild(retry);
+    }
   }
   function hideOverlay(): void {
     overlay.hidden = true;
+    canvas.setAttribute("aria-busy", "false");
   }
 
   // ---------------------------------------------------------------- 数据加载
@@ -313,6 +354,12 @@ export function openErDiagramDialog(
   function scopeIsCurrent(scope: Scope): boolean {
     return !disposed && scope.connection.id === connectionId && scope.namespace === database;
   }
+  function writeReason(scope: Scope | null): string | null {
+    if (!scope || !scopeIsCurrent(scope)) return "请先选择当前连接与数据库";
+    if (!scope.namespace && scope.connection.kind !== "sqlite") return "请先选择数据库 / 模式";
+    if (scope.connection.read_only || connections.find(c => c.id === scope.connection.id)?.read_only) return "此连接只读，不能修改表结构";
+    return null;
+  }
 
   /** 参考实现 的 generation/context guard：目录和元数据都只提交最新请求。
    * 不用 loading 锁丢弃切换请求，也不让 worker 读取可变的连接/namespace。 */
@@ -321,6 +368,7 @@ export function openErDiagramDialog(
     const initial = currentScope();
     if (!initial || disposed) return;
     const active = (): boolean => !disposed && generation === loadGeneration && initial.connection.id === connectionId;
+    if (force && selectedTable) designers.get(selectedTable)?.reload();
     showOverlay("正在加载表结构...");
     try {
       if (preferDb !== undefined || dbSelect.options.length === 0) {
@@ -404,6 +452,7 @@ export function openErDiagramDialog(
   function renderMatchPanel(): void {
     matchPanel.hidden = !showMatchPanel;
     matchBtn.classList.toggle("active", showMatchPanel);
+    matchBtn.setAttribute("aria-expanded", String(showMatchPanel));
     const badgeCount = autoMatch ? matchResult.relationships.length + matchResult.conflicts.length : 0;
     matchBadge.hidden = badgeCount === 0;
     matchBadge.textContent = String(badgeCount);
@@ -773,6 +822,7 @@ export function openErDiagramDialog(
     const pending = pendingCount();
     const inferred = inferredCount();
     stats.textContent = `${visibleNames.size} 张表 · ${relCount} 条关系${inferred ? `（含 ${inferred} 条推断）` : ""} · ${Math.round(viewport.zoom * 100)}%${pending ? ` · ${pending} 项待同步` : ""}`;
+    stats.title = stats.textContent;
   }
 
   /** 渲染全部（按模式）。 */
@@ -975,11 +1025,7 @@ export function openErDiagramDialog(
   function makeHost(scope: Scope): ErTableEditorHost {
     return {
       connection: () => scope.connection,
-      writeReason: () => {
-        if (!scopeIsCurrent(scope)) return "连接或数据库已切换，请重新选择表";
-        if (scope.connection.read_only) return "此连接只读，不能修改表结构";
-        return null;
-      },
+      writeReason: () => writeReason(scope),
       changed: () => { if (scopeIsCurrent(scope)) { renderStats(); renderPending(); } },
       toast: (kind, text) => { if (scopeIsCurrent(scope)) { inspMessage.textContent = text; inspMessage.dataset.tone = kind; } },
     };
@@ -996,6 +1042,15 @@ export function openErDiagramDialog(
     const n = pendingCount();
     if (badge) { badge.hidden = n === 0; badge.textContent = String(n); }
     syncBtn.classList.toggle("has-pending", n > 0);
+    const blocked = writeReason(currentScope());
+    newTableBtn.disabled = !!blocked;
+    newTableBtn.title = blocked ?? "在当前数据库新建表";
+    deleteTableBtn.disabled = !!blocked || !selectedTable;
+    deleteTableBtn.title = blocked ?? (!selectedTable ? "请先选择表" : "删除当前表");
+    const designer = selectedTable ? designers.get(selectedTable) : undefined;
+    const syncReason = blocked ?? designer?.saveReason() ?? (!designer ? "请先选择并读取完整表设计" : null);
+    syncBtn.disabled = !!syncReason;
+    syncBtn.title = syncReason ?? "把当前选中表的结构改动生成后端计划并执行";
   }
 
   function resetDesigners(): void {
@@ -1014,7 +1069,8 @@ export function openErDiagramDialog(
       inspBody.replaceChildren(empty);
       return;
     }
-    if (!database) {
+    const scope = currentScope();
+    if (!scope || (!database && scope.connection.kind !== "sqlite")) {
       inspTitle.textContent = `表 · ${selectedTable}`;
       const msg = document.createElement("p");
       msg.className = "er-insp-empty";
@@ -1026,13 +1082,11 @@ export function openErDiagramDialog(
     let designer = designers.get(selectedTable);
     if (!designer) {
       const holder = document.createElement("div");
-      const scope = currentScope();
-      if (!scope) return;
       designer = new ErTableEditor({ connectionId, schema: database, table: selectedTable, ownerId: ownerIdFor(selectedTable) }, makeHost(scope), holder);
       designers.set(selectedTable, designer);
-      designer.activate();
     }
     if (designer.el.parentElement !== inspBody) inspBody.replaceChildren(designer.el);
+    designer.activate();
     renderPending();
   }
 
@@ -1058,7 +1112,8 @@ export function openErDiagramDialog(
 
   function cmdNewTable(): void {
     const scope = currentScope();
-    if (!scope) { inspMessage.textContent = "请先选择连接与数据库"; return; }
+    const reason = writeReason(scope);
+    if (reason || !scope) { inspMessage.textContent = reason; inspMessage.dataset.tone = "error"; return; }
     const cfg = scope.connection;
     const nameInput = document.createElement("input");
     nameInput.type = "text";
@@ -1086,6 +1141,7 @@ export function openErDiagramDialog(
             void (async () => {
               try {
                 if (!scopeIsCurrent(scope)) return;
+                const blocked = writeReason(scope); if (blocked) throw new Error(blocked);
                 const ddl = createTableDdl(cfg.kind, scope.namespace, name);
                 await api.executeDdl(scope.connection.id, ddl, scope.namespace || undefined);
                 if (scopeIsCurrent(scope)) {
@@ -1110,6 +1166,8 @@ export function openErDiagramDialog(
     const table = selectedTable;
     const scope = currentScope();
     if (!scope) return;
+    const reason = writeReason(scope);
+    if (reason) { inspMessage.textContent = reason; inspMessage.dataset.tone = "error"; return; }
     const kind = scope.connection.kind;
     new Dialog({
       title: "删除表",
@@ -1126,6 +1184,7 @@ export function openErDiagramDialog(
             void (async () => {
               try {
                 if (!scopeIsCurrent(scope)) return;
+                const blocked = writeReason(scope); if (blocked) throw new Error(blocked);
                 const full = scope.namespace ? `${quoteIdent(kind, scope.namespace)}.${quoteIdent(kind, table)}` : quoteIdent(kind, table);
                 await api.executeDdl(scope.connection.id, `DROP TABLE IF EXISTS ${full}`, scope.namespace || undefined);
                 if (scopeIsCurrent(scope)) {

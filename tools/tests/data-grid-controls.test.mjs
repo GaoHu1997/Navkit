@@ -30,10 +30,10 @@ function fixture(count = 300) {
 test('sidebar has 300 native named checkbox rows in a scrollable nonfloating layout', () => {
   const { sidebar, trigger, checkboxes } = fixture(); assert.equal(sidebar.el.hidden, true); assert.equal(trigger.attributes['aria-expanded'], 'false');
   sidebar.toggle(); assert.equal(checkboxes().length, 300); assert.equal(sidebar.el.tagName, 'aside'); assert.equal(sidebar.el.id, trigger.attributes['aria-controls']);
-  assert.ok(checkboxes().every(input => input.parentElement.tagName === 'label' && input.parentElement.children[1].textContent));
+  assert.ok(checkboxes().every(input => input.parentElement.tagName === 'label' && input.parentElement.children[1].children[0].textContent));
   const css = fs.readFileSync(new URL('../../src/ui/data-grid-controls.css', import.meta.url), 'utf8');
   assert.match(css, /column-sidebar-list[^}]*overflow: auto/); assert.match(css, /column-sidebar\s*\{[^}]*border-left/);
-  assert.doesNotMatch(css, /position:\s*(absolute|fixed)/); assert.match(css, /min-height: 26px/);
+  assert.doesNotMatch(css.match(/\.column-sidebar\s*\{[^}]*\}/)?.[0] ?? '', /position:\s*(absolute|fixed)/); assert.match(css, /min-height: 26px/);
 });
 
 test('duplicate names toggle only their stable column id and preserve checkbox focus', () => {
@@ -48,6 +48,23 @@ test('search finds many columns and restore selects all columns even when search
   sidebar.el.children[2].fire('click'); assert.equal(hidden().size, 0); assert.ok(checkboxes().every(input => input.checked));
   search.value = 'not-found'; search.fire('input'); assert.equal(checkboxes().length, 0); assert.equal(sidebar.el.children[3].children[0].textContent, '没有匹配字段');
   search.value = ''; search.fire('input'); assert.equal(checkboxes().length, 300);
+});
+
+test('field comments render below names as small muted text and update when metadata arrives', () => {
+  const { sidebar, columns, checkboxes } = fixture(3);
+  columns[1].comment = '交易类型\n<script>plain text</script>';
+  columns[2].comment = '   ';
+  sidebar.toggle();
+  const second = checkboxes()[1], text = second.parentElement.children[1], note = text.children[1];
+  assert.equal(text.children[0].textContent, '重复别名');
+  assert.equal(note.tagName, 'small'); assert.equal(note.className, 'column-sidebar-comment');
+  assert.equal(note.textContent, columns[1].comment); assert.equal(second.attributes['aria-describedby'], note.id);
+  assert.equal(second.attributes['aria-label'], '重复别名'); assert.equal(checkboxes()[2].parentElement.children[1].children.length, 1);
+  columns[1].comment = '更新后的备注'; sidebar.render();
+  assert.equal(checkboxes()[1].parentElement.children[1].children[1].textContent, '更新后的备注');
+  const css = fs.readFileSync(new URL('../../src/ui/data-grid-controls.css', import.meta.url), 'utf8');
+  assert.match(css, /column-sidebar-text[^}]*flex-direction: column/);
+  assert.match(css, /column-sidebar-comment[^}]*color: var\(--text-secondary\)/);
 });
 
 test('last visible column is disabled while hidden columns remain available; Escape returns focus', () => {

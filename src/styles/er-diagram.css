@@ -30,15 +30,51 @@
 /* 工具栏 */
 .er-toolbar {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
+  display: grid;
+  min-width: 0;
   gap: var(--sp-2);
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-chrome);
-  /* 控件多时不压缩按钮导致文字换行，改为横向滚动 */
-  overflow-x: auto;
-  scrollbar-width: thin;
+}
+.er-toolbar-row {
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.er-toolbar-source {
+  grid-template-columns: minmax(0, 180px) minmax(0, 180px) minmax(120px, 1fr) auto var(--h-control);
+  grid-template-areas: "connection database search mode refresh";
+}
+.er-conn-select { grid-area: connection; }
+.er-db-select { grid-area: database; }
+.er-toolbar-source .er-search { grid-area: search; }
+.er-toolbar-source .er-mode-group { grid-area: mode; }
+.er-toolbar-source > .icon { grid-area: refresh; }
+.er-toolbar-tools {
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.er-toolbar-write,
+.er-toolbar-canvas {
+  display: grid;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.er-toolbar-canvas {
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border-subtle);
+}
+.er-toolbar-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--h-control) var(--h-control);
+  align-items: center;
+  gap: 6px;
 }
 .er-select {
   height: var(--h-control);
@@ -46,15 +82,18 @@
   font-size: var(--fs-12);
   flex: 0 0 auto;
 }
+.er-toolbar-source .er-select { width: 100%; min-width: 0; }
 .er-search {
   height: var(--h-control);
-  width: 220px;
+  width: 100%;
+  min-width: 0;
   font-size: var(--fs-12);
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--r-2);
   background: var(--n-50);
   flex: 0 0 auto;
+  box-sizing: border-box;
 }
 .er-search:focus { outline: 2px solid var(--accent-500); outline-offset: -1px; }
 
@@ -97,17 +136,24 @@
   align-items: center;
   justify-content: center;
 }
-.er-tool-btn:hover { background: var(--bg-hover); color: var(--text); }
+.er-tool-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.er-tool-btn:disabled,
+.er-insp-delete:disabled { opacity: .5; cursor: default; }
+.er-toolbar button:focus-visible,
+.er-toolbar select:focus-visible,
+.er-overlay-retry:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
 .er-tool-btn.icon { width: var(--h-control); padding: 0; }
 .er-tool-btn svg { width: 14px; height: 14px; }
 
 .er-stats {
-  margin-left: auto;
   font-size: var(--fs-11);
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
 }
 
 /* 画布 */
@@ -261,13 +307,19 @@
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
   align-items: center;
   justify-content: center;
   background: rgba(247, 248, 250, 0.92);
   color: var(--text-secondary);
   font-size: var(--fs-13);
   z-index: 5;
+  padding: 16px;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
+.er-overlay p { margin: 0; white-space: pre-wrap; }
 .er-overlay.error { color: var(--danger-600); }
 .er-overlay[hidden] { display: none; }
 
@@ -552,7 +604,7 @@
    右侧表设计器（替换原「建模关系」面板）
    ========================================================================== */
 .er-inspector {
-  flex: 0 0 720px;
+  flex: 0 0 clamp(300px, 34vw, 460px);
   min-width: 0;
   border-left: 1px solid var(--border-subtle);
   background: var(--bg-surface);
@@ -574,9 +626,11 @@
   min-width: 0;
   font-size: var(--fs-11);
   color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  max-height: 84px;
+  overflow-y: auto;
 }
 .er-insp-message[data-tone="error"] { color: var(--danger-600); }
 .er-insp-message[data-tone="success"] { color: var(--success-600, #1f7a45); }
@@ -591,11 +645,37 @@
   font-size: var(--fs-11);
   cursor: pointer;
 }
-.er-insp-delete:hover { background: var(--danger-50); }
+.er-insp-delete:hover:not(:disabled) { background: var(--danger-50); }
 .er-insp-body { flex: 1; min-height: 0; overflow: auto; }
 .er-insp-empty { color: var(--text-tertiary); font-size: var(--fs-12); padding: 16px; line-height: 1.6; }
 .er-inspector .table-designer .designer-grid.wide { min-width: 700px; }
 
 .er-tool-btn.primary { background: var(--accent-500); border-color: var(--accent-500); color: #fff; font-weight: 600; }
-.er-tool-btn.primary:hover { background: var(--accent-600); color: #fff; }
+.er-tool-btn.primary:hover:not(:disabled) { background: var(--accent-600); color: #fff; }
+
+/* 两个固定操作排分别调整网格，小窗口按功能分组增加子行。 */
+@media (max-width: 1000px) {
+  .er-toolbar-tools { grid-template-columns: max-content minmax(0, 1fr); }
+  .er-toolbar-canvas { grid-auto-flow: row; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .er-toolbar-canvas .er-select { width: 100%; min-width: 0; max-width: none; }
+  .er-toolbar-metrics { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .er-toolbar { padding: 8px; }
+  .er-toolbar-source {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--h-control);
+    grid-template-areas: "connection database refresh" "search mode mode";
+  }
+  .er-mode-btn { padding: 0 6px; font-size: var(--fs-11); flex: 1; }
+  .er-toolbar-tools { grid-template-columns: minmax(0, 1fr); }
+  .er-toolbar-write { grid-auto-flow: row; grid-template-columns: 1fr 1fr; }
+  .er-toolbar-canvas { padding-left: 0; border-left: 0; }
+  .er-toolbar .er-tool-btn { padding: 0 6px; }
+  .er-toolbar .er-tool-btn.icon { padding: 0; }
+  .er-workspace { flex-direction: column; }
+  .er-canvas { flex: 1 1 50%; }
+  .er-inspector { flex: 1 1 50%; min-height: 0; border-left: 0; border-top: 1px solid var(--border-subtle); }
+  .er-insp-head { padding: 6px 8px; }
+  .er-insp-title { max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+}
 
