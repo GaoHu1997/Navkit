@@ -246,6 +246,7 @@ pub fn run() {
             commands::issue_execution_grant,
             commands::execute_sql_v2,
             commands::plan_query_pagination,
+            commands::count_query_page,
             commands::plan_query_keyset,
             commands::plan_query_keyset_page,
             commands::export_query_requery,

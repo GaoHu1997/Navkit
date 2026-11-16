@@ -630,6 +630,7 @@ svg {
   flex-direction: column;
   background: var(--bg-surface);
   min-height: 0;
+  position: relative;
 }
 
 /* 右侧信息面板（292px，可拖 240–400） */
@@ -2261,9 +2262,58 @@ svg {
   flex: 0 0 auto;
 }
 .info-top-icon-sm {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  background: transparent;
   line-height: 0;
   flex: 0 0 auto;
   color: var(--text-tertiary);
+  cursor: pointer;
+}
+.info-top-icon-sm:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.info-top-icon-sm:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 1px;
+}
+/* 收起信息栏后停在标签条右端的重新打开入口，与面板内 ⓘ 一起表达开关状态。 */
+.info-panel-reopen {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.info-panel-reopen:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.info-panel-reopen[hidden] {
+  display: none;
+}
+.info-panel-reopen svg {
+  width: 14px;
+  height: 14px;
+}
+.info-panel-reopen:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 1px;
 }
 .info-top-icon-sm svg {
   width: 14px;
@@ -5038,6 +5088,8 @@ select {
   min-height: 0;
   flex: 1 1 auto;
 }
+/* 下半区（比较 + 写入选项）变高时，映射表仍保底显示约三行，超出部分交给整页滚动。 */
+.sync-map-panel > .sync-map { min-height: 148px; }
 /* 映射表在自身滚动容器里；表格不能收缩，直接放在 flex 容器里会溢出并盖住后面的工具条。 */
 .sync-map-scroll {
   flex: 1 1 auto;
@@ -5048,12 +5100,19 @@ select {
 .sync-map .mini-table { min-width: 0; }
 .sync-map-tools > .btn { flex: 0 0 auto; }
 .sync-map-tools > .sync-table-only { margin-left: auto; }
-/* 数据比较及其策略是同一组，不能被结构工具的 auto margin 拉开。 */
-.sync-map-tools > .sync-diff-controls {
-  display: inline-flex;
+/* 数据差异比较独立一行：比较按钮、内存预算与状态自成一组，不随结构按钮换行漂移。 */
+.sync-map-diff-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.sync-diff-controls {
+  display: flex;
   align-items: center;
   gap: var(--sp-3);
-  margin-left: 0;
   min-width: 0;
   max-width: 100%;
   flex: 1 1 320px;
@@ -5095,15 +5154,38 @@ select {
   .sync-map-panel { flex: 0 0 auto; }
   .sync-map-panel .sync-map-scroll { flex: 0 1 auto; max-height: 160px; }
 }
-/* 「允许删除目标多余的列/索引」是破坏性选项：独占一行，与结构操作按钮拉开间距，避免误点。 */
+/* 写入选项：破坏性结构选项、增量业务键、增量删行纵向一组，各占一行；与只读比较区用发丝线分开。 */
+.sync-map-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.sync-map-options > .checkbox { margin-left: 0; align-self: flex-start; }
 .sync-map-option-row {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  margin-top: var(--sp-2);
   flex-wrap: wrap;
 }
 .sync-map-option-row > .checkbox { margin-left: 0; }
+/* 增量业务键：标签固定宽、输入框撑满剩余宽度，和上下两行复选框左缘对齐。 */
+.sync-map-biz-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.sync-map-biz-row > .field {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.sync-map-biz-row .field-control { flex: 1; }
+.sync-map-biz-row .field-control > input { width: 100%; }
 
 /* 导入 / 导出向导：执行日志独立页与提示行 */
 .transfer-hint {

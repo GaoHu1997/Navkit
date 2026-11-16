@@ -18,6 +18,12 @@
 .column-sidebar-name { font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column-sidebar-comment { color: var(--text-secondary); font-size: var(--fs-11); line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
 .column-sidebar-row input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent-500); }
+.column-sidebar-item { display: flex; align-items: flex-start; gap: var(--sp-2); flex: 0 0 auto; border-radius: var(--r-1); }
+.column-sidebar-item > .column-sidebar-row { flex: 1; min-width: 0; }
+.column-sidebar .column-sidebar-drag { flex: 0 0 24px; width: 24px; min-height: 24px; margin-top: 3px; padding: 0; border-color: transparent; background: transparent; color: var(--text-tertiary); font-size: 18px; line-height: 1; cursor: grab; }
+.column-sidebar .column-sidebar-drag:hover { background: var(--bg-hover); color: var(--text); }
+.column-sidebar-item.dragging .column-sidebar-drag { cursor: grabbing; }
+.column-sidebar-item.drag-over { background: var(--accent-50); box-shadow: inset 0 -2px var(--accent-500); }
 .column-sidebar button:focus-visible, .column-sidebar input:focus-visible, .data-grid-controls button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
 .qr-tools > .qr-column-trigger { margin-left: auto; align-self: flex-start; height: 26px; }
 .qr-column-trigger svg { width: 16px; height: 16px; }
@@ -30,7 +36,6 @@
 .data-grid-controls .fb-act svg { width: 14px; height: 14px; }
 .data-load-status { flex-shrink: 0; padding: var(--sp-3); border-bottom: 1px solid var(--border); background: var(--bg-surface); color: var(--text); font-size: var(--fs-12); }
 .data-load-status[hidden] { display: none; }
-.grid-count-total { white-space: nowrap; padding: 0 var(--sp-2); }
 
 /* 生效摘要以无框文本显示；宽度从 320px 扩为 640px，窄窗优先让出分页空间。 */
 .data-grid-controls .grid-filter-summary {

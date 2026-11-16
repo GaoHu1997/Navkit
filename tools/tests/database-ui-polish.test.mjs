@@ -82,6 +82,24 @@ test('真实浏览器：树双击、信息面板DOM稳定、电源操作列和�
       panel.el.remove(); return { sameDom, sameDdl, restored, resetMode };
     });
     assert.deepEqual(stable, { sameDom: true, sameDdl: true, restored: true, resetMode: '表信息' });
+    // 左上角 ⓘ 是收起的触发点；空态与代码段面板同样保留该入口。
+    const collapse = await page.evaluate(() => {
+      let toggles = 0;
+      const panel = new DatabaseUi.InfoPanel(() => toggles++); document.body.appendChild(panel.el);
+      panel.setState(null);
+      const empty = panel.el.querySelector('.info-topbar button.info-top-icon-sm');
+      const label = empty?.getAttribute('aria-label');
+      empty?.click();
+      panel.setTableState({ identity: 'local/one/items', title: 'items', info: [], ddl: '', column: null });
+      const inTable = panel.el.querySelector('.info-topbar button.info-top-icon-sm');
+      inTable?.click();
+      panel.setSnippets([], () => {}, {});
+      const inSnippets = panel.el.querySelector('.snippet-top button.info-top-icon-sm');
+      inSnippets?.click();
+      panel.el.remove();
+      return { label, empty: !!empty, inTable: !!inTable, inSnippets: !!inSnippets, toggles };
+    });
+    assert.deepEqual(collapse, { label: '收起信息栏', empty: true, inTable: true, inSnippets: true, toggles: 3 });
     await page.evaluate(() => {
       window.selections = 0; window.opens = 0;
       window.tree = new DatabaseUi.TreePanel({ onSelect: () => selections++, onOpen: node => { opens++; node.expanded = !node.expanded; tree.render(); } });

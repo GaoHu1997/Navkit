@@ -13,6 +13,8 @@ export interface PopoverOptions {
   className?: string;
   /** 固定宽度；缺省按内容收缩（最小 180） */
   width?: number;
+  /** 水平对齐：start 与锚点左边缘对齐（默认），end 让浮层右边缘与锚点右边缘对齐。 */
+  align?: "start" | "end";
   ariaLabel?: string;
   render: (body: HTMLElement, close: () => void) => void;
   onClose?: () => void;
@@ -101,11 +103,14 @@ export function openPopover(options: PopoverOptions): PopoverHandle {
     const above = rect.top - size.height - gap;
     const useAbove = below + size.height > window.innerHeight - 8 && above > 8;
     const top = useAbove ? above : below;
-    let left = rect.left;
-    if (left + size.width > window.innerWidth - 8) left = Math.max(8, rect.right - size.width);
+    // end：浮层尾部（右边缘）贴齐锚点右边缘，避免下拉框左缘对准按钮时整体偏向按钮右侧。
+    let left = options.align === "end" ? rect.right - size.width : rect.left;
+    if (left < 8) left = 8;
+    if (left + size.width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - 8 - size.width);
     element.style.left = `${Math.round(left)}px`;
     element.style.top = `${Math.round(top)}px`;
     element.dataset.placement = useAbove ? "top" : "bottom";
+    element.dataset.align = options.align === "end" ? "end" : "start";
     element.style.visibility = "";
   }
 

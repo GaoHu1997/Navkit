@@ -177,12 +177,17 @@ export function openDataDictionaryDialog(
   const pickTree = new ObjectTree({ ariaLabel: "选择导出对象" });
   pickTree.el.style.flex = "1";
   pickTree.el.style.minHeight = "0";
+  // 树的 min-content 由最长的表名 / 批注决定；不归零会把整列撑得比对话框还宽，
+  // 于是内容区出现横向滚动条（树自身已有 overflow:auto，收窄后行内文本走省略号）。
+  pickTree.el.style.minWidth = "0";
   const pickHost = document.createElement("div");
-  pickHost.style.cssText = "min-height:0;height:100%;display:flex;flex-direction:column;";
+  pickHost.style.cssText = "min-width:0;min-height:0;height:100%;display:flex;flex-direction:column;";
   pickHost.append(pickTree.el);
   const selList = document.createElement("div");
   selList.style.cssText =
     "flex:1;min-height:0;overflow:auto;border:1px solid var(--border-subtle);border-radius:6px;padding:4px;background:var(--bg-surface);";
+  // 布局回归测试（tools/tests/data-dictionary-layout-browser.mjs）据此定位已选清单。
+  selList.dataset.role = "dictionary-selected-list";
   const selCount = document.createElement("div");
   selCount.style.cssText = "font-size:11px;color:var(--text-tertiary);margin-bottom:4px;";
   const loadHint = document.createElement("div");
@@ -204,15 +209,19 @@ export function openDataDictionaryDialog(
         "display:flex;align-items:center;gap:8px;height:26px;margin-bottom:2px;padding:0 8px;border-radius:4px;font-size:12px;";
       const ic = document.createElement("span");
       ic.style.display = "inline-flex";
+      ic.style.flex = "0 0 auto";
       ic.innerHTML = iconSvgByName(it.kind === "table" ? "info_pane_table" : "info_pane_view");
       const name = document.createElement("span");
       name.textContent = it.name;
+      name.title = it.name;
+      // 长表名省略而不是把已选列撑宽（列宽固定 260px）。
+      name.style.cssText = "min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
       const x = document.createElement("button");
       x.type = "button";
       x.textContent = "✕";
       x.setAttribute("aria-label", `移除 ${it.name}`);
       x.style.cssText =
-        "margin-left:auto;border:0;background:transparent;color:var(--text-disabled);cursor:pointer;font-size:11px;";
+        "flex:0 0 auto;margin-left:auto;border:0;background:transparent;color:var(--text-disabled);cursor:pointer;font-size:11px;";
       x.addEventListener("click", () => {
         it.input.checked = false;
         refreshSelection();
@@ -296,9 +305,11 @@ export function openDataDictionaryDialog(
   p2.style.cssText = "display:flex;flex-direction:column;gap:8px;height:100%;min-height:0;";
   const searchWrap = field("搜索:", searchInput);
   const pickGrid = document.createElement("div");
-  pickGrid.style.cssText = "flex:1;min-height:260px;display:grid;grid-template-columns:1fr 260px;gap:10px;";
+  // minmax(0,1fr) 而不是 1fr：1fr 的最小值是 auto，列会被树的固有宽度撑开，
+  // 导致向导内容区横向溢出（对话框底出现横向滚动条）。
+  pickGrid.style.cssText = "flex:1;min-height:260px;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:10px;";
   const selPane = document.createElement("div");
-  selPane.style.cssText = "display:flex;flex-direction:column;min-height:0;";
+  selPane.style.cssText = "min-width:0;display:flex;flex-direction:column;min-height:0;";
   selPane.append(selCount, selList);
   pickGrid.append(pickHost, selPane);
   p2.append(searchWrap, pickGrid, loadHint);
@@ -614,7 +625,9 @@ export function openDataDictionaryDialog(
 
   // ---------------------------------------------------------------- 组装向导
   // 固定窗口尺寸：各步内容多少不同，尺寸随内容跳动会让「下一步」在指针下移位。
-  const dlg = new Dialog({ title: "数据字典", width: 820, height: 640, render: () => {}, buttons: [{ label: "关闭" }] });
+  // 宽 980：对象步是「树 + 已选清单」双栏（260px 侧栏），820 时左栏被长表名/批注撑到溢出，
+  // 底部出现横向滚动条；侧栏之外给树留出 ~660px 才够放下常见的 Quartz 长批注。
+  const dlg = new Dialog({ title: "数据字典", width: 980, height: 680, render: () => {}, buttons: [{ label: "关闭" }] });
   /** 已成功导出的目标路径：非空时禁用「开始导出」，改配置后恢复。 */
   let exportedPath: string | null = null;
   const resetExportState = () => {

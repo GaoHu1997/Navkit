@@ -45,7 +45,7 @@ export class BatchExecutionPanel {
     this.el.className = "batch-execution-panel"; this.el.setAttribute("aria-label", "批任务执行记录");
     const pickerRow = document.createElement("label"); pickerRow.className = "batch-task-picker";
     const pickerLabel = document.createElement("span"); pickerLabel.textContent = "回看任务";
-    this.picker.setAttribute("aria-label", "回看批执行任务"); pickerRow.append(pickerLabel, this.picker);
+    this.picker.setAttribute("aria-label", "回看批执行任务"); this.picker.setAttribute("data-no-search", ""); pickerRow.append(pickerLabel, this.picker);
     this.picker.addEventListener("change", () => { this.id = this.picker.value || null; this.render(); });
     this.scope.className = "batch-execution-scope";
     this.state.className = "batch-execution-state"; this.state.setAttribute("role", "status"); this.state.setAttribute("aria-live", "polite"); this.state.setAttribute("aria-atomic", "true");

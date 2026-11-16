@@ -214,8 +214,9 @@ export class InfoPanel {
   private lastStateKey = "";
   private lastTableKey = "";
 
-  constructor() {
+  constructor(private readonly onToggle?: () => void) {
     this.el = document.createElement("div");
+    this.el.id = "app-info-panel";
     this.el.className = "info-panel";
     this.body = document.createElement("div");
     this.body.className = "info-body";
@@ -244,21 +245,26 @@ export class InfoPanel {
     if (column && this.tableMode === "column") this.renderTable();
   }
 
-  /** 空态：未选择对象（设计图空态文案）。 */
+  /** 空态：未选择对象（设计图空态文案）。顶栏保持可用，便于随时收起信息栏。 */
   private renderEmpty(): void {
+    this.appendTopbar(undefined);
     const empty = document.createElement("div");
     empty.className = "info-empty";
     empty.textContent = "在左侧树中选择一个对象查看详情";
     this.body.appendChild(empty);
   }
 
-  /** 顶部工具行：ⓘ + 连接 chip（方案 A：连接不再单独占一行）。 */
+  /** 顶部工具行：ⓘ（点击收起）+ 连接 chip（方案 A：连接不再单独占一行）。 */
   private appendTopbar(refs: { icon: string; text: string }[] | undefined): void {
     const top = document.createElement("div");
     top.className = "info-topbar";
-    const info = document.createElement("div");
+    const info = document.createElement("button");
+    info.type = "button";
     info.innerHTML = svg(ICON_INFO_CIRCLE);
     info.className = "info-top-icon-sm";
+    info.setAttribute("aria-label", "收起信息栏");
+    info.title = "收起信息栏";
+    info.addEventListener("click", () => this.onToggle?.());
     top.appendChild(info);
     for (const ref of refs ?? []) {
       const chip = document.createElement("div");
@@ -509,6 +515,15 @@ export class InfoPanel {
     this.body.innerHTML = "";
     const top = document.createElement("div");
     top.className = "snippet-top";
+    // 代码段面板同样保留左上角 ⓘ 收起入口，和表页信息栏保持同一开关语义。
+    const collapse = document.createElement("button");
+    collapse.type = "button";
+    collapse.className = "info-top-icon-sm";
+    collapse.innerHTML = svg(ICON_INFO_CIRCLE);
+    collapse.setAttribute("aria-label", "收起信息栏");
+    collapse.title = "收起信息栏";
+    collapse.addEventListener("click", () => this.onToggle?.());
+    top.appendChild(collapse);
     const combo = document.createElement("select");
     combo.className = "snippet-combo";
     combo.setAttribute("aria-label", "代码段标签");

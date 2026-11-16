@@ -106,7 +106,7 @@ export function openDataGeneratorDialog(
       if (generatorValueKind(c) === "integer") modes.push({ value: "sequence", label: "顺序整数" });
       if (c.nullable && !c.primary_key) modes.push({ value: "null", label: "NULL" });
       modes.push({ value: "omit", label: "省略（数据库默认；必填列由后端拒绝）" });
-      const mode = select(c.auto_increment ? [{ value: "omit", label: "由数据库生成" }] : modes, config.mode, 150); mode.setAttribute("aria-label", `${c.name} 生成方式`);
+      const mode = select(c.auto_increment ? [{ value: "omit", label: "由数据库生成" }] : modes, config.mode, 150); mode.setAttribute("aria-label", `${c.name} 生成方式`); mode.setAttribute("data-no-search", "");
       const value = textInput(config.value, 160); value.setAttribute("aria-label", `${c.name} 固定值或顺序起始值`); value.maxLength = 4096;
       const sync = () => { version++; previewButton.disabled = !structure || !writable || writing || unknown; config.mode = mode.value as GeneratorMode; config.value = value.value; value.readOnly = !["constant", "sequence"].includes(mode.value); noteStale(); invalidate(); };
       value.readOnly = !["constant", "sequence"].includes(mode.value);

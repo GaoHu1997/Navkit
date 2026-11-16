@@ -806,7 +806,9 @@ test('first page paints before automatic metadata-only total count and repeated 
   pending[1].resolve({ columns: [], rows: [], primary_keys: [], total: 1000000, total_exact: true });
   await new Promise(resolve => setImmediate(resolve));
   assert.match(view.statusInfo().pageText, /共 1000000 条/);
-  assert.match(view.footer.querySelector('.grid-total-count').textContent, /共 1000000 条/);
+  // 页脚不再展示「共 xxx 条」与「重新统计」：总数只在状态栏与分页区呈现。
+  assert.equal(view.footer.querySelector('.grid-total-count'), null);
+  assert.equal(view.footer.querySelector('.grid-count-total'), null);
   assert.match(view.footer.querySelector('.grid-pager').children.find(n => n.tagName === 'form').children[1].textContent, /50000 页/);
   assert.equal(view.grid.rows.length, 20); assert.equal(frames.size, 0);
   view.destroy();
@@ -871,9 +873,9 @@ test('expired count re-enables statistics on the new unknown-total page; destroy
   const older = view.countTotal();
   api.pageTable = async () => ({ columns, rows: [['2', 'blue', 'Bob']], total: 21, total_exact: false, has_more: true, primary_keys: [] });
   await view.reload();
-  assert.equal(view.footer.querySelector('.grid-count-total').disabled, true);
+  assert.equal(view.footer.querySelector('.grid-count-total'), null);
   resolveCount({ total: 1000000, total_exact: true }); await older;
-  assert.equal(tab.page.total, 21); assert.equal(view.footer.querySelector('.grid-count-total').disabled, false);
+  assert.equal(tab.page.total, 21); assert.equal(view.footer.querySelector('.grid-count-total'), null);
   api.pageTable = () => new Promise(resolve => { resolveCount = resolve; });
   const latest = view.countTotal(); view.destroy();
   view.renderFooter = () => assert.fail('late count must not render a destroyed view');
@@ -1051,6 +1053,43 @@ test('pinning columns reorders only the display mapping, keeps widths/drafts and
   assert.equal(view.grid.colWidths[2], 180); assert.equal(view.grid.getOptions().dirtyCells.has('0:2'), true);
   assert.equal(view.grid.el.querySelectorAll('.grid-cell-pinned').length, 0);
   view.loading = true; view.togglePinnedColumn('team'); assert.equal(view.pinnedCols.size, 0);
+  view.destroy();
+});
+
+test('dragging fields reorders only this tab view: data mapping follows, drafts survive and a new view starts fresh', () => {
+  const h = harness(), { view, tab, columns } = h;
+  tab.page.rows = [['1', 'red', 'Alice'], ['2', 'blue', 'Bob']]; view.applyData();
+  const original = plain(tab.page);
+  view.grid.flushEditing = () => view.pendingUpdates.set(0, new Map([['name', 'draft-name']]));
+  view.reorderColumn('name', 'id');
+  assert.deepEqual(plain(view.grid.columns.map(c => c.name)), ['name', 'id', 'team']);
+  assert.deepEqual(plain(view.grid.rows), [['draft-name', '1', 'red'], ['Bob', '2', 'blue']]);
+  assert.equal(view.grid.getOptions().dirtyCells.has('0:0'), true);
+  // 只改显示映射：未发送的草稿仍按字段名保存，底层页数据与分页条件不变。
+  assert.deepEqual(plain(tab.page), original);
+  assert.equal(view.pendingUpdates.get(0).get('name'), 'draft-name');
+  assert.equal(view.hiddenColumns().size, 0);
+  assert.equal(tab.pageOffset, 4); assert.equal(tab.orderBy, null);
+  // 关闭后新开的同表标签页不继承字段顺序。
+  view.destroy();
+  const fresh = h.makeView(); fresh.tab.page = { columns, rows: [], total: 0, primary_keys: [] }; fresh.applyData();
+  assert.deepEqual(plain(fresh.grid.columns.map(c => c.name)), ['id', 'team', 'name']);
+  assert.equal(fresh.columnOrder.length, 0);
+  fresh.destroy();
+});
+
+test('field reorder is rejected while loading, for unknown names and across the pinned boundary', () => {
+  const { view, tab, columns, notices } = harness();
+  tab.page.rows = [['1', 'red', 'Alice']]; view.applyData();
+  view.loading = true; view.reorderColumn('name', 'id');
+  assert.deepEqual(plain(view.grid.columns.map(c => c.name)), columns.map(c => c.name));
+  view.loading = false;
+  view.reorderColumn('missing', 'id'); view.reorderColumn('name', 'missing');
+  assert.deepEqual(plain(view.grid.columns.map(c => c.name)), columns.map(c => c.name));
+  view.togglePinnedColumn('id'); notices.length = 0;
+  view.reorderColumn('name', 'id');
+  assert.match(String(notices.at(-1)?.[1]), /固定列始终位于最左侧/);
+  assert.deepEqual(plain(view.grid.columns.map(c => c.name)), ['id', 'team', 'name']);
   view.destroy();
 });
 

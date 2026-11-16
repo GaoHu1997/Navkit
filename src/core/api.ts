@@ -538,6 +538,12 @@ export const api = {
       "plan_query_pagination",
       { connectionId, sql, limit, offset },
     ),
+  /** 查询页服务器分页精确总数：后台执行一次 COUNT；不能安全统计时 supported=false。 */
+  countServerQueryPage: (connectionId: string, sql: string, namespace: string) =>
+    call<{ supported: boolean; total: number | null; reason: string | null }>(
+      "count_query_page",
+      { connectionId, sql, namespace: namespace || null },
+    ),
   /** 查询页 Keyset 判定：SQL 形状命中唯一键时可用锚点续页，否则继续 OFFSET。 */
   planQueryKeyset: (connectionId: string, sql: string, namespace: string) =>
     call<{ supported: boolean; reason: string | null; column?: string; ascending?: boolean; numeric?: boolean }>(

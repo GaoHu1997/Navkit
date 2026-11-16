@@ -194,12 +194,12 @@ function gridView(hidden = []) {
   let callbacks;
   const visit = node => { if (ts.isNewExpression(node) && node.expression.getText(appSource) === 'DataGrid') callbacks = node.arguments[0].getText(appSource); ts.forEachChild(node, visit); };
   visit(constructor); assert(callbacks, 'Missing actual DataTabView grid callbacks');
-  runTs(`globalThis.DataView = class { ${members('DataTabView', ['displayRows', 'originalRowCount', 'applyData', 'applyEdit', 'rowFlags'])} }; globalThis.makeCallbacks = function() { return ${callbacks}; };`, context);
+  runTs(`globalThis.DataView = class { ${members('DataTabView', ['displayRows', 'originalRowCount', 'allColumns', 'orderedColumnNames', 'applyData', 'applyEdit', 'rowFlags'])} }; globalThis.makeCallbacks = function() { return ${callbacks}; };`, context);
   const view = new context.DataView();
   const columns = ['id', 'name', 'score', 'note'].map(name => ({ name }));
   Object.assign(view, {
     tab: { page: { columns, rows: [['1', 'Alice 中文', '10', '首行'], ['2', 'Bob', '20', null]], primary_keys: ['id'] }, selectedRows: new Set() },
-    hiddenCols: new Set(hidden), pinnedCols: new Set(), pendingInserts: [], pendingInsertEdits: new Map(), pendingUpdates: new Map(), pendingDeletes: new Set(), txAppliedInserts: [], txAppliedUpdates: new Map(), txAppliedDeletes: new Set(),
+    hiddenCols: new Set(hidden), pinnedCols: new Set(), columnOrder: [], pendingInserts: [], pendingInsertEdits: new Map(), pendingUpdates: new Map(), pendingDeletes: new Set(), txAppliedInserts: [], txAppliedUpdates: new Map(), txAppliedDeletes: new Set(),
     app: { renderStatus() {}, showGridLinesState: () => false, skipNullState: () => false, toast() {} },
     appliedSortRules: () => [], renderFooter() {},
     grid: { setData(options) { this.columns = options.columns; this.rows = options.rows; }, beginEdit(row, col, value) { this.edit = { row, col, value }; } },

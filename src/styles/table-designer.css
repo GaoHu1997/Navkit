@@ -1,7 +1,10 @@
 .table-designer { min-height: 0; color: var(--text-primary); font-size: var(--fs-12); }
 .table-designer .designer-tabs { min-height: 32px; overflow-x: auto; }
 .table-designer .designer-tab { flex: 0 0 auto; height: 32px; line-height: normal; background: transparent; }
-.table-designer .designer-body { padding: 8px; }
+/* 页面留白交给首个元素的 margin：滚动容器自身不要上下 padding，
+   否则 sticky 表头只能吸附在 padding 内侧，滚动的行会从表头上方 padding 带里透出来。 */
+.table-designer .designer-body { padding: 0 8px 8px; }
+.table-designer .designer-body > :first-child { margin-top: 8px; }
 .table-designer input:not([type=checkbox]), .table-designer select,
 .table-designer button:not(.designer-tab), .table-plan-dialog input,
 .table-plan-dialog select, .table-plan-dialog button { box-sizing: border-box; min-height: 26px; height: 26px; font: inherit; }
@@ -15,6 +18,19 @@
 .table-designer .designer-grid { table-layout: auto; width: 100%; min-width: 0; }
 /* 字段页列多，保留横向滚动宽度；索引/外键/检查/触发器按内容自适应 */
 .table-designer .designer-grid.wide { min-width: 980px; }
+/* 表头：滚动时保持吸附，并完全遮住下方滚过的行。
+   这里显式给 sticky 表头一个数值 z-index（不依赖主题变量）——
+   一旦 z-index 失效，thead 会先于 tbody 绘制，行内容就会“穿过”表头显示。 */
+.table-designer .designer-grid thead { position: relative; z-index: 20; }
+.table-designer .designer-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg-subtle);
+  background-clip: padding-box;
+  box-shadow: inset 0 -1px 0 var(--border);
+  border-bottom: 0;
+}
 .table-designer .designer-grid th { text-align: left; }
 .table-designer .designer-grid :is(td, th) { padding: 4px; vertical-align: middle; }
 .table-designer .designer-grid input:not([type=checkbox]) { width: 100%; min-width: 64px; }
@@ -24,6 +40,7 @@
 .table-designer .designer-grid.designer-fields { table-layout: fixed; width: 100%; min-width: 1160px; }
 .table-designer .designer-grid.designer-fields :is(td, th) { overflow: hidden; }
 .table-designer .designer-body { overflow: auto; }
+.table-designer .designer-empty { margin: 0; padding: 24px 8px; color: var(--text-tertiary); text-align: center; }
 /* 类型单元格：下拉与（自定义 / 表达式）输入并排 */
 .table-designer .designer-type { display: flex; gap: 4px; align-items: center; }
 .table-designer .designer-type select { flex: 1 1 110px; min-width: 0; width: auto; }
@@ -32,7 +49,7 @@
 .table-designer .designer-default-cell { display: flex; gap: 4px; align-items: center; width: 100%; min-width: 0; }
 .table-designer .designer-default-cell .designer-default-pick { flex: 0 0 88px; min-width: 0; width: 88px; color: var(--text-secondary); }
 .table-designer .designer-default-cell .designer-default-input { flex: 1 1 auto; min-width: 0; }
-/* 列表页操作列：只放一个删除按钮，窄列 */
+/* 列表页操作列：行尾不再放删除按钮，删除统一由顶部操作栏完成（保留类名给其它列表页复用）。 */
 .table-designer .designer-grid .designer-op { white-space: nowrap; width: 1%; }
 .table-designer .designer-grid .designer-op .btn { min-width: 0; padding: 0 10px; }
 /* 主键行：区别于普通索引行 */
@@ -132,6 +149,10 @@
 .table-designer .designer-grid th { background: var(--bg-subtle); color: var(--text-secondary); font-size: var(--fs-12); font-weight: 600; }
 .table-designer .designer-grid tbody tr:nth-child(even) td { background: var(--bg-surface); }
 .table-designer .designer-grid tbody tr:hover td { background: var(--n-25); }
+/* 选中行：顶部操作栏的「删除 X」作用在这一行，需要和普通偶数行区分开 */
+.table-designer .designer-grid tbody tr.selected td,
+.table-designer .designer-grid tbody tr:nth-child(even).selected td { background: var(--accent-50); }
+.table-designer .designer-grid tbody tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--accent-500); }
 .table-designer .designer-grid td > :is(input:not([type=checkbox]), select) {
   width: 100%; min-width: 0; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 8px; box-shadow: none;
 }
@@ -183,14 +204,9 @@
 }
 .table-designer .designer-ext-chevron { flex: 0 0 auto; display: grid; place-items: center; color: var(--text-tertiary); }
 
-/* 索引行尾的删除按钮：与其它单元格同高，hover 才变危险色 */
-.table-designer .designer-grid td.designer-op { padding: 0; text-align: center; }
-.table-designer .designer-row-remove {
-  width: 24px; height: 24px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: var(--r-2);
-  background: transparent; color: var(--text-tertiary); cursor: pointer;
-}
-.table-designer .designer-row-remove:hover { color: var(--danger-600); background: var(--danger-50); }
-.table-designer .designer-row-remove:disabled { opacity: .4; cursor: not-allowed; }
+/* 外键页：引用库 / 引用表 / 引用字段都是自由文本，按内容自适应列宽 */
+.table-designer .designer-grid.fk-grid { table-layout: auto; }
+.table-designer .designer-grid.fk-grid td input { min-width: 96px; }
 
 /* 锚定浮层（默认值候选 / 扩展属性 / 索引字段）：非模态，点外部或 Esc 关闭 */
 .popover {

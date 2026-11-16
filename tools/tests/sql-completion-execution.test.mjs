@@ -249,6 +249,7 @@ function queryHarness(bindings = {}) {
     exportQuerySpooled: async (opts, scope, index) => { calls.push(['export-spool', plain(opts), plain(scope), index]); return 10001; },
     exportQueryResult: async (opts, columns, rows) => { calls.push(['export-loaded', plain(opts), plain(columns), plain(rows)]); return rows.length; },
     planQueryPagination: async () => ({ mode: 'unsupported', sql: null, reason: 'fixture explicit unsupported' }),
+    countServerQueryPage: async () => ({ supported: false, total: null, reason: 'fixture no count' }),
     planQueryKeyset: async () => ({ supported: false, reason: 'fixture no keyset' }),
     exportQueryRequery: async (opts, sql, owner, namespace) => { calls.push(['export-requery', plain(opts), sql, owner, namespace]); return 10001; },
     executionCapabilities: async () => ({ cancel: { level: 'unsupported', reason: 'fixture 不支持取消' } }),
@@ -972,6 +973,10 @@ function serverPaginationHarness({ keyset = true, size = 2, truncate = false } =
     h.calls.push(['plan-keyset', id, sql, after, limit, ns]);
     return { mode: 'page', sql: `PAGE ${Number(after)} ${limit}`, reason: null };
   };
+  h.api.countServerQueryPage = async (id, sql, ns) => {
+    h.calls.push(['count-page', id, sql, ns]);
+    return { supported: true, total: 6, reason: null };
+  };
   h.api.executeSql = async (id, sql, ns) => {
     h.calls.push(['execute', id, sql, ns]);
     const [, start, limit] = /^PAGE (\d+) (\d+)$/.exec(sql) ?? ['', '0', String(size)];
@@ -989,6 +994,17 @@ function serverPaginationHarness({ keyset = true, size = 2, truncate = false } =
 }
 
 const settleTick = () => new Promise(resolve => setImmediate(resolve));
+
+/** 等待某视图的后台总数统计结算（含 resultBusy 释放），供测试断言前同步状态。 */
+async function settledServerPageTotal(view) {
+  for (let i = 0; i < 100 && (view.serverPageTotalCounting || view.resultBusy()); i++) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  // resultBusy 释放后仍需排空统计回执的挂起微任务，total 才落到视图上。
+  for (let i = 0; i < 50 && view.serverPageTotal === null && view.serverPageTotalCounting === false; i++) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
 
 test('server pagination initial query sends page SQL not original SQL and caches readonly without spool', async () => {
   const h = serverPaginationHarness(); await h.view.execute(h.sql, false);
@@ -1116,12 +1132,69 @@ test('unreadable byte-truncated remainder explicitly errors rather than marking 
   assert.match(h.view.lastMessages[0].text, /不会跳到下一页遗漏数据/); assert.equal(h.count('drop'), 1); h.view.destroy();
 });
 
-test('server page footer is current-page count not query total and export requeries original SQL', async () => {
-  const h = serverPaginationHarness(); await h.view.execute(h.sql, false); h.renderResults();
-  assert.match(h.view.statusInfo().pageText, /本页 2 行.*总行数未知/);
-  assert.match(h.view.footerStatusEl.textContent, /运行耗时.*服务器分页/);
-  assert.match(h.view.pageCountEl.textContent, /总页数未知/);
+test('server page footer shows current page, exact total fills in late, no server-pagination banner', async () => {
+  const h = serverPaginationHarness();
+  const gate = deferred();
+  h.api.countServerQueryPage = async (...args) => { h.calls.push(['count-page', ...args.slice(1)]); await gate.promise; return { supported: true, total: 6, reason: null }; };
+  await h.view.execute(h.sql, false); h.renderResults();
+  // 统计在途：当前页立即显示，不等待 COUNT。
+  assert.match(h.view.statusInfo().pageText, /本页 2 行/);
+  assert.doesNotMatch(h.view.statusInfo().pageText, /服务器分页/);
+  assert.match(h.view.footerStatusEl.textContent, /运行耗时/);
+  assert.doesNotMatch(h.view.footerStatusEl.textContent, /服务器分页/);
+  // 迟到的 COUNT 回执到达后：总行数、总页数齐备，页码可跳，末页可点。
+  gate.resolve({ supported: true, total: 6, reason: null });
+  await settledServerPageTotal(h.view);
+  h.renderResults();
+  assert.match(h.view.statusInfo().pageText, /共 6 行/);
+  assert.equal(h.view.pageCountEl.textContent, '/ 3 页');
+  assert.equal(h.view.pageNumberInput.disabled, false);
+  assert.equal(h.view.pageButtons[3].disabled, false);
+  const totalCalls = h.calls.filter(c => c[0] === 'count-page');
+  assert.equal(totalCalls.length, 1); assert.deepEqual(totalCalls[0].slice(1), [h.sql, 'tenant_a']);
   await h.view.exportResultSnapshot({ format: 'csv' }, h.view.captureResultExport());
   assert.equal(h.count('export-requery'), 1); assert.equal(h.calls.find(c => c[0] === 'export-requery')[2], h.sql);
   assert.equal(h.count('export-spool'), 0); h.view.destroy();
+});
+
+test('late count after new execution never overwrites the fresh query state', async () => {
+  const h = serverPaginationHarness();
+  const gates = [deferred(), deferred()];
+  let call = 0;
+  h.api.countServerQueryPage = async (...args) => { const gate = gates[call++]; h.calls.push(['count-page', ...args.slice(1)]); await gate.promise; return gate === gates[0] ? { supported: true, total: 999, reason: null } : { supported: true, total: 6, reason: null }; };
+  await h.view.execute(h.sql, false);
+  assert.equal(h.view.serverPageTotalCounting, true);
+  // 统计在途时重新执行：旧回执必须被作废，新查询重新统计。
+  await h.view.execute(h.sql, false);
+  gates[0].resolve({ supported: true, total: 999, reason: null });
+  await settledServerPageTotal(h.view);
+  assert.equal(h.view.serverPageTotal, null, 'stale count must not attach to the new query');
+  gates[1].resolve({ supported: true, total: 6, reason: null });
+  await settledServerPageTotal(h.view);
+  assert.equal(h.view.serverPageTotal, 6, 'fresh query count attaches');
+  assert.equal(h.view.serverPageTotalCounting, false);
+  h.view.destroy();
+});
+
+test('count failure keeps pager usable and states the reason without faking a total', async () => {
+  const h = serverPaginationHarness();
+  h.api.countServerQueryPage = async () => ({ supported: false, total: null, reason: '该查询不能安全统计总数' });
+  await h.view.execute(h.sql, false);
+  await settledServerPageTotal(h.view);
+  h.renderResults();
+  assert.equal(h.view.pageCountEl.textContent, '/ 总页数未知');
+  assert.equal(h.view.pageNumberInput.disabled, true);
+  assert.equal(h.view.pageButtons[3].disabled, true);
+  assert.match(h.view.statusInfo().pageText, /总行数未知/);
+  h.view.destroy();
+});
+
+test('exact total enables jump-to-last-page through OFFSET replan', async () => {
+  const h = serverPaginationHarness(); await h.view.execute(h.sql, false);
+  await settledServerPageTotal(h.view);
+  await h.view.loadResultPage('last');
+  const lastPlan = h.calls.filter(c => c[0] === 'plan-page').pop();
+  assert.equal(lastPlan[4], 4, 'last page offset = (3-1)*2');
+  assert.deepEqual(plain(h.tab.results.sets[0].rows), [['5'], ['6']]);
+  h.view.destroy();
 });

@@ -71,6 +71,7 @@ import {
   ICON_WIN_CLOSE,
   ICON_PANEL_LEFT,
   ICON_PANEL_RIGHT,
+  ICON_INFO_CIRCLE,
   ICON_MSG_INFO,
   ICON_MSG_ERROR,
   ICON_PAGE_FIRST,
@@ -230,6 +231,7 @@ export class App {
   private statusBarVisible = true;
   private toolbarVisible = true;
   private infoPanelVisible = true;
+  private infoReopenBtn!: HTMLButtonElement;
   private exitApproved = false;
   private exitPending = false;
   private exitDialog: Dialog | null = null;
@@ -394,8 +396,20 @@ export class App {
     this.mainPanel.appendChild(this.contentHost);
 
     // 右侧信息面板
-    this.infoPanel = new InfoPanel();
+    this.infoPanel = new InfoPanel(() => this.setInfoPanelVisible(false));
     work.appendChild(this.infoPanel.el);
+
+    // 信息栏收起后，标签条右上角保留重新打开入口（与面板内 ⓘ、状态栏开关共用同一状态）。
+    this.infoReopenBtn = document.createElement("button");
+    this.infoReopenBtn.type = "button";
+    this.infoReopenBtn.className = "info-panel-reopen";
+    this.infoReopenBtn.innerHTML = svg(ICON_INFO_CIRCLE);
+    this.infoReopenBtn.title = "打开信息栏";
+    this.infoReopenBtn.setAttribute("aria-label", "打开信息栏");
+    this.infoReopenBtn.setAttribute("aria-controls", this.infoPanel.el.id);
+    this.infoReopenBtn.hidden = this.infoPanelVisible;
+    this.infoReopenBtn.addEventListener("click", () => this.setInfoPanelVisible(true));
+    this.mainPanel.appendChild(this.infoReopenBtn);
 
     // 状态栏
     this.statusBar = document.createElement("div");
@@ -517,6 +531,7 @@ export class App {
         this.infoPanelVisible = false;
         this.infoPanel.setVisible(false);
         this.infoSplitter.style.display = "none";
+        if (this.infoReopenBtn) this.infoReopenBtn.hidden = false;
       }
       if (p["showGridLines"] === false) this.showGridLines = false;
       if (p["skipNull"] === true) this.skipNull = true;
@@ -2929,11 +2944,7 @@ export class App {
       this.saveViewPrefs();
     });
     mkToggle(svg(ICON_PANEL_RIGHT), "显示/隐藏信息面板", this.infoPanelVisible, () => {
-      this.infoPanelVisible = !this.infoPanelVisible;
-      this.infoPanel.setVisible(this.infoPanelVisible);
-      this.infoSplitter.style.display = this.infoPanelVisible ? "" : "none";
-      this.renderStatus();
-      this.saveViewPrefs();
+      this.setInfoPanelVisible(!this.infoPanelVisible);
     });
     this.statusBar.appendChild(toggles);
     if (this.datasourceSyncStatus) {
@@ -2942,6 +2953,19 @@ export class App {
       this.statusBar.append(status);
     }
     this.statusBar.style.display = this.statusBarVisible ? "" : "none";
+  }
+
+  /**
+   * 信息栏唯一显隐入口：面板内 ⓘ、右上角重开按钮、状态栏开关、菜单与专注模式都通过它同步，
+   * 避免各处只改一部分元素导致开关状态互相矛盾。
+   */
+  setInfoPanelVisible(visible: boolean): void {
+    this.infoPanelVisible = visible;
+    this.infoPanel.setVisible(visible);
+    this.infoSplitter.style.display = visible ? "" : "none";
+    if (this.infoReopenBtn) this.infoReopenBtn.hidden = visible;
+    this.renderStatus();
+    this.saveViewPrefs();
   }
 
   // ------------------------------------------------------------ 提示
@@ -3521,10 +3545,7 @@ export class App {
           this.saveViewPrefs();
           break;
         case "toggle-info-panel":
-          this.infoPanelVisible = !this.infoPanelVisible;
-          this.infoPanel.setVisible(this.infoPanelVisible);
-          this.infoSplitter.style.display = this.infoPanelVisible ? "" : "none";
-          this.saveViewPrefs();
+          this.setInfoPanelVisible(!this.infoPanelVisible);
           break;
         case "show-grid":
           this.showGridLines = !this.showGridLines;
@@ -6562,13 +6583,11 @@ export class App {
     this.focusMode = !this.focusMode;
     this.sidebarVisible = !this.focusMode;
     this.toolbarVisible = !this.focusMode;
-    this.infoPanelVisible = !this.focusMode;
     this.sidebar.style.display = this.sidebarVisible ? "" : "none";
     this.splitter.style.display = this.sidebarVisible ? "" : "none";
-    this.infoSplitter.style.display = this.infoPanelVisible ? "" : "none";
     this.ribbon.el.style.display = this.toolbarVisible ? "" : "none";
-    this.infoPanel.setVisible(this.infoPanelVisible);
-    this.saveViewPrefs();
+    // 信息栏走统一入口，专注模式切换也要同步右上角重开按钮与状态栏开关。
+    this.setInfoPanelVisible(!this.focusMode);
     this.toast("info", this.focusMode ? "专注模式已开启（F11 退出）" : "专注模式已关闭");
   }
 
@@ -6957,6 +6976,8 @@ class DataTabView extends TabView {
   /** 表字段以真实 name 标识，隐藏列不移除行草稿。 */
   private hiddenCols = new Set<string>();
   private pinnedCols = new Set<string>();
+  /** 仅属于当前视图实例，关闭标签后销毁；不写入 TabState、数据库或存储。 */
+  private columnOrder: string[] = [];
   private columnComments = new Map<string, string>();
   private columnMetadataLoaded = false;
   private columnMetadataLoading = false;
@@ -7099,7 +7120,7 @@ class DataTabView extends TabView {
     this.loadingTimerEl = document.createElement("span"); this.loadingTimerEl.className = "data-loading-timer";
     this.loadingTimerEl.setAttribute("aria-hidden", "true");
     loadingOverlay.append(this.loadingLabelEl, this.loadingTimerEl);
-    this.columnSidebar = new ColumnSidebar(`data-columns-${crypto.randomUUID()}`, () => this.allColumns().map(name => ({ id: name, name, comment: this.columnComments.get(name) })), () => this.hiddenColumns(), ids => this.setHiddenColumns(ids));
+    this.columnSidebar = new ColumnSidebar(`data-columns-${crypto.randomUUID()}`, () => this.orderedColumnNames().map(name => ({ id: name, name, comment: this.columnComments.get(name) })), () => this.hiddenColumns(), ids => this.setHiddenColumns(ids), (from, to) => this.reorderColumn(from, to));
     this.formHost = document.createElement("div");
     this.formHost.className = "data-form-view-host";
     this.formHost.hidden = true;
@@ -7240,6 +7261,32 @@ class DataTabView extends TabView {
   /** 全部列名（含隐藏列）。 */
   allColumns(): string[] {
     return this.tab.page?.columns.map((c) => c.name) ?? [];
+  }
+
+  private orderedColumnNames(): string[] {
+    const all = this.allColumns();
+    const custom = this.columnOrder.filter(name => all.includes(name));
+    const ordered = [...custom, ...all.filter(name => !custom.includes(name))];
+    return [...this.pinnedCols].filter(name => ordered.includes(name)).concat(ordered.filter(name => !this.pinnedCols.has(name)));
+  }
+
+  reorderColumn(from: string, to: string): void {
+    if (this.disposed || this.loading || this.committing || from === to) return;
+    const names = this.orderedColumnNames(), source = names.indexOf(from), target = names.indexOf(to);
+    if (source < 0 || target < 0) return;
+    if (this.pinnedCols.has(from) !== this.pinnedCols.has(to)) {
+      this.app.toast("info", "固定列始终位于最左侧；请在固定列或普通列各自的分组内调整顺序。");
+      return;
+    }
+    const selectedName = this.grid.columns[this.grid.selectedColumn]?.name;
+    this.grid.flushEditing();
+    names.splice(source, 1); names.splice(target, 0, from);
+    this.columnOrder = names;
+    this.pinnedCols = new Set(names.filter(name => this.pinnedCols.has(name)));
+    this.applyData();
+    this.grid.selectedColumn = selectedName === undefined ? -1 : this.grid.columns.findIndex(column => column.name === selectedName);
+    this.app.handleColumnSelected(this.tab, this.grid.columns[this.grid.selectedColumn]?.name ?? "");
+    this.app.renderStatus();
   }
 
   hiddenColumns(): Set<string> {
@@ -8214,11 +8261,8 @@ class DataTabView extends TabView {
     this.hiddenCols = new Set([...this.hiddenCols].filter(name => page.columns.some(column => column.name === name)));
     if (page.columns.length && page.columns.every(column => this.hiddenCols.has(column.name))) this.hiddenCols.delete(page.columns[0].name);
     this.pinnedCols = new Set([...this.pinnedCols].filter(name => page.columns.some(column => column.name === name)));
-    const visible = page.columns.filter(column => !this.hiddenCols.has(column.name));
-    const cols = [
-      ...[...this.pinnedCols].flatMap(name => visible.filter(column => column.name === name)),
-      ...visible.filter(column => !this.pinnedCols.has(column.name)),
-    ];
+    this.columnOrder = this.columnOrder.filter(name => page.columns.some(column => column.name === name));
+    const cols = this.orderedColumnNames().filter(name => !this.hiddenCols.has(name)).map(name => page.columns.find(column => column.name === name)!);
     // 全列索引 -> 显示列索引（隐藏列后 dirty 高亮才不会标错列）
     const displayIdx = new Map<string, number>();
     cols.forEach((c, di) => displayIdx.set(c.name, di));
@@ -8430,22 +8474,6 @@ class DataTabView extends TabView {
     spacer.className = "grid-footer-spacer";
     this.footer.appendChild(spacer);
 
-    const totalLabel = document.createElement("span");
-    totalLabel.className = "grid-total-count";
-    totalLabel.textContent = this.totalText();
-    totalLabel.setAttribute("role", "status");
-    totalLabel.title = this.totalError || (this.totalSnapshot
-      ? `统计快照：${new Date(this.totalSnapshot.at).toLocaleTimeString()}；外部写入请刷新，未提交草稿不计入总数`
-      : "先显示当前页，再后台统计；未提交草稿不计入总数");
-    this.footer.appendChild(totalLabel);
-    const countButton = document.createElement("button");
-    countButton.type = "button";
-    countButton.className = "grid-footer-btn grid-count-total";
-    countButton.textContent = this.countingTotal ? "统计中…" : this.totalError ? "重试统计" : "重新统计";
-    countButton.title = "独立刷新总行数和总页数；大表或复杂筛选可能耗时，不影响已显示的数据";
-    countButton.disabled = this.totalBlocked() || this.countingTotal;
-    countButton.addEventListener("click", () => { if (!countButton.disabled) void this.countTotal(); });
-    this.footer.appendChild(countButton);
     if (this.viewMode() === "form") {
       this.footer.appendChild(this.buildRecordNav(page));
     } else {
@@ -8579,7 +8607,8 @@ class DataTabView extends TabView {
     const editable = !this.readOnlyReason() && !this.committing && !this.loading;
     const grid = document.createElement("div");
     grid.className = "data-form-grid";
-    page.columns.forEach((col, ci) => {
+    this.orderedColumnNames().forEach(name => {
+      const ci = page.columns.findIndex(column => column.name === name), col = page.columns[ci];
       const field = document.createElement("div");
       field.className = "data-form-field";
       const label = document.createElement("label");
@@ -9148,6 +9177,14 @@ class QueryTabView extends TabView {
   private serverPageAnchorDisabled = false;
   /** 唯一排序列名；非空表示可用锚点续页（需同时有锚点值）。 */
   private serverPageKeysetColumn: string | null = null;
+  /**
+   * 服务器分页精确总数：显示当前页后后台 COUNT 补齐；null = 未统计/统计中。
+   * 显示完成即持久；晚于翻页返回的回执用版本号作废，不覆盖新查询。
+   */
+  private serverPageTotal: number | null = null;
+  private serverPageTotalCounting = false;
+  private serverPageTotalError = "";
+  private serverPageTotalVersion = 0;
 
   isExecuting(): boolean { return this.running; }
   resultBusy(): boolean { return this.running || this.exporting || this.resultPages.busy || this.resultEvidenceLoading || this.controlledResult?.busy === true; }
@@ -9686,7 +9723,9 @@ class QueryTabView extends TabView {
     const affected = receipts.reduce((sum, item) => sum + item.affected, 0);
     const affectedKnown = receipts.every(item => Number.isSafeInteger(item.affected) && item.affected >= 0)
       && Number.isSafeInteger(affected);
-    const rows = set ? this.serverPage ? `服务器分页 · 本页 ${page?.total ?? set.total} 行（总行数未知）` : `共 ${page?.total ?? set.total} 行`
+    const rows = set ? this.serverPage
+      ? this.serverPageTotal !== null ? `共 ${this.serverPageTotal} 行` : this.serverPageTotalCounting ? `本页 ${page?.total ?? set.total} 行（总数统计中…）` : `本页 ${page?.total ?? set.total} 行（总行数未知）`
+      : `共 ${page?.total ?? set.total} 行`
       : receipts.length ? affectedKnown ? `影响 ${affected} 行` : "影响行数未知" : "";
     return {
       sql: this.editor.getSelection() || this.editor.getSql(),
@@ -9710,6 +9749,7 @@ class QueryTabView extends TabView {
     ++this.executionRevision;
     this.serverPageCache.clear();
     this.serverPage = null; this.serverPageAnchor = null; this.serverPageKeysetColumn = null;
+    this.invalidateServerPageTotal();
     if (this.queryPlanning) this.queryPlanning.cancelled = true;
     this.releaseSpool(this.resultPages.replace(null));
     this.tab.results = null; this.activeResultTab = -1; this.lastMessages = [];
@@ -9721,6 +9761,7 @@ class QueryTabView extends TabView {
     ++this.executionRevision;
     this.serverPageCache.clear();
     this.serverPage = null; this.serverPageAnchor = null; this.serverPageKeysetColumn = null;
+    this.invalidateServerPageTotal();
     if (this.queryPlanning) this.queryPlanning.cancelled = true;
     this.releaseSpool(this.resultPages.replace(null));
     this.tab.results = null;
@@ -9908,7 +9949,12 @@ class QueryTabView extends TabView {
     if (action === "first") nextOffset = 0;
     else if (action === "previous") nextOffset = Math.max(0, curOffset - size);
     else if (action === "next") nextOffset = curOffset + (page?.rows.length ?? size);
-    else if (action === "last") { this.app.toast("info", "服务器分页无精确总数，不支持跳到末页"); return; }
+    else if (action === "last") {
+      // 精确总数返回后末页可跳；仍未知时明确说明，不猜页。
+      const pageCount = this.serverPageCount();
+      if (pageCount === null) { this.app.toast("info", "总数统计中或不可用，暂不能跳到末页"); return; }
+      nextOffset = (pageCount - 1) * size;
+    }
     else nextOffset = (Math.max(1, action) - 1) * size;
     if (action !== "first" && nextOffset === curOffset) return;
     await this.executeServerPage(nextOffset, action === "next");
@@ -10038,11 +10084,59 @@ class QueryTabView extends TabView {
     this.serverPageAnchor = this.serverPageAnchorDisabled ? null : lastKey;
     const rowsHere = res.sets[0]?.rows.length ?? 0;
     const pageNo = sp ? Math.floor(offset / sp.limit) + 1 : 1;
+    // 简短页脚消息；详细说明常驻横幅已按需求删除，只保留缓存命中提示。
     this.lastMessages = [{
-      text: `服务器分页第 ${pageNo} 页，本页 ${rowsHere} 行${fromCache ? "（已看页缓存，未访问数据库）" : ""}；`
-        + "翻页会重新执行当前页查询，不读取全量。导出请用“导出全量（重查）”。",
+      text: `第 ${pageNo} 页，本页 ${rowsHere} 行${fromCache ? "（已看页缓存，未访问数据库）" : ""}。`,
       error: false,
     }];
+    // 首次进入服务器分页且尚未有精确总数时后台统计；命中缓存不重复发起。
+    if (this.serverPageTotal === null && !this.serverPageTotalCounting) void this.countServerPageTotal();
+  }
+
+  /** 新查询/清理时作废总数：版本号递增让在途回执全部失效。 */
+  private invalidateServerPageTotal(): void {
+    ++this.serverPageTotalVersion;
+    this.serverPageTotal = null;
+    this.serverPageTotalCounting = false;
+    this.serverPageTotalError = "";
+  }
+
+  /**
+   * 后台统计服务器分页的精确总行数：显示当前页不等待它，返回后补总行数/总页数。
+   * 版本号丢弃迟到回执；失败保留"总数未知"，不阻塞翻页，不自动无限重试。
+   */
+  private async countServerPageTotal(): Promise<void> {
+    const sp = this.serverPage, connId = this.tab.connectionId, namespace = this.tab.schema;
+    if (!sp || sp.connectionId !== connId || sp.namespace !== namespace || this.disposed
+      || this.serverPageTotalCounting || this.serverPageTotal !== null) return;
+    const version = ++this.serverPageTotalVersion;
+    const current = () => !this.disposed && version === this.serverPageTotalVersion
+      && this.serverPage === sp && this.tab.connectionId === connId && this.tab.schema === namespace;
+    this.serverPageTotalCounting = true;
+    this.serverPageTotalError = "";
+    this.renderResultPager();
+    try {
+      const result = await api.countServerQueryPage(connId, sp.sql, namespace);
+      if (!current()) return;
+      if (result.supported && Number.isSafeInteger(result.total) && result.total! >= 0) {
+        this.serverPageTotal = result.total;
+      } else {
+        this.serverPageTotalError = result.reason ?? "该查询不能安全统计总数";
+      }
+    } catch (error) {
+      if (!current()) return;
+      this.serverPageTotalError = `总数统计失败：${String(error)}`;
+    } finally {
+      this.serverPageTotalCounting = false;
+      if (current()) this.renderResultPager();
+    }
+  }
+
+  /** 服务器分页精确总数已知时的总页数；未知或每页行数无效返回 null。 */
+  private serverPageCount(): number | null {
+    const sp = this.serverPage;
+    if (!sp || !sp.limit || this.serverPageTotal === null) return null;
+    return Math.max(1, Math.ceil(this.serverPageTotal / sp.limit));
   }
 
   private renderResultPager(): void {
@@ -10058,19 +10152,33 @@ class QueryTabView extends TabView {
       const size = this.serverPage.limit;
       const off = page?.offset ?? 0;
       const busy = this.resultBusy();
+      const pageNo = Math.floor(off / size) + 1;
       const hasPrev = off > 0;
       const hasNext = (page?.rows.length ?? 0) >= size;
-      this.pageNumberInput.value = String(Math.floor(off / size) + 1);
-      this.pageNumberInput.disabled = true;
+      // 精确总数返回后按它计算总页数/末页；未返回前保持不可跳页，不猜数。
+      const pageCount = this.serverPageCount();
+      const totalKnown = pageCount !== null;
+      const onLastPage = totalKnown && off + (page?.rows.length ?? 0) >= this.serverPageTotal!;
+      this.pageNumberInput.value = String(pageNo);
+      this.pageNumberInput.disabled = !totalKnown;
       this.pageSizeSelect.value = String(size);
       this.pageSizeSelect.disabled = true;
       this.pageNumberInput.removeAttribute("aria-invalid"); this.pageErrorEl.hidden = true;
-      this.pageCountEl.textContent = "/ 总页数未知";
-      this.pageNumberInput.setAttribute("aria-description", "服务器分页，总页数未知；已看页命中缓存不查库，导出重查原 SQL");
-      this.footerStatusEl.textContent = [info.elapsed, `服务器分页 · 第 ${Math.floor(off / size) + 1} 页 · 本页 ${page?.total ?? 0} 行（总行数未知）`].filter(Boolean).join(" | ");
+      // 位置 3（页码右侧）必须有总页数；统计中/失败先显示统计状态，回执一到即补齐。
+      this.pageCountEl.textContent = totalKnown ? `/ ${pageCount} 页`
+        : this.serverPageTotalCounting ? "/ 总页数统计中…" : "/ 总页数未知";
+      this.pageCountEl.title = this.serverPageTotalError || "";
+      this.pageNumberInput.setAttribute("aria-description", totalKnown
+        ? `共 ${pageCount} 页；输入页码后按 Enter 或移开焦点跳转`
+        : "服务器分页总数统计中，返回后可跳页");
+      const rowsText = this.serverPageTotal !== null ? `共 ${this.serverPageTotal} 行`
+        : this.serverPageTotalCounting ? "总数统计中…" : "总行数未知";
+      this.footerStatusEl.textContent = [info.elapsed, `第 ${pageNo} 页 · 本页 ${page?.total ?? 0} 行（${rowsText}）`].filter(Boolean).join(" | ");
       this.pageButtons.forEach((button, index) => {
-        button.disabled = busy || (index <= 1 ? !hasPrev : index === 3 ? true : !hasNext);
-        button.title = index === 3 ? "服务器分页无精确总数，不支持末页" : "服务器分页：翻页会重新执行当前页查询";
+        button.disabled = busy || (index <= 1 ? !hasPrev : index === 3 ? !totalKnown || onLastPage : !hasNext);
+        button.title = index === 3
+          ? totalKnown ? `跳到末页（第 ${pageCount} 页）` : this.serverPageTotalCounting ? "总数统计中，返回后可跳末页" : "无精确总数，不支持末页"
+          : totalKnown ? `第 ${pageNo} / ${pageCount} 页；翻页会重新执行当前页查询` : "翻页会重新执行当前页查询";
       });
       return;
     }
@@ -10491,8 +10599,9 @@ class QueryTabView extends TabView {
       // 完整缓存的常规完成消息留在「消息」页，不再占据网格上方；异常警告仍展示。
       const message = page?.message ?? "";
       const completionNotice = /^查询已完成[，,]/.test(message) && /(?:内存预览|分页与导出使用本次缓存)/.test(message) && !/不完整|失败|超出|截断|过期/.test(message);
+      // 服务器分页不再展示常驻说明横幅（红框 1）；异常消息仍原样显示。
       const note = this.serverPage
-        ? `服务器分页仅显示当前页；已看页缓存命中不查库，导出重新执行原 SQL 获取全量。${message}`
+        ? message
         : this.resultPages.scope
         ? (completionNotice ? "" : message)
         : `无完整缓存，仅已加载 ${set.rows.length} / ${set.total} 行；复制、筛选与导出只含已加载行，不会重新执行 SQL。`;
@@ -10550,6 +10659,7 @@ class QueryTabView extends TabView {
     this.stopExecutionClock();
     this.disposed = true;
     this.serverPageCache.clear(); this.serverPage = null;
+    this.invalidateServerPageTotal();
     if (this.queryPlanning) this.queryPlanning.cancelled = true;
     ++this.executionRevision;
     this.releaseSpool(this.resultPages.replace(null));

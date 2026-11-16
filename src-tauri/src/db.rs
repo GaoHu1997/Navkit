@@ -252,7 +252,28 @@ impl Db {
             Db::Mssql(c) => c.scalar(sql).await,
             _ => Err(anyhow!("该连接类型不支持单值查询")),
         }
-    
+
+    }).await
+}
+
+    /// SQL 型连接的标量查询：返回首个单元格文本，空结果返回 `None`。
+    ///
+    /// 覆盖 SQLite / MySQL / PostgreSQL（sqlx 池）与 ClickHouse / ODBC /
+    /// SQL Server（generic 标量）；其它非 SQL 型返回错误，由调用方决定回退。
+    pub async fn sql_scalar(&self, sql: &str) -> Result<Option<String>> {
+    let __sql_history_context = crate::sql_history::db_context(self);
+    crate::sql_history::scope(__sql_history_context, async {
+        match self {
+            Db::Sqlite(pool) => Ok(crate::sql_history::query_scalar::<_, Option<String>>(sql)
+                .fetch_optional(pool).await?.flatten()),
+            Db::Mysql(pool) => Ok(crate::sql_history::query_scalar::<_, Option<String>>(sql)
+                .fetch_optional(pool).await?.flatten()),
+            Db::Postgres(pool) => Ok(crate::sql_history::query_scalar::<_, Option<String>>(sql)
+                .fetch_optional(pool).await?.flatten()),
+            Db::ClickHouse(_) | Db::Odbc(_) | Db::Mssql(_) => self.generic_scalar(sql).await,
+            _ => Err(anyhow!("该连接类型不支持标量查询")),
+        }
+
     }).await
 }
 }

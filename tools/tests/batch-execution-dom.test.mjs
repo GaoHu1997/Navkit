@@ -145,6 +145,7 @@ test('关闭转后台后工具入口回看同一任务（没有浮动按钮）�
   assert.equal(await page.locator('.batch-task-entry').count(), 0);
   await page.evaluate(() => window.batchFixture.openRecords()); dialog = page.getByRole('dialog', { name: '批执行记录', exact: true });
   assert.match(await dialog.getByLabel('回看批执行任务').innerText(), new RegExp(original.execution_id.slice(0, 8)));
+  assert.equal(await dialog.getByLabel('回看批执行任务').getAttribute('data-no-search'), '', '回看任务选项少，直接选择不搜索');
   await dialog.getByRole('button', { name: '停止', exact: true }).click();
   await page.waitForFunction(() => window.batchFixture.source.calls.some(call => call[0] === 'cancel'));
   let state = await page.evaluate(() => ({ record: window.batchFixture.service.list()[0], calls: window.batchFixture.source.calls }));

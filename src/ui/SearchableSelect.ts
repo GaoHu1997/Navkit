@@ -1,9 +1,12 @@
-/** 原生 select 的搜索增强。原 DOM、值、样式和消费者事件保持不变。 */
+/**
+ * 原生 select 的搜索增强。原 DOM、值、样式和消费者事件保持不变。
+ * `data-no-search` 的下拉只列候选、点选即生效，不渲染搜索框（字段生成方式、任务回看等）。
+ */
 type SelectRoot = Document | HTMLElement;
 interface OpenSelect {
   select: HTMLSelectElement;
   panel: HTMLDivElement;
-  search: HTMLInputElement;
+  search: HTMLInputElement | null;
   list: HTMLUListElement;
   status: HTMLDivElement;
   options: HTMLOptionElement[];
@@ -105,10 +108,12 @@ export function installSearchableSelects(root: SelectRoot = document): () => voi
     if (!scroll && state.active === index) return;
     state.active = index;
     state.rows.forEach((row, i) => row.classList.toggle("is-active", i === index));
+    // 无搜索的下拉没有输入框，键盘焦点与 aria-activedescendant 都由列表本身承担。
+    const control = state.search ?? state.list;
     if (index >= 0) {
-      state.search.setAttribute("aria-activedescendant", state.rows[index].id);
+      control.setAttribute("aria-activedescendant", state.rows[index].id);
       if (scroll) state.rows[index].scrollIntoView({ block: "nearest" });
-    } else state.search.removeAttribute("aria-activedescendant");
+    } else control.removeAttribute("aria-activedescendant");
   };
   const choose = (state: OpenSelect, index: number): void => {
     if (opened !== state) return;
@@ -135,7 +140,7 @@ export function installSearchableSelects(root: SelectRoot = document): () => voi
     }
   };
   const render = (state: OpenSelect): void => {
-    const query = state.search.value.toLocaleLowerCase();
+    const query = state.search?.value.toLocaleLowerCase() ?? "";
     state.options = Array.from(state.select.options).filter(option =>
       !placeholder(state.select, option) &&
       (option.label.toLocaleLowerCase().includes(query) || option.value.toLocaleLowerCase().includes(query)));
@@ -191,27 +196,33 @@ export function installSearchableSelects(root: SelectRoot = document): () => voi
     if (!available(select) || !select.getClientRects().length) return;
     close();
     ensureName(select);
+    // 简单下拉：选项少、无需过滤时用 data-no-search 关掉搜索框，点开即选。
+    const plain = select.hasAttribute("data-no-search");
     const panel = doc.createElement("div");
     panel.className = "searchable-select-popover";
     panel.popover = "manual";
-    const search = doc.createElement("input");
-    search.type = "search";
-    search.className = "searchable-select-search";
-    search.autocomplete = "off";
-    search.placeholder = "输入搜索…";
-    search.value = query;
-    search.setAttribute("aria-label", `搜索${nameOf(select)}`);
-    search.setAttribute("role", "combobox");
-    search.setAttribute("aria-autocomplete", "list");
-    search.setAttribute("aria-expanded", "true");
-    search.setAttribute("aria-haspopup", "listbox");
     const list = doc.createElement("ul");
     list.id = `searchable-select-${++nextId}`;
     list.className = "searchable-select-list";
     list.setAttribute("role", "listbox");
     if (select.multiple) list.setAttribute("aria-multiselectable", "true");
     list.setAttribute("aria-label", nameOf(select));
-    search.setAttribute("aria-controls", list.id);
+    const search = plain ? null : doc.createElement("input");
+    if (search) {
+      search.type = "search";
+      search.className = "searchable-select-search";
+      search.autocomplete = "off";
+      search.placeholder = "输入搜索…";
+      search.value = query;
+      search.setAttribute("aria-label", `搜索${nameOf(select)}`);
+      search.setAttribute("role", "combobox");
+      search.setAttribute("aria-autocomplete", "list");
+      search.setAttribute("aria-expanded", "true");
+      search.setAttribute("aria-haspopup", "listbox");
+      search.setAttribute("aria-controls", list.id);
+    }
+    // 没有搜索框时把焦点交给列表本身，方向键/Enter/Escape 仍按原交互工作。
+    else list.tabIndex = -1;
     const status = doc.createElement("div");
     status.className = "searchable-select-empty";
     status.setAttribute("role", "status");
@@ -224,19 +235,29 @@ export function installSearchableSelects(root: SelectRoot = document): () => voi
     select.setAttribute("aria-expanded", "true");
     select.setAttribute("aria-controls", list.id);
     select.setAttribute("aria-haspopup", "listbox");
-    panel.append(search, list, status);
+    panel.append(...(search ? [search] : []), list, status);
+    // 浮层处于 top-layer：滚轮若交给浏览器会落到背后的对话框内容上，表现为滚动穿透。
+    // 这里始终截住滚轮，只滚动候选列表。
+    panel.addEventListener("wheel", event => {
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientHeight : 1;
+      const max = list.scrollHeight - list.clientHeight;
+      if (max > 0) list.scrollTop = Math.min(max, Math.max(0, list.scrollTop + event.deltaY * unit));
+      event.preventDefault();
+    }, { passive: false });
     // top-layer 避免 overflow 裁切；DOM 留在所属模态中，以兼容现有焦点陷阱。
     (select.closest("dialog, [role='dialog'], .dialog") ?? doc.body).appendChild(panel);
-    search.addEventListener("input", () => render(state));
-    search.addEventListener("compositionstart", () => { state.composing = true; });
-    search.addEventListener("compositionend", () => { state.composing = false; render(state); });
+    if (search) {
+      search.addEventListener("input", () => render(state));
+      search.addEventListener("compositionstart", () => { state.composing = true; });
+      search.addEventListener("compositionend", () => { state.composing = false; render(state); });
+    }
     panel.addEventListener("toggle", () => { if (opened === state && !panel.matches(":popover-open")) close(); });
     try {
       panel.showPopover();
       render(state);
       if (initialKey === "Home" || initialKey === "End") move(state, initialKey);
       place(state);
-      search.focus({ preventScroll: true });
+      (search ?? list).focus({ preventScroll: true });
     } catch {
       close(true);
     }
@@ -286,7 +307,8 @@ export function installSearchableSelects(root: SelectRoot = document): () => voi
     const select = selectTarget(e);
     if (!select || !available(select) || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey) return;
     const openingKey = ["ArrowDown", "ArrowUp", "Home", "End", "Enter", " "].includes(event.key);
-    const character = event.key.length === 1 && !event.altKey;
+    // 无搜索的下拉不因字符键打开浮层，保留原生 type-ahead。
+    const character = event.key.length === 1 && !event.altKey && !select.hasAttribute("data-no-search");
     if (openingKey || character) {
       e.preventDefault(); e.stopPropagation();
       open(select, character && event.key !== " " ? event.key : "", event.key);
@@ -331,7 +353,7 @@ export function installSearchableSelects(root: SelectRoot = document): () => voi
     for (const select of named.keys()) if (!select.isConnected || !root.contains(select)) restoreName(select);
     if (opened) {
       const name = nameOf(opened.select);
-      if (opened.search.getAttribute("aria-label") !== `搜索${name}`) opened.search.setAttribute("aria-label", `搜索${name}`);
+      if (opened.search && opened.search.getAttribute("aria-label") !== `搜索${name}`) opened.search.setAttribute("aria-label", `搜索${name}`);
       if (opened.list.getAttribute("aria-label") !== name) opened.list.setAttribute("aria-label", name);
     }
   });

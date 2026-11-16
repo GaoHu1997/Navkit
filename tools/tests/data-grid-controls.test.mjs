@@ -6,14 +6,32 @@ import ts from 'typescript';
 
 // 运行真实侧栏模块。仅模拟原生 DOM，不连接数据库或查询写入端口。
 class Node {
-  constructor(tag, doc) { this.tagName = tag; this.doc = doc; this.children = []; this.attributes = {}; this.dataset = {}; this.listeners = {}; this.value = ''; this.hidden = false; }
+  constructor(tag, doc) { this.tagName = tag; this.doc = doc; this.children = []; this.attributes = {}; this.dataset = {}; this.listeners = {}; this.value = ''; this.hidden = false; this.className = ''; }
+  get classList() {
+    const names = () => String(this.className).split(/\s+/).filter(Boolean);
+    return {
+      add: (...items) => { this.className = [...new Set([...names(), ...items])].join(' '); },
+      remove: (...items) => { this.className = names().filter(name => !items.includes(name)).join(' '); },
+      contains: item => names().includes(item),
+    };
+  }
   append(...nodes) { for (const node of nodes) { node.parentElement = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   addEventListener(name, listener) { (this.listeners[name] ??= []).push(listener); }
   fire(name, detail = {}) { const event = { target: this, preventDefault() {}, stopPropagation() {}, ...detail }; this.listeners[name]?.forEach(listener => listener(event)); }
   focus() { this.doc.activeElement = this; }
-  querySelectorAll() { return this.children.flatMap(child => [...(child.tagName === 'input' && child.type === 'checkbox' ? [child] : []), ...child.querySelectorAll()]); }
+  querySelectorAll(selector) {
+    const out = [];
+    const walk = node => { for (const child of node.children) { if (instanceofmatches(child, selector)) out.push(child); walk(child); } };
+    walk(this); return out;
+  }
+}
+function instanceofmatches(child, selector) {
+  if (!selector) return child.tagName === 'input' && child.type === 'checkbox';
+  if (selector === 'input[type="checkbox"]') return child.tagName === 'input' && child.type === 'checkbox';
+  if (selector.startsWith('.')) return String(child.className).split(/\s+/).includes(selector.slice(1));
+  return child.tagName === selector;
 }
 function fixture(count = 300) {
   const doc = { createElement(tag) { return new Node(tag, this); } };
@@ -65,6 +83,32 @@ test('field comments render below names as small muted text and update when meta
   const css = fs.readFileSync(new URL('../../src/ui/data-grid-controls.css', import.meta.url), 'utf8');
   assert.match(css, /column-sidebar-text[^}]*flex-direction: column/);
   assert.match(css, /column-sidebar-comment[^}]*color: var\(--text-secondary\)/);
+});
+
+test('field rows expose a trailing drag handle that reorders only through the supplied callback', () => {
+  const doc = { createElement(tag) { return new Node(tag, this); } };
+  const context = vm.createContext({ document: doc, exports: {} });
+  const source = fs.readFileSync(new URL('../../src/ui/ColumnSidebar.ts', import.meta.url), 'utf8').replace('export class ColumnSidebar', 'class ColumnSidebar');
+  vm.runInContext(ts.transpile(source + '\nglobalThis.ColumnSidebar = ColumnSidebar;', { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.None }), context);
+  const columns = [{ id: 'a', name: 'alpha' }, { id: 'b', name: 'beta' }, { id: 'c', name: 'gamma' }];
+  const moves = [];
+  const sidebar = new context.ColumnSidebar('test-columns', () => columns, () => new Set(), () => {}, (from, to) => { moves.push([from, to]); });
+  sidebar.toggle();
+  const items = sidebar.el.children[3].children;
+  assert.equal(items.length, 3);
+  // 拖拽块是每行最后一个子元素，且不是勾选框本身。
+  for (const item of items) {
+    const handle = item.children.at(-1);
+    assert.equal(handle.className, 'column-sidebar-drag');
+    assert.equal(handle.draggable, true);
+    assert.equal(handle.dataset.columnId, item.dataset.columnId);
+    assert.match(handle.attributes['aria-label'], /调整 .* 字段顺序/);
+  }
+  items[0].children.at(-1).fire('dragstart', { dataTransfer: { setData() {}, effectAllowed: '' } });
+  items[2].fire('dragover', { dataTransfer: { dropEffect: '' } });
+  items[2].fire('drop');
+  assert.deepEqual(moves, [['a', 'c']]);
+  assert.equal(items[0].classList.contains('dragging'), false);
 });
 
 test('last visible column is disabled while hidden columns remain available; Escape returns focus', () => {

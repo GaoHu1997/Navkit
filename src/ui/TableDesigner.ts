@@ -1,4 +1,4 @@
-import { api, type TableDesignSnapshot, type TableDesignPayload, type TableDesignPreview, type TableDesignResponse, type TableOptionChoices, type ForeignKeyDesign, type IndexDesign } from "../core/api";
+import { api, type TableDesignSnapshot, type TableDesignPayload, type TableDesignPreview, type TableDesignResponse, type TableOptionChoices, type IndexDesign } from "../core/api";
 import { openPopover, closePopover, isPopoverOpenFor, POPOVER_CHEVRON } from "./popover";
 import { highlightSql } from "./sql-highlight";
 import type { ConnectionConfig, TabState, TableOptionsDesign } from "../core/types";
@@ -15,7 +15,10 @@ export interface TableDesignerHost {
   status(): void;
   toast(kind: "error" | "info" | "success", text: string): void;
 }
-const TABS = ["字段", "索引", "外键", "检查", "触发器", "选项", "注释", "SQL 预览"];
+/** 可见页签：检查 / 触发器 / 选项三页暂时收起（实现与草稿载荷仍保留，恢复时加回本数组即可）。 */
+const TABS = ["字段", "索引", "外键", "注释", "SQL 预览"];
+/** 索引页里主键是固定首行，用这个哨兵值参与选中态。 */
+const PRIMARY_ROW = "PRIMARY";
 /** 各数据库方言的真实类型清单：类型选择只出方言支持的项，杜绝随意拼类型导致数据库拒绝。 */
 const DIALECT_TYPES: Record<string, string[]> = {
   mysql: ["tinyint", "smallint", "mediumint", "int", "bigint", "decimal", "numeric", "float", "double", "bit", "boolean", "bool",
@@ -86,11 +89,8 @@ export class TableDesigner {
   private previewError = "";
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
   private previewToken = 0;
-  private readonly references = new Map<string, { columns: string[] | null; error: string; loading: boolean }>();
-  private namespaces: { values: string[] | null; error: string; loading: boolean } = { values: null, error: "", loading: false };
   /** 「选项」页的真实候选项（引擎/字符集/排序规则/行格式），只在需要时读取一次。 */
   private optionChoices: { values: TableOptionChoices | null; error: string; loading: boolean } = { values: null, error: "", loading: false };
-  private readonly referenceTables = new Map<string, { values: string[] | null; error: string; loading: boolean }>();
   private metadataVersion = 0;
   private execution: ExecutionController | null = null;
   constructor(private readonly tab: TabState, private readonly host: TableDesignerHost, el: HTMLElement) {
@@ -138,7 +138,7 @@ export class TableDesigner {
   }
   private accept(snapshot: TableDesignSnapshot): void {
     const draft = draftFromSnapshot(snapshot);
-    this.metadataVersion++; this.namespaces = { values: null, error: "", loading: false }; this.optionChoices = { values: null, error: "", loading: false }; this.referenceTables.clear(); this.references.clear();
+    this.metadataVersion++; this.optionChoices = { values: null, error: "", loading: false };
     this.snapshot = designClone(snapshot); this.draft = draft; this.baselineDraft = designClone(draft); this.baseline = draftSignature(draft);
     this.tab.schemaInfo = designClone(snapshot.schema); this.tab.dirty = false;
     this.preview = null; this.previewSignature = "";
@@ -183,7 +183,13 @@ export class TableDesigner {
   /** 当前页签名（工具栏据此切换按钮）。 */
   get activeTabName(): string { return this.currentTab; }
   addIndex(): void { const list = this.draft?.indexes; if (!list) return; this.mutate(() => { const item = { name: "", columns: [] as string[], unique: false, method: "BTREE", descending: [] as string[] }; list.push(item); this.selectedIndex = item; }); }
-  deleteIndex(): void { const list = this.draft?.indexes; if (!list) return; const item = list.find(x => (x as unknown) === this.selectedIndex); if (!item) { this.host.toast("info", "请先选择索引。"); return; } this.mutate(() => { const at = list.indexOf(item); if (at >= 0) list.splice(at, 1); this.selectedIndex = list[0] ?? null; }); }
+  deleteIndex(): void {
+    const list = this.draft?.indexes; if (!list) return;
+    if (this.selectedIndex === PRIMARY_ROW) { this.host.toast("info", "主键不能直接删除；请把它的索引类型改成 NORMAL 或 UNIQUE 降级后再删除。"); return; }
+    const item = list.find(x => (x as unknown) === this.selectedIndex);
+    if (!item) { this.host.toast("info", "请先在索引列表中选择要删除的行。"); return; }
+    this.mutate(() => { const at = list.indexOf(item); if (at >= 0) list.splice(at, 1); this.selectedIndex = (this.draft?.indexes ?? []).length ? (this.draft!.indexes![0]) : PRIMARY_ROW; });
+  }
   addForeignKey(): void { const list = this.draft?.foreign_keys; if (!list) return; this.mutate(() => { const item = { name: "", columns: [], ref_schema: this.snapshot!.design.schema, ref_table: "", ref_columns: [], on_update: null, on_delete: null }; list.push(item); this.selectedForeignKey = item; }); }
   deleteForeignKey(): void { const list = this.draft?.foreign_keys; if (!list) return; const item = list.find(x => (x as unknown) === this.selectedForeignKey); if (!item) { this.host.toast("info", "请先选择外键。"); return; } this.mutate(() => { const at = list.indexOf(item); if (at >= 0) list.splice(at, 1); this.selectedForeignKey = list[0] ?? null; }); }
   addCheck(): void { const list = this.draft?.checks; if (!list) return; this.mutate(() => { const item = { name: "", expression: "", orig_name: null }; list.push(item); this.selectedCheck = item; }); }
@@ -223,15 +229,7 @@ export class TableDesigner {
     const current = this.draft.columns.filter(c => !c.deleted && c.orig_name).map(c => c.orig_name!);
     const original = this.baselineDraft.columns.filter(c => current.includes(c.orig_name!)).map(c => c.orig_name!);
     if (JSON.stringify(current) !== JSON.stringify(original)) { const reason = this.columnOrderReason(); if (reason) throw new Error(reason); }
-    for (const fk of this.draft.foreign_keys ?? []) {
-      const originalFk = this.snapshot.design.foreign_keys?.find(old => old.name === fk.name);
-      if (JSON.stringify(originalFk) === JSON.stringify(fk)) continue;
-      const namespace = fk.ref_schema ?? this.snapshot.design.schema;
-      if (!this.namespaces.values?.includes(namespace)) throw new Error(`外键「${fk.name}」引用命名空间尚未由真实元数据证实，请重新读取并选择。`);
-      if (!this.referenceTables.get(namespace)?.values?.includes(fk.ref_table)) throw new Error(`外键「${fk.name}」引用表尚未由真实元数据证实，请重新读取并选择。`);
-      const columns = this.references.get(this.referenceKey(fk))?.columns;
-      if (!columns || fk.ref_columns.some(column => !columns.includes(column))) throw new Error(`外键「${fk.name}」引用字段未知或已失效，请重新读取并选择。`);
-    }
+    // 外键的引用库 / 引用表 / 引用字段按草稿里填写的值原样提交，不再要求引用元数据先被读取证实。
     return payloadFromDraft(this.snapshot, this.draft);
   }
   private async makePreview(whileSaving = false): Promise<{ design: TableDesignPayload; preview: TableDesignPreview }> {
@@ -570,7 +568,7 @@ export class TableDesigner {
     this.pickerOpenedFrom = anchor;
     anchor.classList.add("open");
     openPopover({
-      anchor, className: "index-cols", width: 336, ariaLabel: label + " 字段选择",
+      anchor, className: "index-cols", width: 336, align: "end", ariaLabel: label + " 字段选择",
       onClose: () => { anchor.classList.remove("open"); if (this.pickerOpenedFrom === anchor) this.pickerOpenedFrom = null; },
       render: (body, close) => {
         const list = document.createElement("div"); list.className = "popover-index-cols";
@@ -584,10 +582,6 @@ export class TableDesigner {
         foot.append(cancel, confirm); body.appendChild(foot);
       },
     });
-  }
-  /** 页签顶部的动作行（新增按钮等），替代旧的“列表 + 下方成堆表单”布局。 */
-  private actionsRow(body: HTMLElement, ...buttons: HTMLButtonElement[]): void {
-    const row = document.createElement("div"); row.className = "designer-actions"; row.append(...buttons); body.appendChild(row);
   }
   /** 行内多字段单元格：逗号分隔输入，书写顺序即列顺序；datalist 提供真实列名候选。 */
   private columnsInput(value: string[], label: string, set: (next: string[]) => void, datalistId?: string, disabled = false): HTMLInputElement {
@@ -605,35 +599,35 @@ export class TableDesigner {
   }
   private unknown(body: HTMLElement, label: string): void { const p = document.createElement("p"); p.className = "designer-notice"; p.textContent = `${label}元数据未提供可编辑全集；保持 undefined 原样保留，不能当作空集合提交。`; body.appendChild(p); }
   /** 索引页：主键就是列表里的第一行，与普通索引同一套单元格、同一种编辑方式。
-   *  主键行可改字段与顺序、可删除、可把类型改成 NORMAL/UNIQUE（降级为普通索引）；
-   *  普通索引行把类型改成 PRIMARY 即升级为主键。名称与方法的可改范围由数据库决定，UI 不再额外禁用。 */
+   *  主键行可改字段与顺序、可把类型改成 NORMAL/UNIQUE（降级为普通索引）；
+   *  普通索引行把类型改成 PRIMARY 即升级为主键。名称与方法的可改范围由数据库决定，UI 不再额外禁用。
+   *  行内不再放删除按钮：点行选中，删除统一走顶部操作栏的「删除索引」。 */
   private renderIndexes(body: HTMLElement): void {
     const draft = this.draft!; const indexes = draft.indexes;
     if (indexes === undefined) { this.unknown(body, "索引"); return; }
     const columnNames = draft.columns.filter(c => !c.deleted).map(c => c.name);
     const methods = this.indexMethodChoices();
     const kinds = ["NORMAL", "UNIQUE", "PRIMARY"];
+    // 选中态兜底：草稿变化（新增 / 删除 / 重载）后总有一个确定的删除目标。
+    if (this.selectedIndex !== PRIMARY_ROW && !indexes.includes(this.selectedIndex as IndexDesign)) this.selectedIndex = indexes[0] ?? PRIMARY_ROW;
     const table = document.createElement("table"); table.className = "designer-grid index-grid mini-table"; table.style.minWidth = "0"; table.style.width = "100%";
     const colgroup = document.createElement("colgroup");
-    for (const width of ["24%", "auto", "18%", "16%", "44px"]) { const col = document.createElement("col"); col.style.width = width; colgroup.appendChild(col); }
+    for (const width of ["24%", "auto", "18%", "16%"]) { const col = document.createElement("col"); col.style.width = width; colgroup.appendChild(col); }
     table.appendChild(colgroup);
     const head = document.createElement("thead"); const hr = document.createElement("tr");
-    for (const title of ["名", "字段（可多选，可排序）", "索引类型", "索引方法", ""]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
+    for (const title of ["名", "字段（可多选，可排序）", "索引类型", "索引方法"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; hr.appendChild(th); }
     head.appendChild(hr); table.appendChild(head);
     const tbody = document.createElement("tbody");
-
-    const removeButton = (label: string, action: () => void): HTMLElement => {
-      const td = document.createElement("td"); td.className = "designer-op";
-      const btn = document.createElement("button"); btn.type = "button"; btn.className = "designer-row-remove";
-      btn.setAttribute("aria-label", label); btn.title = "删除这一行";
-      btn.innerHTML = '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>';
-      btn.disabled = !!this.editReason();
-      btn.addEventListener("click", action);
-      td.appendChild(btn); return td;
+    const selectRow = (row: HTMLElement, entry: unknown) => {
+      this.selectedIndex = entry;
+      for (const other of tbody.querySelectorAll("tr")) other.classList.toggle("selected", other === row);
+      this.host.changed();
     };
 
     // 主键行
-    const pkRow = document.createElement("tr"); pkRow.dataset.indexRow = "primary";
+    const pkRow = document.createElement("tr"); pkRow.dataset.indexRow = "primary"; pkRow.classList.toggle("selected", this.selectedIndex === PRIMARY_ROW);
+    pkRow.addEventListener("focusin", () => selectRow(pkRow, PRIMARY_ROW));
+    pkRow.addEventListener("click", () => selectRow(pkRow, PRIMARY_ROW));
     const pkNameCell = document.createElement("td");
     const pkName = document.createElement("input"); pkName.type = "text"; pkName.value = "PRIMARY"; pkName.readOnly = true;
     pkName.setAttribute("aria-label", "主键 名称"); pkName.title = "主键名由数据库固定为 PRIMARY；要改的是字段、顺序与类型。";
@@ -647,13 +641,14 @@ export class TableDesigner {
     const pkMethodCell = document.createElement("td");
     const pkMethod = this.select("BTREE", ["BTREE"], "主键 索引方法", () => {}, false);
     pkMethod.title = "主键索引方法由数据库按方言决定。"; pkMethodCell.appendChild(pkMethod); pkRow.appendChild(pkMethodCell);
-    pkRow.appendChild(removeButton("删除主键", () => { draft.primary_key = []; this.changed(); this.render(); }));
     tbody.appendChild(pkRow);
 
     // 普通索引行
     indexes.forEach((index, i) => {
       const rowLabel = "索引 " + (i + 1);
-      const tr = document.createElement("tr");
+      const tr = document.createElement("tr"); tr.classList.toggle("selected", this.selectedIndex === index);
+      tr.addEventListener("focusin", () => selectRow(tr, index));
+      tr.addEventListener("click", () => selectRow(tr, index));
       const nameCell = document.createElement("td");
       nameCell.appendChild(this.input(index.name, rowLabel + " 名称", value => { index.name = value; }));
       tr.appendChild(nameCell);
@@ -666,7 +661,6 @@ export class TableDesigner {
       const methodCell = document.createElement("td");
       methodCell.appendChild(this.select(index.method ?? "BTREE", methods, rowLabel + " 索引方法", value => { index.method = value; }));
       tr.appendChild(methodCell);
-      tr.appendChild(removeButton("删除" + rowLabel, () => { const at = indexes.indexOf(index); if (at >= 0) indexes.splice(at, 1); this.changed(); this.render(); }));
       tbody.appendChild(tr);
     });
     table.appendChild(tbody); body.appendChild(table);
@@ -698,25 +692,8 @@ export class TableDesigner {
     let n = 2; while (taken.has(`${base}_${n}`)) n++;
     return `${base}_${n}`;
   }
-  private restoreReferenceFocus(focus: { label: string; start: number | null; end: number | null } | null): void {
-    this.render();
-    if (!focus) return;
-    const control = [...this.el.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("[aria-label]")].find(el => el.getAttribute("aria-label") === focus.label);
-    control?.focus(); if (control instanceof HTMLInputElement && focus.start !== null) control.setSelectionRange(focus.start, focus.end);
-  }
-  private referenceFocus(): { label: string; start: number | null; end: number | null } | null {
-    const active = document.activeElement; if (!(active instanceof HTMLElement) || !this.el.contains(active)) return null;
-    const label = active.getAttribute("aria-label"); if (!label) return null;
-    return { label, start: active instanceof HTMLInputElement ? active.selectionStart : null, end: active instanceof HTMLInputElement ? active.selectionEnd : null };
-  }
-  private async loadNamespaces(): Promise<void> {
-    if (this.namespaces.loading) return;
-    const version = this.metadataVersion; this.namespaces = { values: null, error: "", loading: true };
-    try { const values = await api.listDatabases(this.tab.connectionId); if (version !== this.metadataVersion || this.disposed) return; this.namespaces = { values: [...new Set(values.map(([name]) => name))], error: "", loading: false }; }
-    catch (error) { if (version !== this.metadataVersion || this.disposed) return; this.namespaces = { values: null, error: `引用命名空间元数据未知：${String(error)}`, loading: false }; }
-    if (this.currentTab === "外键") this.restoreReferenceFocus(this.referenceFocus());
-  }
-  /** 读取「选项」页候选（引擎/字符集/排序规则/行格式）；非 MySQL 后端返回空候选。 */
+  /** 读取「选项」页候选（引擎/字符集/排序规则/行格式）；非 MySQL 后端返回空候选。
+   *  该页签暂时收起，候选读取保留给恢复后的页面。 */
   private async loadOptionChoices(): Promise<void> {
     if (this.optionChoices.loading) return;
     const version = this.metadataVersion; this.optionChoices = { values: null, error: "", loading: true };
@@ -724,63 +701,38 @@ export class TableDesigner {
     catch (error) { if (version !== this.metadataVersion || this.disposed) return; this.optionChoices = { values: null, error: `表选项候选项读取失败：${String(error)}`, loading: false }; }
     if (this.currentTab === "选项") this.render();
   }
-  private async loadReferenceTables(namespace: string): Promise<void> {
-    if (!namespace || this.referenceTables.get(namespace)?.loading) return;
-    const version = this.metadataVersion; this.referenceTables.set(namespace, { values: null, error: "", loading: true });
-    try { const values = await api.listTables(this.tab.connectionId, namespace); if (version !== this.metadataVersion || this.disposed) return; this.referenceTables.set(namespace, { values: values.filter(([, kind]) => kind === "table").map(([name]) => name), error: "", loading: false }); }
-    catch (error) { if (version !== this.metadataVersion || this.disposed) return; this.referenceTables.set(namespace, { values: null, error: `引用表元数据未知：${String(error)}`, loading: false }); }
-    if (this.currentTab === "外键") this.restoreReferenceFocus(this.referenceFocus());
-  }
-  private referenceKey(fk: ForeignKeyDesign): string { return JSON.stringify([fk.ref_schema ?? this.snapshot!.design.schema, fk.ref_table]); }
-  private async loadReference(fk: ForeignKeyDesign): Promise<void> {
-    const key = this.referenceKey(fk), version = this.metadataVersion; if (!fk.ref_table.trim() || this.references.get(key)?.loading) return;
-    this.references.set(key, { columns: null, loading: true, error: "" });
-    try { const schema = await api.getTableSchema(this.tab.connectionId, fk.ref_schema ?? this.snapshot!.design.schema, fk.ref_table); if (version !== this.metadataVersion || this.disposed) return; this.references.set(key, { columns: schema.columns.map(c => c.name), loading: false, error: "" }); }
-    catch (error) { if (version !== this.metadataVersion || this.disposed) return; this.references.set(key, { columns: null, loading: false, error: `引用字段元数据未知：${String(error)}` }); }
-    if (!this.disposed && this.currentTab === "外键" && this.referenceKey(fk) === key) this.restoreReferenceFocus(this.referenceFocus());
-  }
+  /** 外键页：直接渲染草稿里已有的外键配置，不为了显示去读取引用元数据。
+   *  引用库 / 引用表 / 引用字段都是可直接编辑的文本（顺序即对应关系）；没有外键时整页保持空白提示。 */
   private renderForeignKeys(body: HTMLElement): void {
     const fks = this.draft!.foreign_keys; if (fks === undefined) { this.unknown(body, "外键"); return; }
-    const namespaces = this.namespaces;
-    if (!namespaces.values && !namespaces.loading && !namespaces.error) void this.loadNamespaces();
-    this.actionsRow(body,
-      this.button("读取引用元数据", () => { this.namespaces = { values: null, error: "", loading: false }; this.referenceTables.clear(); this.references.clear(); void this.loadNamespaces(); this.render(); }, namespaces.loading ? "正在读取" : this.editReason()));
+    if (!fks.length) { const empty = document.createElement("p"); empty.className = "designer-empty"; empty.textContent = "当前表没有外键约束。如需创建，请使用顶部操作栏的「添加外键」。"; body.appendChild(empty); return; }
     const colsId = this.columnsDatalist(body);
-    const fkTable = document.createElement("table"); fkTable.className = "designer-grid mini-table"; fkTable.style.minWidth = "0"; fkTable.style.width = "100%";
+    const fkTable = document.createElement("table"); fkTable.className = "designer-grid mini-table fk-grid"; fkTable.style.minWidth = "0"; fkTable.style.width = "100%";
     const fkHead = document.createElement("thead"); const fkHr = document.createElement("tr");
     for (const title of ["名", "本表字段（逗号分隔）", "引用库", "引用表（父）", "引用字段（按顺序对应）", "删除时", "更新时"]) { const th = document.createElement("th"); th.scope = "col"; th.textContent = title; fkHr.appendChild(th); }
     fkHead.appendChild(fkHr); fkTable.appendChild(fkHead);
     const fkTbody = document.createElement("tbody");
-    const hints: string[] = [];
     fks.forEach((fk, i) => {
       const rowLabel = `外键 ${i + 1}`;
-      const namespace = fk.ref_schema ?? this.snapshot!.design.schema;
-      const tables = this.referenceTables.get(namespace);
-      if (namespaces.values?.includes(namespace) && !tables) void this.loadReferenceTables(namespace);
-      if (namespaces.values?.includes(namespace) && tables?.values?.includes(fk.ref_table) && !this.references.has(this.referenceKey(fk))) void this.loadReference(fk);
       const tr = document.createElement("tr"); tr.classList.toggle("selected", fk === this.selectedForeignKey);
       tr.addEventListener("focusin", () => { this.selectedForeignKey = fk; for (const other of fkTbody.querySelectorAll("tr")) other.classList.toggle("selected", other === tr); this.host.changed(); });
       const td = (el: HTMLElement) => { const cell = document.createElement("td"); cell.appendChild(el); tr.appendChild(cell); };
       td(this.input(fk.name, `${rowLabel} 名称`, value => { fk.name = value; }));
       td(this.columnsInput(fk.columns, `${rowLabel} 本表字段`, next => { fk.columns = next; }, colsId));
-      const namespaceControl = this.select(namespace, ["", ...(namespaces.values ?? [])], `${rowLabel} 引用库`, value => { fk.ref_schema = value; this.preview = null; void this.loadReferenceTables(value); this.render(); }, !namespaces.values);
-      if (namespaces.values && !namespaces.values.includes(namespace)) hints.push(`${rowLabel} 引用库「${namespace}」已失效；值已保留，请明确选择有效引用库。`);
-      td(namespaceControl);
-      const tableControl = this.select(fk.ref_table, ["", ...(tables?.values ?? [])], `${rowLabel} 引用表`, value => { fk.ref_table = value; if (value) void this.loadReference(fk); this.render(); }, !namespaces.values?.includes(namespace) || !tables?.values);
-      if (tables?.error) hints.push(`${rowLabel}：${tables.error}`);
-      else if (fk.ref_table.trim() && tables?.values && !tables.values.includes(fk.ref_table)) hints.push(`${rowLabel} 引用表「${fk.ref_table}」已失效；值已保留，请明确选择有效引用表。`);
-      td(tableControl);
-      const metadata = this.references.get(this.referenceKey(fk));
-      if (metadata?.error) hints.push(`${rowLabel}：${metadata.error}`);
-      const refList = document.createElement("datalist"); refList.id = `${this.id}-fkref-${i}`; for (const name of metadata?.columns ?? []) { const option = document.createElement("option"); option.value = name; refList.appendChild(option); } body.appendChild(refList);
-      td(this.columnsInput(fk.ref_columns, `${rowLabel} 引用字段`, next => { fk.ref_columns = next; }, metadata?.columns ? refList.id : undefined));
+      const namespace = this.input(fk.ref_schema ?? this.snapshot!.design.schema, `${rowLabel} 引用库`, value => { fk.ref_schema = value; });
+      namespace.placeholder = this.snapshot!.design.schema;
+      td(namespace);
+      const target = this.input(fk.ref_table, `${rowLabel} 引用表`, value => { fk.ref_table = value; });
+      target.placeholder = "被引用的表名";
+      td(target);
+      const columns = this.columnsInput(fk.ref_columns, `${rowLabel} 引用字段`, next => { fk.ref_columns = next; });
+      columns.placeholder = "与左侧字段逐个对应的列名";
+      td(columns);
       td(this.select(fk.on_delete ?? "", ["", "NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"], `${rowLabel} 删除时`, value => { fk.on_delete = value || null; }));
       td(this.select(fk.on_update ?? "", ["", "NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"], `${rowLabel} 更新时`, value => { fk.on_update = value || null; }));
       fkTbody.appendChild(tr);
     });
     fkTable.appendChild(fkTbody); body.appendChild(fkTable);
-    if (namespaces.error) hints.unshift(namespaces.error);
-    if (hints.length) { const notice = document.createElement("p"); notice.className = "designer-notice"; notice.textContent = hints.join("\n"); body.appendChild(notice); }
   }
   private renderChecks(body: HTMLElement): void {
     const checks = this.draft!.checks; if (checks === undefined) { this.unknown(body, "检查约束"); return; }

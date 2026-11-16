@@ -275,70 +275,51 @@ async function diagnosedPage(t, run) {
   }
 }
 
-test('unfinished fillfactor stays in the real input and captured draft and cannot silently clear an option', { timeout: 30_000 }, async t => diagnosedPage(t, async page => {
-  await tab(page, '选项');
-  const fillfactor = page.getByRole('textbox', { name: '填充因子', exact: true });
-  await fillfactor.fill('1e');
-  assert.equal(await fillfactor.inputValue(), '1e');
+test('unfinished fillfactor is rejected before any backend call and a complete value still saves', { timeout: 30_000 }, async t => diagnosedPage(t, async page => {
+  // 「选项」页签暂时收起，直接改草稿验证同一份 payload 校验。
+  await page.evaluate(() => { designer.draft.options.fillfactor = '1e'; designer.changed(); });
   assert.equal(await page.evaluate(() => designer.captureDraft().payload.draft.options.fillfactor), '1e');
   await page.evaluate(async () => designer.saveChanges());
   assert.equal(await page.evaluate(() => fixture.previews.length), 0);
   assert.equal(await page.evaluate(() => fixture.executions.length), 0);
   assert.equal(await page.evaluate(() => designer.draftDirty()), true);
   assert.ok((await page.evaluate(() => fixture.notices)).some(([kind, text]) => kind === 'error' && text.includes('填充因子必须')));
-  await fillfactor.fill('80');
+  await page.evaluate(() => { designer.draft.options.fillfactor = 80; designer.changed(); });
   await page.evaluate(() => { globalThis.saving = designer.saveChanges(); });
   await page.getByRole('dialog', { name: '保存表结构', exact: true }).waitFor(); await finishSave(page);
   assert.equal(await page.evaluate(() => fixture.executions[0].design.options.fillfactor), 80);
   assert.equal(await page.evaluate(() => designer.draftDirty()), false);
 }));
 
-test('invalid foreign-key metadata preserves legacy values and only a real namespace, table and ordered column can be saved', { timeout: 30_000 }, async t => diagnosedPage(t, async page => {
+test('foreign keys show the configured values without reading reference metadata and stay editable', { timeout: 30_000 }, async t => diagnosedPage(t, async page => {
   await page.evaluate(async () => {
     fixture.snapshot.design.foreign_keys = [{ name: 'legacy_fk', columns: ['id'], ref_schema: 'missing_schema', ref_table: 'missing_table', ref_columns: ['old_column'], on_update: null, on_delete: null }];
     await designer.reloadAfterLeave();
   });
-  await tab(page, '外键'); await page.waitForFunction(() => designer.namespaces.values !== null);
-  const namespace = page.getByRole('combobox', { name: '外键 1 引用库', exact: true });
-  const table = page.getByRole('combobox', { name: '外键 1 引用表', exact: true });
-  assert.equal(await namespace.inputValue(), 'missing_schema'); assert.equal(await table.inputValue(), 'missing_table');
-  assert.match(await page.getByRole('tabpanel').textContent(), /引用库「missing_schema」已失效/);
+  await tab(page, '外键');
+  // 不再有「读取引用元数据」按钮，也不会为显示外键发起任何元数据读取
+  assert.equal(await page.getByRole('button', { name: '读取引用元数据', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('textbox', { name: '外键 1 引用库', exact: true }).inputValue(), 'missing_schema');
+  assert.equal(await page.getByRole('textbox', { name: '外键 1 引用表', exact: true }).inputValue(), 'missing_table');
+  assert.equal(await page.getByRole('textbox', { name: '外键 1 引用字段', exact: true }).inputValue(), 'old_column');
+  assert.equal(await page.evaluate(() => fixture.referenceCalls.length + (fixture.referenceCatalogCalls?.length ?? 0)), 0);
   await page.getByRole('textbox', { name: '外键 1 名称', exact: true }).fill('edited_fk');
-  await page.evaluate(async () => designer.saveChanges()); assert.equal(await page.evaluate(() => fixture.previews.length), 0);
-  await namespace.selectOption('db'); await page.waitForFunction(() => designer.referenceTables.get('db')?.values !== null && !designer.referenceTables.get('db')?.loading);
-  assert.equal(await table.inputValue(), 'missing_table'); assert.equal(await table.locator('option[value="parents_view"]').count(), 0);
-  await page.evaluate(async () => designer.saveChanges()); assert.equal(await page.evaluate(() => fixture.previews.length), 0);
-  await table.selectOption('parents'); await page.waitForFunction(() => fixture.referenceCalls.length === 1 && !!designer.references.get(JSON.stringify(['db', 'parents']))?.columns);
-  const column = page.getByRole('combobox', { name: '外键 1 引用字段', exact: true });
-  assert.equal(await column.inputValue(), 'old_column');
-  await page.evaluate(async () => designer.saveChanges()); assert.equal(await page.evaluate(() => fixture.previews.length), 0);
-  assert.equal(await page.evaluate(() => designer.draft.foreign_keys[0].ref_columns[0]), 'old_column');
-  await column.fill('parent_b'); await page.evaluate(() => { globalThis.saving = designer.saveChanges(); });
+  await page.getByRole('textbox', { name: '外键 1 引用库', exact: true }).fill('db');
+  await page.getByRole('textbox', { name: '外键 1 引用表', exact: true }).fill('parents');
+  await page.getByRole('textbox', { name: '外键 1 引用字段', exact: true }).fill('parent_b');
+  await page.evaluate(() => { globalThis.saving = designer.saveChanges(); });
   await page.getByRole('dialog', { name: '保存表结构', exact: true }).waitFor(); await finishSave(page);
   assert.deepEqual(await page.evaluate(() => fixture.executions[0].design.foreign_keys[0]), { name: 'edited_fk', columns: ['id'], ref_schema: 'db', ref_table: 'parents', ref_columns: ['parent_b'], on_update: null, on_delete: null });
 }));
 
-test('namespace, table and column responses from an earlier baseline cannot overwrite reloaded metadata', { timeout: 30_000 }, async t => diagnosedPage(t, async page => {
-  const state = await page.evaluate(async () => {
-    const release = {};
-    __api.listDatabases = () => new Promise(resolve => { release.namespaces = resolve; });
-    __api.listTables = () => new Promise(resolve => { release.tables = resolve; });
-    __api.getTableSchema = () => new Promise(resolve => { release.columns = resolve; });
-    const fk = { name: 'pending', columns: ['id'], ref_schema: 'db', ref_table: 'parents', ref_columns: ['old'] };
-    const pending = [designer.loadNamespaces(), designer.loadReferenceTables('db'), designer.loadReference(fk)];
-    await designer.reloadAfterLeave();
-    __api.listDatabases = async () => [['db', 'database']];
-    __api.listTables = async () => [['parents', 'table']];
-    __api.getTableSchema = async () => ({ columns: [{ name: 'fresh_column' }] });
-    await Promise.all([designer.loadNamespaces(), designer.loadReferenceTables('db'), designer.loadReference(fk)]);
-    release.namespaces([['stale_schema', 'database']]); release.tables([['stale_table', 'table']]); release.columns({ columns: [{ name: 'stale_column' }] });
-    await Promise.all(pending);
-    return { namespaces: designer.namespaces.values, tables: designer.referenceTables.get('db').values, columns: designer.references.get(JSON.stringify(['db', 'parents'])).columns };
-  });
-  assert.deepEqual(state, { namespaces: ['db'], tables: ['parents'], columns: ['fresh_column'] });
-  await tab(page, '外键'); await page.evaluate(() => designer.addForeignKey());
-  const namespace = page.getByRole('combobox', { name: '外键 1 引用库', exact: true });
-  assert.equal(await namespace.locator('option[value="stale_schema"]').count(), 0);
-  assert.equal(await page.getByRole('combobox', { name: '外键 1 引用表', exact: true }).locator('option[value="stale_table"]').count(), 0);
+test('an empty foreign-key collection shows a hint instead of an empty grid and requests no metadata', { timeout: 30_000 }, async t => diagnosedPage(t, async page => {
+  await page.evaluate(async () => { fixture.snapshot.design.foreign_keys = []; await designer.reloadAfterLeave(); });
+  await tab(page, '外键');
+  assert.equal(await page.locator('.designer-grid.fk-grid').count(), 0);
+  assert.match(await page.getByRole('tabpanel').textContent(), /当前表没有外键约束/);
+  assert.equal(await page.evaluate(() => fixture.referenceCalls.length + (fixture.referenceCatalogCalls?.length ?? 0)), 0);
+  await page.evaluate(() => designer.addForeignKey());
+  assert.equal(await page.locator('.designer-grid.fk-grid tbody tr').count(), 1);
+  assert.equal(await page.getByRole('textbox', { name: '外键 1 引用库', exact: true }).inputValue(), 'db');
   assert.equal(await page.evaluate(() => fixture.executions.length), 0);
 }));

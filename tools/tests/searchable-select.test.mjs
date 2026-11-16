@@ -385,3 +385,53 @@ test('真实容器滚动浮层跟随锚点，列表滚动与鼠标高亮不会�
   await page.waitForFunction(() => !document.querySelector('.searchable-select-popover'));
   assert.deepEqual(await events(page), []);
 }));
+
+test('data-no-search 直接选择：无搜索框、点选即生效、键盘可用、滚轮不穿透背景', () => withPage(async page => {
+  await page.evaluate(() => {
+    const wrap = document.createElement('div'); wrap.id = 'scroller';
+    wrap.style.cssText = 'height:160px;overflow:auto;margin:20px';
+    const inner = document.createElement('div'); inner.style.height = '700px';
+    const el = document.createElement('select'); el.id = 'plain'; el.setAttribute('data-no-search', '');
+    el.setAttribute('aria-label', '生成方式');
+    el.replaceChildren(...Array.from({ length: 40 }, (_, i) => new Option('方式 ' + i, 'm' + i)));
+    inner.append(el); wrap.append(inner); document.body.append(wrap);
+  });
+  await page.locator('#plain').click();
+  assert.equal(await page.locator('.searchable-select-search').count(), 0, '不渲染搜索输入框');
+  assert.equal(await options(page).count(), 40);
+  assert.equal(await page.locator('.searchable-select-list').getAttribute('aria-label'), '生成方式');
+  assert.equal(await page.locator('.searchable-select-list').evaluate(el => el === document.activeElement), true, '焦点落在列表上');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.locator('.is-active').textContent(), '方式 1');
+  await page.keyboard.press('Escape');
+  await closed(page);
+  assert.equal(await page.locator('#plain').evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator('#plain').getAttribute('aria-expanded'), null);
+  // 点开即选：不需要过滤，点中候选就生效并关闭。
+  await page.locator('#plain').click();
+  await options(page).filter({ hasText: '方式 7' }).click();
+  await closed(page);
+  assert.equal(await page.locator('#plain').inputValue(), 'm7');
+  assert.deepEqual(await events(page), [['input', 'm7'], ['change', 'm7']]);
+  // 键盘打开后方向键 + Enter 选择；字符键不再触发浮层（保留原生 type-ahead）。
+  await page.locator('#plain').focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await closed(page);
+  assert.equal(await page.locator('#plain').inputValue(), 'm8');
+  await page.keyboard.press('x');
+  assert.equal(await page.locator('.searchable-select-popover').count(), 0, '字符键不打开无搜索下拉');
+  // 滚轮只滚动候选列表，背后的滚动容器不动（曾表现为滚动穿透）。
+  await page.locator('#plain').click();
+  const list = page.locator('.searchable-select-list');
+  const box = await list.boundingBox();
+  await page.mouse.move(box.x + 20, box.y + 20);
+  await page.mouse.wheel(0, 240);
+  await page.waitForTimeout(120);
+  assert.ok(await list.evaluate(el => el.scrollTop > 0), '候选列表应滚动');
+  assert.equal(await page.locator('#scroller').evaluate(el => el.scrollTop), 0, '背景容器不应穿透滚动');
+  await page.mouse.wheel(0, 5000);
+  await page.waitForTimeout(120);
+  assert.equal(await page.locator('#scroller').evaluate(el => el.scrollTop), 0, '滚到列表底部也不穿透');
+}));

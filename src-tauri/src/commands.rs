@@ -895,6 +895,39 @@ pub async fn plan_query_keyset_page(
 ) -> CmdResult<QueryKeysetPageView> {
     plan_query_keyset_page_service(&state, &connection_id, &sql, &after, limit, namespace.as_deref()).await
 }
+/// 查询页服务器分页精确总数：规划并执行一次 COUNT，返回精确总行数。
+///
+/// 与 `plan_query_pagination` 同一套安全判定；不能安全统计时返回
+/// `supported=false` 与原因，前端保持"总行数未知"并继续可用，不猜数。
+/// 迟到回执由前端版本号丢弃，不会覆盖新查询的状态。
+#[derive(serde::Serialize)]
+pub struct QueryPageCountView {
+    pub supported: bool,
+    pub total: Option<u64>,
+    pub reason: Option<String>,
+}
+
+#[tauri::command]
+pub async fn count_query_page(
+    state: State<'_, AppState>, connection_id: String, sql: String, namespace: Option<String>,
+) -> CmdResult<QueryPageCountView> {
+    let cfg = saved_config(&state, &connection_id)?;
+    let Some(count_sql) = crate::query_pagination::plan_query_count(&cfg.kind, &sql).into_sql() else {
+        return Ok(QueryPageCountView { supported: false, total: None, reason: Some("该查询不能安全统计总数".into()) });
+    };
+    let namespace = namespace.unwrap_or_default();
+    let db = scoped_db(&state, &connection_id, &namespace).await?;
+    let total = db
+        .sql_scalar(&count_sql)
+        .await
+        .map_err(AppError::from)?
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    match total {
+        Some(total) => Ok(QueryPageCountView { supported: true, total: Some(total), reason: None }),
+        None => Ok(QueryPageCountView { supported: false, total: None, reason: Some("总数回执无法解析为行数".into()) }),
+    }
+}
+
 /// 导出「重新查询全量」：重新执行原始 SQL，再从本次执行的完整缓存导出。
 ///
 /// 只允许可安全重跑的单条只读查询；受现有缓存配额约束，超限时明确拒绝，

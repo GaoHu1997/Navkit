@@ -198,6 +198,56 @@ pub fn plan_query_page(kind: &DbKind, sql: &str, limit: u64, offset: u64) -> Pag
     }
 }
 
+/// 为当前页规划精确总数 SQL（`SELECT COUNT(*) FROM (原查询) AS navkit_count`）。
+///
+/// 与 `plan_query_page` 同一套安全判定：只对能证明安全的单条只读
+/// SELECT/WITH 生成；原 SQL 自带 LIMIT/FETCH 时先按当前页方式去掉外层
+/// 限制再统计，否则总数被用户 LIMIT 截断，总页数会缺失。
+pub fn plan_query_count(kind: &DbKind, sql: &str) -> PagePlan {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return PagePlan::Unsupported("SQL 为空");
+    }
+    let Some(dialect) = dialect_for(kind) else {
+        return PagePlan::Unsupported("当前数据库类型暂不支持查询页服务器分页");
+    };
+    if has_semantic_comment(trimmed) {
+        return PagePlan::Unsupported("SQL 含可执行注释或优化器提示，保持原样执行");
+    }
+    let statements = match Parser::parse_sql(dialect.as_ref(), trimmed) {
+        Ok(statements) => statements,
+        Err(_) => return PagePlan::Unsupported("无法解析为单条语句"),
+    };
+    let [statement] = statements.as_slice() else {
+        return PagePlan::Unsupported("仅支持单条语句的分页浏览");
+    };
+    let query = match statement {
+        Statement::Query(query) => query,
+        _ => return PagePlan::Unsupported("仅 SELECT / WITH 查询可统计总数"),
+    };
+    if let Some(LimitClause::LimitOffset { limit_by, .. }) = &query.limit_clause {
+        if !limit_by.is_empty() {
+            return PagePlan::Unsupported("LIMIT ... BY 不走通用分页");
+        }
+    }
+    if let Err(reason) = query_read_only(query) {
+        return PagePlan::Unsupported(reason);
+    }
+    // 统计总数要去掉用户自带的外层 LIMIT/FETCH（与分页 SQL 的包裹策略一致），
+    // 否则 COUNT 只数到 LIMIT 行，总页数按截断结果计算会缺失页。
+    let mut query = query.clone();
+    if query.limit_clause.is_some() || query.fetch.is_some() {
+        query.limit_clause = None;
+        query.fetch = None;
+    }
+    // `to_string` 重新生成语句，杜绝尾随注释吞掉外层包裹；语义已由 AST 校验。
+    let body = Statement::Query(query).to_string();
+    PagePlan::Page(format!(
+        "SELECT COUNT(*) FROM ({}) AS navkit_count;",
+        strip_semi(&body)
+    ))
+}
+
 /// 查询页 Keyset 的形状：单表 SELECT + 单列 ORDER BY。
 ///
 /// 只有这种形状才可能在“排序列是唯一键”时安全改用锚点定位；其余一律回退 OFFSET。
@@ -496,6 +546,27 @@ mod tests {
     #[test]
     fn empty_sql_is_refused() {
         assert!(matches!(plan_query_page(&sqlite(), "   ", 100, 0), PagePlan::Unsupported(_)));
+    }
+
+    #[test]
+    fn count_plan_wraps_simple_select() {
+        let sql = page(plan_query_count(&sqlite(), "SELECT * FROM orders"));
+        assert_eq!(sql, "SELECT COUNT(*) FROM (SELECT * FROM orders) AS navkit_count;");
+    }
+
+    #[test]
+    fn count_plan_strips_user_limit_so_total_is_not_truncated() {
+        let sql = page(plan_query_count(&mysql(), "SELECT * FROM events LIMIT 1000"));
+        assert_eq!(sql, "SELECT COUNT(*) FROM (SELECT * FROM events) AS navkit_count;");
+    }
+
+    #[test]
+    fn count_plan_reuses_page_plan_safety() {
+        assert!(matches!(plan_query_count(&mysql(), "UPDATE t SET a = 1"), PagePlan::Unsupported(_)));
+        assert!(matches!(plan_query_count(&mysql(), "SELECT 1; SELECT 2"), PagePlan::Unsupported(_)));
+        assert!(matches!(plan_query_count(&mysql(), "SELECT /*! SQL_NO_CACHE */ * FROM t"), PagePlan::Unsupported(_)));
+        assert!(matches!(plan_query_count(&DbKind::of("oracle"), "SELECT * FROM t"), PagePlan::Unsupported(_)));
+        assert!(matches!(plan_query_count(&sqlite(), "   "), PagePlan::Unsupported(_)));
     }
 
     #[test]

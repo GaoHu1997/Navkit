@@ -349,3 +349,27 @@ test('UserDialog：权限元数据加载中不能打开搜索或添加，加载�
   assert.equal(await page.locator('.user-object-table tbody tr td').nth(1).textContent(), '（整库）');
   await assertNoWrite(page);
 }));
+
+// 生成方式选项少且无需过滤：data-no-search 直接列候选，点选即生效。
+test('DataGeneratorDialog：字段生成方式直接选择，不渲染搜索框', () => withPage(async page => {
+  await page.getByRole('button', { name: '打开数据生成', exact: true }).click();
+  await waitReady(page, '目标表');
+  await page.getByRole('button', { name: '下一步', exact: true }).click();
+  const mode = select(page, 'id 生成方式');
+  await mode.waitFor();
+  assert.equal(await mode.getAttribute('data-no-search'), '');
+  await mode.click();
+  assert.equal(await page.locator('.searchable-select-search').count(), 0, '生成方式不提供搜索框');
+  assert.deepEqual(await rows(page).allTextContents(),
+    ['按类型生成', '固定值', '顺序整数', '省略（数据库默认；必填列由后端拒绝）']);
+  assert.equal(await page.locator('.searchable-select-list').evaluate(el => el === document.activeElement), true, '焦点落在候选列表');
+  await rows(page).filter({ hasText: '顺序整数' }).click();
+  await page.waitForFunction(() => !document.querySelector('.searchable-select-popover'));
+  assert.equal(await mode.inputValue(), 'sequence');
+  assert.equal(await mode.evaluate(el => el === document.activeElement), true, '选择后焦点回到原生下拉');
+  // 需要过滤的目标表仍保留搜索框。
+  await page.getByRole('button', { name: '上一步', exact: true }).click();
+  const search = await openSearch(page, '目标表');
+  await search.press('Escape');
+  await assertNoWrite(page);
+}));

@@ -471,7 +471,6 @@ export function openSyncDialog(
     memoryLimit.disabled = memoryMode.disabled || memoryMode.value !== "manual";
     memoryLimit.hidden = memoryLimitLabel.hidden = memoryMode.value !== "manual";
     memoryLimit.setAttribute("aria-invalid", String(!!invalid));
-    memoryNote.textContent = budgetReason ?? "比较缓冲预算，不是整个程序RSS硬上限。后台认定真实文件库并在每次比较前重新采样；关闭仍有保底预算，不是无限内存。";
     if (invalid) memoryInfo.textContent = invalid;
     if (!diffRunning) scheduleMemoryPreview();
     if (diffRunning && diffBtnEl) diffBtnEl.setAttribute("aria-busy", "true");
@@ -497,15 +496,12 @@ export function openSyncDialog(
   const memoryLimitLabel = document.createElement("label");
   memoryLimitLabel.className = "sync-diff-memory-option";
   memoryLimitLabel.append(memoryLimit, document.createTextNode("MiB"));
-  const memoryNote = document.createElement("div");
-  memoryNote.className = "wizard-panel-note";
   const memoryInfo = document.createElement("div");
   memoryInfo.className = "wizard-panel-note";
   memoryInfo.id = `sync-diff-memory-${crypto.randomUUID()}`;
-  memoryNote.id = `${memoryInfo.id}-note`;
   memoryInfo.setAttribute("role", "status");
   memoryInfo.setAttribute("aria-live", "polite");
-  for (const control of [memoryControl, memoryMode, memoryLimit]) control.setAttribute("aria-describedby", `${memoryNote.id} ${memoryInfo.id}`);
+  for (const control of [memoryControl, memoryMode, memoryLimit]) control.setAttribute("aria-describedby", memoryInfo.id);
   let diffRunning = false;
   let diffGeneration = 0;
   let memoryPreviewGeneration = 0;
@@ -551,6 +547,8 @@ export function openSyncDialog(
     memoryPreviewTimer = null;
     reportMemoryShown = false;
     if (diffMemoryReason()) { memoryInfo.textContent = ""; return; }
+    // 预算控制未启用时不展示预估：默认零噪音，也避免每次进页空转一次 IPC。
+    if (!memoryControl.checked) { memoryInfo.textContent = ""; return; }
     if (invalid) { memoryInfo.textContent = invalid; return; }
     memoryInfo.textContent = "正在读取原生预算预估…预估额度，不代表已分配。";
     memoryPreviewTimer = setTimeout(async () => {
@@ -913,19 +911,26 @@ export function openSyncDialog(
             memoryLabel.className = "sync-diff-memory-option";
             memoryLabel.title = "仅影响“比较差异”，不改变同步写入；预算足够时优先内存快路径，必要时才溢写。默认关闭仍使用保底预算，不是无限内存。";
             memoryLabel.append(memoryControl, document.createTextNode("内存预算控制"));
-            diffControls.append(diffBtn, memoryLabel, memoryMode, memoryLimitLabel, memoryNote, memoryInfo);
-            tools.append(refresh, diffControls, structureOnly);
+            diffControls.append(diffBtn, memoryLabel, memoryMode, memoryLimitLabel, memoryInfo);
+            // 工具行只放操作按钮：映射刷新与结构操作，配置项不再挤进按钮行。
+            tools.append(refresh, structureOnly);
             host.appendChild(tools);
-            // 破坏性选项独占一行，不与结构操作按钮挤在同一条工具行里（误点风险）
+            // 数据差异比较（只读）独占一行：比较按钮、内存预算与状态同组，不随结构按钮换行漂移。
+            const diffRow = document.createElement("div");
+            diffRow.className = "sync-table-only sync-map-diff-row";
+            diffRow.append(diffControls);
+            host.appendChild(diffRow);
+            // 写入选项纵向一组，各占一行：破坏性结构选项、增量业务键、增量删行。
+            const options = document.createElement("div");
+            options.className = "sync-table-only sync-map-options";
             const structOptions = document.createElement("div");
-            structOptions.className = "sync-table-only sync-map-option-row";
+            structOptions.className = "sync-map-option-row";
             structOptions.append(allowDropLabel);
-            host.appendChild(structOptions);
             const bizRow = document.createElement("div");
-            bizRow.className = "sync-table-only";
-            bizRow.style.cssText = "display:flex;align-items:center;gap:16px;margin-top:8px;flex-wrap:wrap";
-            bizRow.append(field("增量业务键:", bizKey), deleteMissingLabel);
-            host.appendChild(bizRow);
+            bizRow.className = "sync-map-biz-row";
+            bizRow.append(field("增量业务键:", bizKey));
+            options.append(structOptions, bizRow, deleteMissingLabel);
+            host.appendChild(options);
           },
           validate: () => { const problem = validateMapping(); if (!problem) pendingRun = true; return problem; },
         },
@@ -961,9 +966,7 @@ export function openSyncDialog(
           else { mapping.style.display = ""; void refreshMapping(); }
           const dbTables = dlg.body.querySelector<HTMLElement>("#sync-db-tables");
           if (dbTables) dbTables.style.display = isDbMode() ? "flex" : "none";
-          // 「比较差异」仅表对表模式提供；整库的逐表比较由增量同步本身完成。
-          const diffBtn = [...dlg.body.querySelectorAll<HTMLButtonElement>(".sync-map-tools button")].find(b => b.textContent === "比较差异");
-          if (diffBtn) diffBtn.style.display = isDbMode() ? "none" : "";
+          // 「比较差异」仅表对表模式提供；整库的逐表比较由增量同步本身完成，其所在分组按 .sync-table-only 整体隐藏。
           for (const el of dlg.body.querySelectorAll<HTMLElement>(".sync-table-only")) {
             el.style.display = isDbMode() ? "none" : "";
           }

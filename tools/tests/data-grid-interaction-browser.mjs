@@ -92,6 +92,65 @@ try {
   await page.screenshot({ path: path.join(root, 'artifacts/data-grid-pinned-columns.png'), fullPage: true, animations: 'disabled' });
   for (const name of ['tradeType', 'tradeStatus']) { await header(name).click({ button: 'right' }); await page.getByText('取消固定列', { exact: true }).click(); }
   await page.evaluate(() => { window.__APP__.activeView().grid.scroll.scrollLeft = 0; });
+
+  // 字段侧栏末尾拖拽块：键盘微调等价于拖拽，只影响当前标签页的显示顺序。
+  await page.locator('.tab-toolbar [data-command="columns"]').click();
+  const dragHandles = page.locator('.column-sidebar-drag');
+  await dragHandles.first().waitFor();
+  const handleCount = await dragHandles.count();
+  assert.equal(handleCount, 154);
+  assert.equal(await page.locator('.column-sidebar-item').first().evaluate(el => el.lastElementChild.className), 'column-sidebar-drag');
+  const headerNames = () => page.evaluate(() => [...document.querySelectorAll('th[data-col]')].map(el => el.dataset.name));
+  assert.deepEqual((await headerNames()).slice(0, 3), ['id', 'tradeType', 'applyStatus']);
+  await page.getByLabel('调整 id 字段顺序', { exact: true }).focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowDown');
+  assert.deepEqual((await headerNames()).slice(0, 3), ['tradeType', 'applyStatus', 'id']);
+  const reordered = await page.evaluate(() => {
+    const view = window.__APP__.activeView(), grid = view.grid;
+    return {
+      firstHeader: document.querySelector('th[data-col]').dataset.name,
+      firstCell: grid.rows[0]?.[0],
+      offset: view.tab.pageOffset,
+      rowIndex: grid.buildRow(0).dataset.row,
+      columns: grid.columns.map(column => column.name).slice(0, 3),
+    };
+  });
+  assert.equal(reordered.firstHeader, 'tradeType');
+  assert.equal(reordered.firstCell, '130');
+  // 重排只改显示映射：分页偏移、行号与页数据都不动。
+  assert.equal(reordered.offset, 0);
+  assert.equal(reordered.rowIndex, '0');
+  assert.deepEqual(reordered.columns, ['tradeType', 'applyStatus', 'id']);
+  await mkdir(path.join(root, 'artifacts'), { recursive: true });
+  await page.screenshot({ path: path.join(root, 'artifacts/data-grid-field-drag-order.png'), fullPage: true, animations: 'disabled' });
+  await page.locator('.tab-toolbar [data-command="columns"]').click();
+  // 同一标签页内保持顺序。
+  assert.deepEqual((await headerNames()).slice(0, 3), ['tradeType', 'applyStatus', 'id']);
+  // 关闭后新开标签页不继承顺序（列顺序仅存在于当前视图实例）由单元测试覆盖；
+  // 这里只确认当前标签页在开关字段侧栏后仍保持自己的顺序。
+  assert.deepEqual((await headerNames()).slice(0, 3), ['tradeType', 'applyStatus', 'id']);
+
+  // 页脚不再出现「共 xxx 条」「重新统计」。
+  assert.equal(await page.locator('.grid-total-count, .grid-count-total').count(), 0);
+  const footerText = await page.locator('.grid-footer').last().textContent();
+  assert.doesNotMatch(footerText, /共 \d+ 条|重新统计|统计中/);
+
+  // 左上角 ⓘ 收起信息栏；右上角入口重新打开，二者与状态栏开关联动。
+  const infoPanel = page.locator('.info-panel');
+  assert.equal(await infoPanel.isVisible(), true);
+  await page.locator('.info-topbar .info-top-icon-sm').first().click();
+  assert.equal(await infoPanel.isVisible(), false);
+  await page.screenshot({ path: path.join(root, 'artifacts/data-grid-info-panel-collapsed.png'), fullPage: true, animations: 'disabled' });
+  const reopen = page.getByRole('button', { name: '打开信息栏', exact: true });
+  assert.equal(await reopen.isVisible(), true);
+  await reopen.click();
+  assert.equal(await infoPanel.isVisible(), true);
+  assert.equal(await reopen.isVisible(), false);
+  await page.getByTitle('显示/隐藏信息面板').click();
+  assert.equal(await infoPanel.isVisible(), false);
+  assert.equal(await reopen.isVisible(), true);
+  await reopen.click();
   await page.evaluate(() => { const v = window.__APP__.activeView(); v.tab.pageLimit = 20; v.loadedPageRequest.limit = 20; v.renderFooter(v.tab.page); });
   const record = () => page.locator('.statusbar-query-elapsed + .statusbar-cell').textContent();
   // Cell selectors are scoped through the actual grid host, not the tab class convention.
@@ -197,7 +256,7 @@ try {
   assert(narrow.scroll <= narrow.width);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ mode: 'production-ui-delayed-mock-ipc', requests: await page.evaluate(() => requests.length),
-    passed: ['表数据统一正在查询文案和中央毫秒计时', '列头右键固定/取消固定及多列最左侧粘性定位', '字段真实备注在名称下方灰色小字显示', '加载遮罩居中且完成后无结果提示', '点击即时反馈/禁用与去重', '查询期间旧结果不可编辑且变淡', '筛选排序字段输入搜索', '失败保留旧结果与草稿并支持重试', '翻页旧按钮去重与失败页码恢复', '单选/多选/分页记录序号跟随最后点击行', '表单导航与返回网格序号同步'], narrow }, null, 2));
+    passed: ['字段侧栏末尾拖拽块调整当前标签页字段顺序', '数据页脚不再显示共 xxx 条与重新统计', '信息栏左上角收起、右上角重开与状态栏开关联动', '表数据统一正在查询文案和中央毫秒计时', '列头右键固定/取消固定及多列最左侧粘性定位', '字段真实备注在名称下方灰色小字显示', '加载遮罩居中且完成后无结果提示', '点击即时反馈/禁用与去重', '查询期间旧结果不可编辑且变淡', '筛选排序字段输入搜索', '失败保留旧结果与草稿并支持重试', '翻页旧按钮去重与失败页码恢复', '单选/多选/分页记录序号跟随最后点击行', '表单导航与返回网格序号同步'], narrow }, null, 2));
 } finally {
   try { if (browser) await browser.close(); }
   finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

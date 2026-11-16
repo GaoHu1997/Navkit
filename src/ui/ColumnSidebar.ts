@@ -6,7 +6,9 @@ export class ColumnSidebar {
   private readonly list = document.createElement("div");
   private trigger: HTMLElement | null = null;
   private renderedKey = "";
-  constructor(readonly id: string, private readonly columns: () => SidebarColumn[], private readonly hidden: () => Set<string>, private readonly change: (ids: string[]) => void) {
+  private draggedId: string | null = null;
+  constructor(readonly id: string, private readonly columns: () => SidebarColumn[], private readonly hidden: () => Set<string>, private readonly change: (ids: string[]) => void,
+    private readonly reorder?: (from: string, to: string) => void) {
     this.el.id = id; this.el.className = "column-sidebar"; this.el.hidden = true;
     this.el.setAttribute("aria-label", "选择显示字段");
     const heading = document.createElement("div"); heading.className = "column-sidebar-heading"; heading.textContent = "显示字段";
@@ -18,8 +20,13 @@ export class ColumnSidebar {
     this.el.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); this.close(); } });
   }
   bind(trigger: HTMLElement): void { this.trigger = trigger; trigger.setAttribute("aria-controls", this.id); trigger.setAttribute("aria-expanded", String(!this.el.hidden)); }
-  toggle(trigger?: HTMLElement): void { if (trigger) this.bind(trigger); this.el.hidden = !this.el.hidden; this.trigger?.setAttribute("aria-expanded", String(!this.el.hidden)); if (!this.el.hidden) { this.render(); this.search.focus({ preventScroll: true }); } }
-  close(): void { this.el.hidden = true; this.trigger?.setAttribute("aria-expanded", "false"); this.trigger?.focus({ preventScroll: true }); }
+  toggle(trigger?: HTMLElement): void { if (trigger) this.bind(trigger); this.el.hidden = !this.el.hidden; if (this.el.hidden) this.clearDrag(); this.trigger?.setAttribute("aria-expanded", String(!this.el.hidden)); if (!this.el.hidden) { this.render(); this.search.focus({ preventScroll: true }); } }
+  close(): void { this.clearDrag(); this.el.hidden = true; this.trigger?.setAttribute("aria-expanded", "false"); this.trigger?.focus({ preventScroll: true }); }
+  private clearDrag(): void {
+    if (!this.draggedId) return;
+    this.draggedId = null;
+    this.list.querySelectorAll<HTMLElement>(".column-sidebar-item").forEach(item => item.classList.remove("dragging", "drag-over"));
+  }
   render(): void {
     const columns = this.columns(), hidden = this.hidden(), visible = columns.filter(c => !hidden.has(c.id)).length;
     const query = this.search.value.toLocaleLowerCase();
@@ -29,7 +36,7 @@ export class ColumnSidebar {
       this.list.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach(input => { input.checked = !hidden.has(input.dataset.columnId!); input.disabled = input.checked && visible <= 1; });
       return;
     }
-    this.renderedKey = key; this.list.replaceChildren();
+    this.clearDrag(); this.renderedKey = key; this.list.replaceChildren();
     for (const column of matches) {
       const row = document.createElement("label"); row.className = "column-sidebar-row"; row.title = column.name;
       const input = document.createElement("input"); input.type = "checkbox"; input.checked = !hidden.has(column.id); input.disabled = input.checked && visible <= 1;
@@ -48,7 +55,41 @@ export class ColumnSidebar {
         input.setAttribute("aria-describedby", note.id); text.append(note);
         row.title = `${column.name}\n${comment}`;
       }
-      row.append(input, text); this.list.append(row);
+      row.append(input, text);
+      if (!this.reorder) { this.list.append(row); continue; }
+      const item = document.createElement("div"); item.className = "column-sidebar-item"; item.dataset.columnId = column.id;
+      const handle = document.createElement("button"); handle.type = "button"; handle.className = "column-sidebar-drag";
+      handle.draggable = true; handle.dataset.columnId = column.id;
+      handle.setAttribute("aria-label", `调整 ${column.name} 字段顺序`);
+      handle.title = "拖动调整字段顺序（仅当前标签页）；Alt + ↑ / ↓ 微调";
+      handle.textContent = "⠿";
+      handle.addEventListener("dragstart", event => {
+        this.draggedId = column.id; item.classList.add("dragging");
+        if (event.dataTransfer) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", column.id); }
+      });
+      handle.addEventListener("dragend", () => this.clearDrag());
+      handle.addEventListener("keydown", event => {
+        if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        const at = matches.findIndex(candidate => candidate.id === column.id);
+        const target = matches[at + (event.key === "ArrowUp" ? -1 : 1)];
+        if (!target) return;
+        try { this.reorder!(column.id, target.id); } finally { this.render(); }
+        Array.from(this.list.querySelectorAll<HTMLButtonElement>(".column-sidebar-drag")).find(button => button.dataset.columnId === column.id)?.focus({ preventScroll: true });
+      });
+      item.addEventListener("dragover", event => {
+        if (!this.draggedId || this.draggedId === column.id) return;
+        event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        item.classList.add("drag-over");
+      });
+      item.addEventListener("dragleave", () => item.classList.remove("drag-over"));
+      item.addEventListener("drop", event => {
+        const from = this.draggedId; if (!from) return;
+        event.preventDefault(); event.stopPropagation(); this.clearDrag();
+        if (from === column.id) return;
+        try { this.reorder!(from, column.id); } finally { this.render(); }
+      });
+      item.append(row, handle); this.list.append(item);
     }
     if (!this.list.children.length) { const empty = document.createElement("p"); empty.textContent = "没有匹配字段"; this.list.append(empty); }
   }
