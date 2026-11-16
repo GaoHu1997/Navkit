@@ -15,7 +15,7 @@
 
 ### 新增与改进
 
-- **ER 关系图核心重做（移植 dbx 关系图能力）**：ELK layered（Sugiyama）布局替代自研最长路径分层，
+- **ER 关系图核心重做（移植 参考实现 关系图能力）**：ELK layered（Sugiyama）布局替代自研最长路径分层，
   交叉最小化 + 节点平衡 + `NETWORK_SIMPLEX` 分层；`elkjs` 动态 `import` 按需加载（独立 chunk）不拖慢启动；
   新增布局方向选择（LR/TB/RL/BT），大图（>400 节点或 >1200 边）自动退回连通分量聚簇网格布局；布局结果持久化。
 - **虚拟外键自动匹配**：无物理外键时按命名约定（`user_id` / `userId` / `order_uuid`）+ 类型签名推断关系，
@@ -29,6 +29,10 @@
 
 ### 修复
 
+- **TiDB 表设计读取**：物理表 ID 改读 `information_schema.TABLES.TIDB_TABLE_ID`（原查询的 `TIDB_TABLES.TABLE_ID` 目录不存在），
+  并修正 TiDB 暴露兼容 `@@server_uuid` 时被误套用原生 MySQL InnoDB 身份校验、导致表设计报
+  `TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN` 的问题；ID 为空/歧义/非法时给出明确错误码而不是静默降级。
+  新增 `NAVKIT_TABLE_WORKFLOWS_TIDB_URL` 隔离实测：读取快照必须成功，保存在发送任何 DDL 前必须被拒绝。
 - **openGauss 索引查询**：openGauss 7.0（9.2.4 内核）没有 `to_jsonb(record)`（42883），
   PG 索引查询改用 `to_json(x)->>'indnkeyatts'`（PG 9.x / 10 / 11+ / openGauss 均可用），并保留 PG 10 的 `indnatts` 回退。
 - **openGauss / GaussDB B(MySQL) 兼容模式拒绝**：B/MYSQL 模式下标识符用反引号、`||` 可能被当作逻辑 OR，

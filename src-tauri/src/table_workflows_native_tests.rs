@@ -52,6 +52,45 @@ async fn mysql_isolated_live_plain_copy_structure_and_data(){let url=std::env::v
 #[tokio::test]#[ignore="仅 NAVKIT_TABLE_WORKFLOWS_PG_URL 显式隔离数据库；UUID schema"]
 async fn pg_isolated_live_metadata_copy_serial_identity_design_clear(){let url=std::env::var("NAVKIT_TABLE_WORKFLOWS_PG_URL").expect("必须明确配置隔离测试库 URL");let pool=sqlx::PgPool::connect(&url).await.unwrap();let namespace=format!("navkit_table_{}",uuid::Uuid::new_v4().simple());sqlx::query(&format!("CREATE SCHEMA \"{namespace}\"")).execute(&pool).await.unwrap();exercise(Arc::new(Db::Postgres(pool.clone())),namespace.clone(),false).await;sqlx::query(&format!("DROP SCHEMA \"{namespace}\" CASCADE")).execute(&pool).await.unwrap();pool.close().await;}
 
+#[tokio::test]#[ignore="仅 NAVKIT_TABLE_WORKFLOWS_TIDB_URL 显式隔离 TiDB 集群；表设计读取必须可完成，保存必须被拒绝"]
+async fn tidb_isolated_live_read_snapshot_refuses_save(){
+    let url=std::env::var("NAVKIT_TABLE_WORKFLOWS_TIDB_URL").expect("必须明确配置隔离 TiDB URL");
+    let options=sqlx::mysql::MySqlConnectOptions::from_str(&url).unwrap();
+    let admin=sqlx::MySqlPool::connect_with(options.clone()).await.unwrap();
+    let admin_db=Arc::new(Db::Mysql(admin.clone()));
+    let mut probe=Session::acquire(&admin_db).await.unwrap();
+    let server=probe.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await.unwrap();
+    probe.release(false).await.unwrap();
+    assert!(db::mysql_read_only_unsupported(&server,""),"该实例不是 TiDB，请改用 MySQL 测试：{server}");
+    let namespace=format!("navkit_tidb_{}",uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE DATABASE `{namespace}`")).execute(&admin).await.unwrap();
+    let pool=sqlx::MySqlPool::connect_with(options.database(&namespace)).await.unwrap();
+    let db=Arc::new(Db::Mysql(pool.clone()));let kind=DbKind::of("mysql");
+    let binding=Binding{principal:"tidb-fixture".into(),owner:"tidb-owner".into(),connection:uuid::Uuid::new_v4().to_string(),namespace:namespace.clone(),fingerprint:uuid::Uuid::new_v4().to_string()};
+    let mut session=Session::acquire(&db).await.unwrap();
+    session.execute(&format!("CREATE TABLE {} (id BIGINT NOT NULL,label VARCHAR(40) COMMENT '列注释',amount DECIMAL(10,2) DEFAULT 0,PRIMARY KEY (id) CLUSTERED) COMMENT='TiDB 表设计读取'",db::qualified(&kind,&namespace,"sample"))).await.unwrap();
+    session.execute(&format!("CREATE TABLE {} (id BIGINT NOT NULL,note VARCHAR(20),PRIMARY KEY (id) NONCLUSTERED)",db::qualified(&kind,&namespace,"nonclustered"))).await.unwrap();
+    session.release(false).await.unwrap();
+    // 截图同款：TABLES.TIDB_TABLE_ID 必须真的读到，否则表设计仍报 TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN。
+    let mut verify=Session::acquire(&db).await.unwrap();
+    let id=verify.scalar(&format!("SELECT CAST(TIDB_TABLE_ID AS CHAR) FROM information_schema.TABLES WHERE TABLE_SCHEMA='{namespace}' AND TABLE_NAME='sample'")).await.unwrap();
+    assert!(id.parse::<u64>().is_ok_and(|v|v>0),"{id}");verify.release(false).await.unwrap();
+    let manual=crate::manual_transaction::Registry::default();
+    for table in ["sample","nonclustered"]{
+        let ordinary=manual.ordinary(&[&binding.connection]).await.unwrap();
+        let snapshot=read_owned(db.clone(),binding.clone(),table.into(),false,ordinary).await.unwrap();
+        assert_eq!(snapshot.public.schema.table,table);assert_eq!(snapshot.public.schema.columns.len(),if table=="sample"{3}else{2});
+        assert!(!snapshot.public.revision.is_empty());
+        // TiDB 的 GET_LOCK/LOCK TABLES 是 noop：能力必须在发送任何 DDL 前声明不支持保存。
+        assert!(!snapshot.public.capabilities.rebuild.supported,"{table}");
+        assert!(snapshot.public.capabilities.rebuild.reason.as_deref().unwrap().contains("TiDB"),"{table}");
+        let result=execute(db.clone(),&binding,&manual,&Registry::default(),TableWork::Design(snapshot.public.design.clone())).await;
+        let message=match result.result{Ok(_)=>panic!("TiDB 保存必须被拒绝：{table}"),Err(e)=>e.message};
+        assert!(message.contains("TABLE_MYSQL_LOCK_UNSUPPORTED"),"{table}: {message}");
+    }
+    pool.close().await;sqlx::query(&format!("DROP DATABASE `{namespace}`")).execute(&admin).await.unwrap();admin.close().await;
+}
+
 #[test]
 fn mysql_copy_create_releases_source_only_lock(){
     let sql="CREATE TABLE `fixture`.`items_copy` (`id` INT NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB";

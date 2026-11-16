@@ -12,22 +12,33 @@ fn undefined_column(e:&anyhow::Error)->bool{
     e.downcast_ref::<sqlx::Error>().and_then(|e|e.as_database_error()).is_some_and(|d|d.code().as_deref()==Some("42703"))
 }
 /// MySQL 协议族方言能力。MySQL 8 有 `@@server_uuid` 与 `information_schema.INNODB_TABLES`；
-/// MariaDB 只有 `@@server_id` 与 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID` 且没有触发器；
-/// OceanBase 等没有可证明的物理表 ID，读取时降级并记录限制。
+/// MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `TABLES.TIDB_TABLE_ID` 且没有触发器。
+/// `server_uuid` 是兼容变量，不能据此把 TiDB 当成原生 MySQL。
 struct MysqlEvidence{tidb:bool,server_uuid:bool}
 impl MysqlEvidence{
     async fn probe(s:&mut Session)->Result<Self>{
         let server=s.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
         Ok(Self{tidb:db::mysql_read_only_unsupported(&server,""),server_uuid:!s.rows("SHOW VARIABLES LIKE 'server_uuid'").await?.is_empty()})
     }
+    fn requires_innodb_identity(&self)->bool{!self.tidb&&self.server_uuid}
 }
-/// 物理表 ID 的三个目录来源，按“真实存在且能给出该表 ID”逐个尝试：
-/// 只依据表是否存在选择来源不够（TiDB 可能保留空的 INNODB_* 兼容表），必须拿到唯一行。
-fn mysql_table_id_sqls(ns:&str,tn:&str,raw:&str)->[String;3]{[
-    format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.INNODB_TABLES WHERE NAME={}",db::quote_literal(raw)),
-    format!("SELECT CAST(ID AS CHAR) AS id FROM information_schema.INNODB_SYS_TABLES WHERE NAME={}",db::quote_literal(raw)),
-    format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.TIDB_TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}"),
-]}
+/// TiDB 的 INNODB_* 只是兼容目录，不能用其空行或占位 ID 证明表身份。
+/// 识别 TiDB 后只查官方 TABLES.TIDB_TABLE_ID；其余方言按真实 InnoDB 目录逐个尝试。
+fn mysql_table_id_sqls(e:&MysqlEvidence,ns:&str,tn:&str,raw:&str)->Vec<String>{
+    if e.tidb{return vec![format!("SELECT CAST(TIDB_TABLE_ID AS CHAR) AS id FROM information_schema.TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}")];}
+    vec![
+        format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.INNODB_TABLES WHERE NAME={}",db::quote_literal(raw)),
+        format!("SELECT CAST(ID AS CHAR) AS id FROM information_schema.INNODB_SYS_TABLES WHERE NAME={}",db::quote_literal(raw)),
+    ]
+}
+fn mysql_table_id(rows:&[Record])->Result<Option<String>>{
+    if rows.is_empty(){return Ok(None);}
+    ensure!(rows.len()==1,"TABLE_MYSQL_PHYSICAL_IDENTITY_AMBIGUOUS");
+    // 目录可能给出 NULL（例如 TiDB 的视图/TiFlash 副本），必须显式拒绝而不是回落到伪造身份。
+    let id=opt(&rows[0],"id")?.filter(|v|!v.trim().is_empty()).ok_or_else(||anyhow!("TABLE_MYSQL_PHYSICAL_IDENTITY_INVALID: 目录返回空表 ID"))?;
+    ensure!(id.parse::<u64>().ok().is_some_and(|n|n>0),"TABLE_MYSQL_PHYSICAL_IDENTITY_INVALID");
+    Ok(Some(id))
+}
 /// openGauss/GaussDB 才有 `pg_database.datcompatibility`；普通 PostgreSQL 查询会报 42703，按 None 处理。
 const PG_COMPATIBILITY_SQL:&str="SELECT datcompatibility::text AS mode FROM pg_catalog.pg_database WHERE datname=current_database()";
 /// PostgreSQL 协议族方言能力。PG 12+ 有 `attgenerated`，10+ 有 `attidentity`/`pg_sequence`/`relispartition`，
@@ -99,17 +110,18 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
         // 物理表 ID 是“表未被 DROP+CREATE 重建”的证据；方言没有该证据时降级为目录身份并保留限制。
         let physical=crate::object_catalog::revision(&identity);
         let mut table_id=None;
-        for sql in mysql_table_id_sqls(&ns,&tn,&format!("{}/{}",b.namespace,table)){
+        for sql in mysql_table_id_sqls(&evidence,&ns,&tn,&format!("{}/{}",b.namespace,table)){
             match s.rows(&sql).await{
-                Ok(rows) if rows.len()==1=>{table_id=Some(get(&rows[0],"id")?.to_string());break;}
-                Ok(_)=>continue,
-                Err(e) if missing_relation(&e)=>continue,
+                Ok(rows)=>match mysql_table_id(&rows)?{Some(id)=>{table_id=Some(id);break;},None=>continue},
+                Err(e) if missing_relation(&e)||undefined_column(&e)=>continue,
                 Err(e)=>return Err(e),
             }
         }
         let id=if let Some(table_id)=table_id{crate::object_catalog::revision(&(&physical,table_id))}else{
+            // TiDB 一定提供 TABLES.TIDB_TABLE_ID；读不到说明目录/权限异常，不能伪装成已认证身份。
+            ensure!(!evidence.tidb,"TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN: TiDB 未返回 TABLES.TIDB_TABLE_ID，无法证明物理表身份");
             // 原生 MySQL 有 @@server_uuid 时仍要求真实 InnoDB TABLE_ID：非 InnoDB/分区表不能靠降级蒙混。
-            ensure!(!evidence.server_uuid,"TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN: 需要真实 InnoDB/TiDB TABLE_ID；分区/特殊文件名/非 InnoDB 未认证");
+            ensure!(!evidence.requires_innodb_identity(),"TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN: 需要真实 InnoDB TABLE_ID；分区/特殊文件名/非 InnoDB 未认证");
             limitations.push("当前 MySQL 方言未提供可证明的物理表 ID；DROP+CREATE 重建只能靠定义与目录版本检测".into());crate::object_catalog::revision(&(&physical,b.namespace.clone(),table.to_string()))};
         (NativeMetadata{identity:id,physical,columns:cr,indexes:ix,constraints:fkrows,triggers:raw_triggers,table:tr,sequences:vec![]},ddl,cols,indexes.into_values().collect(),fks.into_values().collect(),objects,options)
     }else{
@@ -236,13 +248,37 @@ fn default_expression(part:&str)->Result<Option<String>>{
     #[test]fn mysql_default_metadata_keeps_bit_charset_literals_and_function_precision(){
         for (column,expected) in [("flag bit(4) DEFAULT b'1010'","b'1010'"),("label varchar(30) DEFAULT _utf8mb4'中文'","_utf8mb4'中文'"),("created timestamp(6) DEFAULT CURRENT_TIMESTAMP(6)","CURRENT_TIMESTAMP(6)"),("amount int DEFAULT -12","-12"),("label text DEFAULT 'src literal' COMMENT 'kept'","'src literal'")]{assert_eq!(default_expression(column).unwrap().as_deref(),Some(expected));}
     }
-    #[test]fn mysql_table_id_sqls_cover_each_dialect_catalog(){
-        let sqls=mysql_table_id_sqls("`db`","`t`","db/t");
-        assert!(sqls[0].contains("information_schema.INNODB_TABLES WHERE NAME='db/t'"));
-        assert!(sqls[1].contains("information_schema.INNODB_SYS_TABLES WHERE NAME='db/t'"));
-        assert!(sqls[2].contains("information_schema.TIDB_TABLES")&&sqls[2].contains("TABLE_SCHEMA=`db`")&&sqls[2].contains("TABLE_NAME=`t`"));
-        // 没有 server_uuid 的方言（TiDB/MariaDB）降级必须由 limitations 说明，不能伪造表 ID。
-        assert!(!MysqlEvidence{tidb:false,server_uuid:false}.server_uuid);
+    #[test]fn mysql_table_id_sqls_use_official_catalog(){
+        // TiDB 的物理表 ID 在 information_schema.TABLES.TIDB_TABLE_ID，
+        // 不是兼容的 INNODB_* 或旧 TIDB 目录；混用会让 TiDB 表设计读不出身份。
+        let tidb=mysql_table_id_sqls(&MysqlEvidence{tidb:true,server_uuid:true},"`db`","`t`","db/t");
+        assert_eq!(tidb.len(),1);
+        assert!(tidb[0].contains("information_schema.TABLES")&&tidb[0].contains("TIDB_TABLE_ID"));
+        assert!(tidb[0].contains("TABLE_SCHEMA=`db`")&&tidb[0].contains("TABLE_NAME=`t`"));
+        assert!(!tidb[0].contains("INNODB")&&!tidb[0].contains(concat!("TIDB","_TABLES")));
+        let innodb=mysql_table_id_sqls(&MysqlEvidence{tidb:false,server_uuid:true},"`db`","`t`","db/t");
+        assert_eq!(innodb.len(),2);
+        assert!(innodb[0].contains("information_schema.INNODB_TABLES WHERE NAME='db/t'"));
+        assert!(innodb[1].contains("information_schema.INNODB_SYS_TABLES WHERE NAME='db/t'"));
+        assert!(!innodb.iter().any(|s|s.contains("TIDB_TABLE_ID")));
+    }
+    #[test]fn tidb_is_not_treated_as_native_mysql_even_with_server_uuid(){
+        // TiDB 也暴露兼容的 @@server_uuid；不能因此要求 InnoDB TABLE_ID 或走原生强制校验。
+        assert!(!MysqlEvidence{tidb:true,server_uuid:true}.requires_innodb_identity());
+        assert!(MysqlEvidence{tidb:false,server_uuid:true}.requires_innodb_identity());
+        assert!(!MysqlEvidence{tidb:false,server_uuid:false}.requires_innodb_identity());
+    }
+    #[test]fn mysql_table_id_rejects_empty_ambiguous_and_invalid(){
+        let row=|id:&str|{let mut r=Record::new();r.insert("id".into(),Some(id.into()));r};
+        assert_eq!(mysql_table_id(&[]).unwrap(),None);
+        assert_eq!(mysql_table_id(&[row("128")]).unwrap().as_deref(),Some("128"));
+        assert!(mysql_table_id(&[row("1"),row("2")]).is_err());
+        assert!(mysql_table_id(&[row("0")]).is_err());
+        assert!(mysql_table_id(&[row("")]).is_err());
+        assert!(mysql_table_id(&[row("  ")]).is_err());
+        assert!(mysql_table_id(&[row("not-a-number")]).is_err());
+        let mut null=Record::new();null.insert("id".into(),None);
+        assert!(mysql_table_id(&[null]).is_err());
     }
     fn pg_full_evidence()->PgEvidence{PgEvidence{attgenerated:true,attidentity:true,attcompression:true,indnkeyatts:true,sequences:true,relrowsecurity:true,relforcerowsecurity:true,relreplident:true,relispartition:true,mysql_compat:false}}
     #[test]fn pg_index_layers_keep_modern_and_compat_separate(){

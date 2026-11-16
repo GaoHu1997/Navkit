@@ -3,7 +3,7 @@
 版本号 `1.0.1`。本次发布由 GitHub Actions 自动构建，覆盖 Windows（x64 / ARM64）、macOS（Apple Silicon / Intel）与 Ubuntu（x64）。
 
 `1.0.1` 是 `1.0.0` 之后的第一个补丁版本，集中在 **ER 关系图重做**、**软件更新弹窗**、**表格设计器交互**三个方向的改进，
-以及 openGauss 兼容性修复。完整能力边界见[产品状态说明](<docs/completed/PRODUCT-STATE.md>)。
+以及 openGauss / TiDB 兼容性修复。完整能力边界见[产品状态说明](<docs/completed/PRODUCT-STATE.md>)。
 
 ---
 
@@ -32,9 +32,9 @@
 
 ## 二、主要改动
 
-### 1. ER 关系图核心重做（移植 dbx 关系图能力）
+### 1. ER 关系图核心重做（移植 参考实现 关系图能力）
 
-- **ELK 分层布局**：移植 dbx ELK layered（Sugiyama）布局替代自研最长路径分层，交叉最小化 + 节点平衡 + NETWORK_SIMPLEX 分层；
+- **ELK 分层布局**：移植 参考实现 ELK layered（Sugiyama）布局替代自研最长路径分层，交叉最小化 + 节点平衡 + NETWORK_SIMPLEX 分层；
   elkjs 动态 import 按需加载（独立 chunk），不拖慢启动；新增布局方向选择（LR/TB/RL/BT），
   大图（>400 节点或 >1200 边）自动退回连通分量聚簇网格布局；布局结果持久化，刷新不跳回旧位置。
 - **虚拟外键自动匹配**：无物理外键时按命名约定（`user_id` / `userId` / `order_uuid`）+ 类型签名推断关系，
@@ -52,6 +52,9 @@
 ### 3. 表格设计器与数据源兼容性
 
 - 表设计器「选项」页默认值候选改为弹层选择、索引方法类型对齐、SQL 预览高亮。
+- **TiDB 表设计读取修复**：物理表 ID 改读 `information_schema.TABLES.TIDB_TABLE_ID`（原 `TIDB_TABLES.TABLE_ID` 目录不存在），
+  并修正 TiDB 暴露兼容 `@@server_uuid` 时被误套用原生 MySQL InnoDB 身份校验、导致表设计读取报
+  `TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN` 的问题；ID 为空 / 歧义 / 非法时给出明确错误码。
 - **TiDB 表结构保存明确拒绝**：TiDB 的 `GET_LOCK` / `LOCK TABLES` 是 noop 兼容功能，不能提供保存所需的服务端锁；
   读取、预览仍可用。同时移除旧版 `table_native` 实现。
 - **openGauss 兼容修复**：openGauss 7.0（9.2.4 内核）没有 `to_jsonb(record)`（42883），

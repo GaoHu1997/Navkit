@@ -66,7 +66,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 **独立分支验证（合并前）**：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib execution -- --test-threads=1 --nocapture`：112 通过、0 失败、3 ignored；`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib query_spool::tests:: -- --test-threads=1`：6 通过、0 失败。测试入口：[观察通道生命周期](<../../src-tauri/src/execution_stream_tests.rs>)、[实际命令服务与全量导出](<../../src-tauri/src/execution_stream_service_tests.rs>)、[旧 C1 回归](<../../src-tauri/src/execution_tests.rs>)。
 
-**性能证据边界（合并前独立分支）**：本地 debug 构建、SQLite 50000 行的最近一次服务验证：默认首屏 200 行在 45.58 ms 返回，完整读取与清理在 1145.40 ms 完成；删除原表数据后仍从本次缓存导出 50000 行。它验证的是首屏/全量阶段解耦与不重放，不是对用户远程 MySQL SQL 的 DBX/DBeaver/NavKit 同环境速度对比，不能据此宣称界面已达到 1 秒。
+**性能证据边界（合并前独立分支）**：本地 debug 构建、SQLite 50000 行的最近一次服务验证：默认首屏 200 行在 45.58 ms 返回，完整读取与清理在 1145.40 ms 完成；删除原表数据后仍从本次缓存导出 50000 行。它验证的是首屏/全量阶段解耦与不重放，不是对用户远程 MySQL SQL 的 参考实现/DBeaver/NavKit 同环境速度对比，不能据此宣称界面已达到 1 秒。
 
 **独立分支完整库回归不是全绿（合并前）**：最后一次完整库运行（末次快照资源标志修补前）1042 通过、2 失败、38 ignored；失败为 [账户权限断言](<../../src-tauri/src/db_users.rs#L789-L793>) 和 [SQL Server 模拟器认证连接重置](<../../src-tauri/src/transfer_export_protocol_tests.rs#L90-L94>)，两项单跑均复现，相关模块本轮未改。末次快照修补后，以上执行相关 112 项及缓存 6 项已重建复跑，不能把专项通过写成全库通过。完整文档链接检查仍有基线遗留的 4 个历史产物链接缺失；本次新增代码入口均存在。
 
@@ -218,7 +218,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 结构差异同步 | `src-tauri/src/transfer.rs`、`src-tauri/src/structure_commands.rs` | ⏳ | 其他方言、外键/检查变更、保数据重建未闭环 |
 | 大数据流式传输 | `src-tauri/src/transfer.rs` | ⏳ | 增量分支、单超大驱动行内存上界、跨厂商背压未实测 |
 | 备份 / 还原：整库 SQL 转储、备份列表与恢复 | `src/dialogs/BackupDialog.ts`、`src-tauri/src/transfer.rs` | ✅ | MySQL DDL 自动提交，重建目标表不可整体回滚 |
-| 数据字典导出：Word/PDF/Excel(单 sheet/每表)/HTML/Markdown | `src-tauri/src/data_dictionary.rs`、`src/dialogs/DataDictionaryDialog.ts` | ✅ | 模板列集照 SmartSQL；Word/Excel/HTML 仅表，PDF/Markdown 含视图与存储过程；PDF 内嵌系统中文字体（SimHei/等线），无字体时报错不生成 |
+| 数据字典导出：Word/PDF/Excel(单 sheet/每表)/HTML/Markdown | `src-tauri/src/data_dictionary.rs`、`src/dialogs/DataDictionaryDialog.ts` | ✅ | 模板列集照 参考模板；Word/Excel/HTML 仅表，PDF/Markdown 含视图与存储过程；PDF 内嵌系统中文字体（SimHei/等线），无字体时报错不生成 |
 | 软件更新：检查/下载(SHA-256+断点续传)/换名替换重启/清理旧版 | `src-tauri/src/updater.rs`、`src/dialogs/UpdateDialog.ts` | ✅ | 清单挂自有镜像仓库 Navkit-drivers（可用 feed.json/环境变量覆盖）；换名替换参考 magpie，落位失败自动回滚；未做真实大版本跨级演练 |
 | 自动运行：任务保存、到期执行、历史 | `src-tauri/src/commands.rs`、`src/core/scheduler*`、`src-tauri/src/scheduler_offline.rs` | 🚧 | Cron/DST/lease/DAG/离线安装计划内核已接；系统任务注册与真实 headless 运行未做 |
 | 用户管理：MySQL 协议族 `mysql.user` 真实数据、编辑用户与权限管理（常规/高级/成员属于/成员/服务器权限/权限/SQL 预览） | `src-tauri/src/db_users.rs`、`src/dialogs/UserDialog.ts` | ✅ | 仅 MySQL 协议族；角色页依赖 MySQL 8.0+ 的 `mysql.role_edges` |
@@ -255,7 +255,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | JDBC / H2 | Java 11+ sidecar，严格匹配原包与厂商类 |
 
 表设计读取按服务端实际能力探测，不按连接类型等同：
-- MySQL 协议族：MySQL 8 用 `@@server_uuid` + `information_schema.INNODB_TABLES`；MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `TIDB_TABLES.TABLE_ID`。TiDB 没有触发器，其空目录按方言事实处理；TiDB 的 `GET_LOCK`/`LOCK TABLES` 是 noop 兼容功能，**表结构保存明确拒绝**（读取、预览仍可用）。
+- MySQL 协议族：MySQL 8 用 `@@server_uuid` + `information_schema.INNODB_TABLES`；MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `information_schema.TABLES.TIDB_TABLE_ID`（TiDB 的 `INNODB_*` 只是兼容目录，不能证明表身份）。TiDB 也暴露兼容的 `@@server_uuid`，识别为 TiDB 后不再套用原生 MySQL 的 InnoDB 身份强制校验。TiDB 没有触发器，其空目录按方言事实处理；TiDB 的 `GET_LOCK`/`LOCK TABLES` 是 noop 兼容功能，**表结构保存明确拒绝**（读取、预览仍可用）。
 - PostgreSQL 协议族：`attgenerated`/`attidentity`/`attcompression`/`indnkeyatts`/`pg_sequence`/`relrowsecurity` 等版本相关列逐个探测，缺失时降级并在设计器 limitations 中标注；解构约束/索引改用所有版本都接受的单参数 `pg_get_*`。
   - openGauss 7.0.0-RC3（9.2.4 内核）实测没有 `to_jsonb(record)`（42883），索引键列改用 `to_json(x)->>'indnkeyatts'`：openGauss 与 PG 11+ 直接取到 `indnkeyatts`，PG 10 取不到时回退 `indnatts`（PG 10 无 INCLUDE，语义等价）。`WITH ORDINALITY` 实测支持，无需替换 `generate_subscripts`。
   - 索引元数据分两层：现代层用 `unnest ... WITH ORDINALITY` + `indnkeyatts`；失败时降级 `string_to_array` + `generate_series` 兼容层（不依赖 ORDINALITY/indnkeyatts，PG 9.x 系与老 openGauss/GaussDB 可跑）。
