@@ -9457,8 +9457,8 @@ class QueryTabView extends TabView {
     this.resultBody.appendChild(this.resultRecoveryTools);
     this.resultBody.appendChild(this.resultPanelHost);
     this.resultBody.appendChild(this.grid.el);
-    this.resultBody.appendChild(this.resultPager);
     this.resultBody.appendChild(this.messagesEl);
+    this.resultBody.appendChild(this.resultPager);
     this.resultBody.appendChild(this.cellPreviewEl);
     this.cellPreviewEl.style.display = "none";
     // 「文本」预览只在选中文本时出现（结果网格只读，用拖选查看长文本）。
@@ -9649,8 +9649,11 @@ class QueryTabView extends TabView {
     const result = this.tab.results;
     const receipts = result?.sets.filter(item => !item.columns.length) ?? [];
     const progress = page?.loading ? " · 正在读取缓存…" : this.exporting ? " · 正在导出完整缓存…" : "";
+    const affected = receipts.reduce((sum, item) => sum + item.affected, 0);
+    const affectedKnown = receipts.every(item => Number.isSafeInteger(item.affected) && item.affected >= 0)
+      && Number.isSafeInteger(affected);
     const rows = set ? `共 ${page?.total ?? set.total} 行`
-      : receipts.length ? `影响 ${receipts.reduce((sum, item) => sum + item.affected, 0)} 行` : "";
+      : receipts.length ? affectedKnown ? `影响 ${affected} 行` : "影响行数未知" : "";
     return {
       sql: this.editor.getSelection() || this.editor.getSql(),
       pageText: rows + progress,
@@ -10119,7 +10122,7 @@ class QueryTabView extends TabView {
       const record = [
         `[${logStamp()}][${cfg?.name ?? connId}][${namespace || "—"}][${(cfg?.kind ?? "").toUpperCase()}]`,
         sql.trim(),
-        ...res.sets.filter(set => !set.columns.length).map(set => `影响 ${set.affected} 行${set.message ? ` · ${set.message}` : ""}`),
+        ...res.sets.filter(set => !set.columns.length).map(set => `${Number.isSafeInteger(set.affected) && set.affected >= 0 ? `影响 ${set.affected} 行` : "影响行数未知"}${set.message ? ` · ${set.message}` : ""}`),
         `Time: ${(res.elapsed_ms / 1000).toFixed(3)}s`,
       ].join("\n");
       this.lastMessages = [
@@ -10264,7 +10267,7 @@ class QueryTabView extends TabView {
     this.executionMessageTimerEl = null;
     const messages = this.lastMessages.length ? this.lastMessages
       : this.tab.results?.sets.filter(set => !set.columns.length).map(set => ({
-        text: `影响 ${set.affected} 行${set.message ? ` · ${set.message}` : ""}`, error: false,
+        text: `${Number.isSafeInteger(set.affected) && set.affected >= 0 ? `影响 ${set.affected} 行` : "影响行数未知"}${set.message ? ` · ${set.message}` : ""}`, error: false,
       })) ?? [];
     messages.forEach((m, index) => {
       const line = document.createElement("div");

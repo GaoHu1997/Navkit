@@ -37,6 +37,7 @@ class Element {
   set innerHTML(value) { this.replaceChildren(); this._html = value; }
   get innerHTML() { return this._html ?? ''; }
   append(...children) { for (let child of children) { if (typeof child === 'string') child = Object.assign(new Element('#text', this.ownerDocument), { textContent: child }); if (child.parentNode) child.remove(); child.parentNode = this; this.children.push(child); } }
+  get parentElement() { return this.parentNode; }
   appendChild(child) { this.append(child); return child; }
   prepend(...children) { children.reverse().forEach(child => { child.parentNode = this; this.children.unshift(child); }); }
   replaceChildren(...children) { this.children.forEach(child => { child.parentNode = null; }); this.children = []; this._text = ''; this.append(...children); }

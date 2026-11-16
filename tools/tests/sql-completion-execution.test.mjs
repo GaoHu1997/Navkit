@@ -602,6 +602,17 @@ for (const sql of ['UPDATE t SET value = 1', 'DELETE FROM t', 'INSERT INTO t VAL
   });
 }
 
+test('invalid or missing backend affected counts stay unknown instead of NaN or guessed zero', async () => {
+  for (const affected of [undefined, -1, NaN, '7', Number.MAX_SAFE_INTEGER + 1]) {
+    const { view, api, renderResults } = queryHarness(); view.renderResults = renderResults;
+    api.executeSql = async () => ({ elapsed_ms: 125, messages: [], sets: [{ columns: [], rows: [], total: 0, affected, message: '' }] });
+    await view.execute('UPDATE t SET value = 1', false);
+    assert.equal(view.footerStatusEl.textContent, '运行耗时 0.125s | 影响行数未知');
+    assert.match(view.lastMessages[0].text, /影响行数未知/);
+    view.destroy();
+  }
+});
+
 test('empty SELECT and writes with RETURNING remain real result sets', async () => {
   for (const [sql, rows] of [['SELECT value FROM t WHERE 1 = 0', []], ['UPDATE t SET value = 1 RETURNING value', [['1']]]]) {
     const { view, api, tab, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
@@ -633,9 +644,10 @@ test('mixed batches hide receipts without renumbering cache, evidence and export
   view.resultTabsEl.children[0].fire('click');
   assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 影响 7 行');
   assert.equal(view.pageControls.style.display, 'none');
-  view.resultTabsEl.children[2].fire('click'); await readOnlyResultsSettled(view, evidenceCalls);
-  assert.equal(tab.activeResult, 3); assert.equal(view.pageCountEl.textContent, '/ 4 页');
+  view.resultTabsEl.children[2].fire('click');
   assert.equal(view.resultTabsEl.children[2].focused, true);
+  await readOnlyResultsSettled(view, evidenceCalls);
+  assert.equal(tab.activeResult, 3); assert.equal(view.pageCountEl.textContent, '/ 4 页');
   view.destroy();
 });
 
