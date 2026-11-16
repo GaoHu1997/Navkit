@@ -7,6 +7,7 @@
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
+| [mysql-cancel-unknown-20261115.md](mysql-cancel-unknown-20261115.md#L1) | 独立性能实测发现真实 MySQL 取消回归返回 Unknown；两轮失败与清理证据 | 原因待诊断；性能分支未改运行时，修复需另行任务 |
 | [性能方案](<navkit-data-pipeline-performance.md>) / [实施状态](<navkit-data-pipeline-performance-status.md>) / [用户审阅对比表](<navkit-performance-comparison.md>) | 七类数据链路、负优化识别与逐项保留决策 | 审阅准备：本地原生路径、COPY/一致备份显式模式、SQLite分段与准入已开发；diff负收益不默认，实库/全负载验证边界明确，待最终统一回归和用户决定 |
 | [可用内存预算差异比较](<navkit-adaptive-diff-memory-budget.md>) / [实施与结论](<navkit-adaptive-diff-memory-results.md>) / [速度内存实测表](<navkit-adaptive-diff-memory-measurements.md>) | 自动/手动共享预算、预算内内存索引、必要溢写和82次独立进程对照 | 一期已开发并验证；窄表足额时间相近、小/宽表仍有回退，待用户决定保留；不默认开启auto、不提交 |
 | [execution-log-console-ui.md](execution-log-console-ui.md) | 导入 / 数据同步 / 运行 SQL 文件共用的执行日志台：布局、条目折叠/展开、双段进度、落地改动 | 设计完成，待实施 |
