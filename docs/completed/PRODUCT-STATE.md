@@ -4,7 +4,7 @@
 > 不是过程记录。任何一条能力的代码入口都必须可打开核对。
 > 更新规则见 `.agents/skills/docs-lifecycle/SKILL.md`。
 >
-> 最后核对：2026-11-15｜代码基线：工作树（`1d01834` + 未提交修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）
+> 最后核对：2026-11-15｜代码基线：工作树（`1d01834` + 未提交修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）。2026-11-16 已把 `feature/query-server-pagination` 与 `perf/stream-preview-eval-20261115` 合并进 main，原独立工作树的结构性结论在下方保留为历史证据，不再代表"未合并"事实。
 
 > 最新修复验收基线：2026-11-14 Windows 程序 `5670dd85…6b930a84`，公开大总量预览完成判定已修复并经真实 IPC 验证；旧 F44373CB 失败结论保留为历史，后续未验收改动不覆盖本结论。
 
@@ -62,16 +62,38 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 旧快照已修正摘要前缀，但当时仍误用停止确认标志而拒绝正常预览。19:03 后续请求中已修复完成判定，详见上面的最新验证；[历史失败证据](<../../artifacts/release-candidate-20261114/acceptance-f44373cb.md>)保留，不能继续作为当前发布阻断。
 
+### 2026-11-15 查询首屏服务性能验收
+
+**✅ 真实 MySQL 8.0.44 服务层五档实测完成。** 同一张1亿行实体表，BIGINT 主键与固定16 ASCII字节 payload；SQL 按 id<=N ORDER BY id 真实输出N行。使用正式旧 execute_sql_service 与现有流式 register/launch/execute_registered 服务、同一次性 grant、产品驱动和缓存政策。前三档各3轮交替AB/BA，后两档各1轮；54条逐轮记录全部成功、资源已排空、日志恰一次，测试库已精确删除并核验。
+
+| SQL真实输出行数 | 旧首屏/最终回执 ms | 流式200行 ms | 流式最终回执 ms | 缓存 |
+|---:|---:|---:|---:|---|
+| 10,000 | 38.36 | 27.76 | 45.08 | 完整 |
+| 100,000 | 123.71 | 39.86 | 129.97 | 完整 |
+| 1,000,000 | 1575.35 | 37.82 | 1598.18 | 完整 |
+| 10,000,000 | 13112.99 | 47.01 | 15984.90 | 完整 |
+| 100,000,000 | 135532.09 | 41.61 | 140049.10 | 17,124,437行，完整导出拒绝 |
+
+**判断：SQL编辑器真实输出百万及以上结果时，提前首屏值得接入；普通LIMIT200分页无须仅因实体表大而接流式。** 同一亿行表 id<=1亿 LIMIT200 对照，旧回执46.40ms、流式200行55.90ms、流式最终65.47ms。流式改善先看到结果的时间，不保证吞吐提升；亿档全量多用4517.01ms，千万档多用2871.91ms。百万档有明显轮间波动，配对差与两组中位数之差不等价，不据此宣称吞吐提高。
+
+入口：[stream_preview_bench_tests.rs](../../src-tauri/src/stream_preview_bench_tests.rs#L300)、[stream-preview-bench.py](../../tools/tests/stream-preview-bench.py#L142)、[stream-preview-bench-report.mjs](../../tools/tests/stream-preview-bench-report.mjs#L1)；完整条件、逐轮JSON/CSV、机器与资源在 [REPORT.md](../../artifacts/stream-preview-eval-20261115/REPORT.md#L1)。复现：cargo test --manifest-path src-tauri/Cargo.toml --lib --release --offline --no-run，随后 node tools/tests/stream-preview-bench.mjs <当前worktree内新鲜release测试exe>。
+
+**边界：** 本次仅Rust命令服务，不含IPC、WebView或DOM绘制；1秒无行pending不算首屏。成功终态只带metadata，首页/末页来自同次spool；缓存512MiB/2GiB未改，亿档只缓存前缀但数据库响应完整排空，ensure_complete拒绝完整导出，不宣称完整末页。客户端100ms采样最大RSS26.70MiB、private7.70MiB，MySQL服务CPU/内存未测。共享MySQL未重启、未清空缓存、未改全局配置，无冷缓存声明；后两档仅一轮，不能外推其他行宽、SQL、服务器或机器。流式前端及其他UI未实施，仍为⏳。
+
+验证：此前CLI环境新鲜release相关回归38+13+6项通过，真实MySQL SELECT1门控用例1项通过；真实MySQL取消用例两次返回Unknown而非预期TimedOut，厂商取消回归仍为🚧，见 [mysql-cancel-unknown-20261115.md](<../active/mysql-cancel-unknown-20261115.md#L1>)。release构建与Rust离线检查通过；前端构建缺离线依赖、文档全局检查有52条基线旧产物引用缺失，不称全部闸门通过。
+
+**主代理独立复核：** 同一二进制哈希与54条原始证据核验7/7通过；默认执行环境复跑三个不重叠范围合计47通过/11失败/4 ignored（execution_tests 30/9/3；execution_stream 11/2/1；query_spool 6/0/0）。多项缓存相关失败伴随私有目录权限设置被Windows拒绝，未进一步诊断/修复；不直接判为流式新缺陷，不用此前CLI通过覆盖本次失败。性能脚本与CLI实库回归使用不同测试目录隔离配置，仅影响测试路径，私有权限保护始终开启。前端缺tsc构建仍未通过。见 [独立复核](<../../artifacts/stream-preview-eval-20261115/lead-review.json#L1>)、[执行回归](<../../artifacts/stream-preview-eval-20261115/lead-regression-execution.log#L2>)、[流式回归](<../../artifacts/stream-preview-eval-20261115/lead-regression-stream.log#L1>)与[证据校验](<../../artifacts/stream-preview-eval-20261115/lead-evidence-validation.log#L1>)。性能评估完成不等于产品接入充分验收，当前不建议合并或发布。
+
 ### 2026-11-13 独立分支：查询首屏流式后端
 
 **2026-11-14 已合并 main**：main 快进到 `d81541e`，原有暂存/未暂存/未跟踪内容保留；重叠处同时保留原缓存 scratch 优化、性能基准与新增流式测试。实际合并工作树重新构建后，`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib execution -- --test-threads=1 --nocapture`：129 通过、0 失败、6 ignored；`query_spool::tests::`：6 通过、0 失败。以下独立分支测试数据为合并前快照，不能替代本次结果；本次未重跑全库、未接入流式前端、未推送远端。
 
 | 能力 | 验收 | 代码入口与边界 |
 |---|---|---|
-| 首屏预览与后台全量续读 | ⏳ 后端已实现，缺真实桌面与专用 MySQL 性能验收 | [流式观察契约](<../../src-tauri/src/execution_stream.rs>)、[命令入口](<../../src-tauri/src/commands.rs>)；只新增 opt-in API，旧 execute_sql_v2 和 ExecutionRequest 不变，2026-11-14 已快进合并 main，既有未提交修改保留，不接前端 |
-| 取消、异常与最终回执 | ⏳ 原生生命周期回归通过 | [执行引擎](<../../src-tauri/src/execution.rs>)；同一拥有者任务继续完整读取、监督取消与清理，再由 Entry::finish 发布终态；临时 preview 绝不等价于成功，失败撤销缓存，Unknown 的迟到清理不能变成成功 |
+| 首屏预览与后台全量续读 | ⏳ 本机MySQL服务性能已验，真实桌面接入待验 | [execution_stream.rs](../../src-tauri/src/execution_stream.rs#L1)、[commands.rs](../../src-tauri/src/commands.rs#L694)；opt-in API，旧请求不变；2026-11-15五档服务实测见上，不接前端 |
+| 取消、异常与最终回执 | 🚧 SQLite/模拟生命周期通过，真实MySQL取消回归未闭环 | [execution.rs](../../src-tauri/src/execution.rs#L491)；同一任务完整读取、监督清理并发布终态；临时preview不等于成功，失败撤销缓存，Unknown迟到清理不变成功。本机取消用例两次Unknown、期望TimedOut，见当前诊断文档 |
 | 完整缓存分页/导出 | ⏳ 本地 SQLite 全链路验证，缺用户实库验收 | [成功终态门](<../../src-tauri/src/query_spool.rs>)、[SQLite lineage 观察](<../../src-tauri/src/query_execution.rs>)；首屏之外仍写原执行全量缓存，成功清理后才开放缓存读/导出，不重跑 SQL |
-| MySQL 原生驱动流式验证 | ⏳ 回环协议模拟通过，非厂商实库结论 | [MySQL 8 协议模拟回归](<../../src-tauri/src/execution_stream_mysql_tests.rs>)；真实 SQLx 驱动、200 行后阻塞尾部，验证提前首屏、10050 行最后页、迟到错误撤销与定向 KILL QUERY；TLS/非空密码/多结果/用户具体 SQL 未实测 |
+| MySQL 原生驱动流式验证 | ✅ 本机真实MySQL五档性能；取消另列🚧 | [stream_preview_bench_tests.rs](../../src-tauri/src/stream_preview_bench_tests.rs#L136)、[execution_stream_mysql_tests.rs](../../src-tauri/src/execution_stream_mysql_tests.rs#L1)；真实产品驱动、固定两列1万至1亿输出、首页/缓存末页/计数/截断拒绝门验证；TLS、多结果、用户具体SQL和真实桌面未实测，模拟协议覆盖不替代厂商取消验收 |
 
 **独立分支验证（合并前）**：`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib execution -- --test-threads=1 --nocapture`：112 通过、0 失败、3 ignored；`cargo test --manifest-path src-tauri/Cargo.toml --locked --lib query_spool::tests:: -- --test-threads=1`：6 通过、0 失败。测试入口：[观察通道生命周期](<../../src-tauri/src/execution_stream_tests.rs>)、[实际命令服务与全量导出](<../../src-tauri/src/execution_stream_service_tests.rs>)、[旧 C1 回归](<../../src-tauri/src/execution_tests.rs>)。
 
@@ -282,6 +304,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 | ID | 任务 | 已落地 | 待办 |
 |---|---|---|---|
+| STREAM-PREVIEW-PERF-01 | 旧完整回执与流式200行性能评估 | [stream_preview_bench_tests.rs](../../src-tauri/src/stream_preview_bench_tests.rs#L300)、隔离UUID夹具/有界播种脚本、同一亿行表五档真实服务测量、54逐轮记录、缓存截断拒绝门、逐轮真实释放；结论与证据见§三 | 流式前端另行决定⏳；本机MySQL取消回归原因待诊断🚧 |
 | PL-01 | 只读连接执行保护 | SQLite 实际只读、authorizer、保存配置权威门禁 | 远端/驱动复杂只读复核 🚧 |
 | PL-02 | 适配器图形化写入闭环 | 类型化值、唯一 C2 计划/预算、同事务 CAS/读回、未知提交冻结、JDBC/H2 桥 | 真实 H2 六入口、其他厂商负向复验 ⏳ |
 | PL-03 | 查询取消与停止 | 统一 C1 注册表、授权握手、定向控制、资源未排空隔离 | 所有协议与新工具通道接入、真实网络失联 🚧 |
@@ -338,6 +361,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 15. **生成预览验收边界**：正常无取消完成已修复，不再误报 Unknown；失败、取消、超时、未知清理与在途资源仍拒绝返回样本。本次公开 IPC 只实测 Windows/SQLite，不外推全部厂商与压力环境。
 
 16. **第四轮遗留**：D11 含 `CREATE DATABASE/USE` 的 SQL 文件仍未接入受控管理脚本授权，通用路径继续拒绝；D9 只对 localhost 认证/连接错误做了明确分类，没有自动 IPv4/IPv6 回退；TiDB/SQL Server/达梦/PostgreSQL 等现场项未复验。MySQL 导入批写只对精确 `mysql` 8.0/InnoDB/无副作用普通表自动启用，其他协议仍逐行。全驱动矩阵是源码能力清单，运行证据均为 not-run，不能当作厂商实库通过。
+17. **MySQL取消实库回归**：🚧 [execution_tests.rs](../../src-tauri/src/execution_tests.rs#L553) 的100ms SLEEP取消用例两次实际Unknown、期望TimedOut；根因未确认，不能将模拟通过写成厂商取消通过。独立重跑后该UUID会话为0、库删除，不替代回执时刻资源证据。保留 [mysql-cancel-unknown-20261115.md](../active/mysql-cancel-unknown-20261115.md#L1) 诊断范围与验收标准。
 
 ## 七、文档来源合并记录
 
@@ -367,3 +391,4 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | active/release-acceptance-2026-11-14.md（后续修复归档） | 公开预览复用正式终态并保留严格未知拒绝；完整库、相关前端、固定哈希真实IPC/工作流/缓存与新构建结果并入§三/§五；旧失败报告保留artifact，过程文件从active删除 |
 | active/navkit-round4-regression-performance.md | 并入 §五 ROUND4-FIX-01、§六 第 16 条；D7/YEAR/D10/D5/D9 与全驱动矩阵、MySQL/SQLite 性能结论归档；D11 仍标 🚧，过程文档保留在 active 以对应未完成缺口 |
 | active/query-streaming-backend.md | §三 合并独立流式后端、成功终态导出门、MySQL 回环/生命周期回归与真实边界；前端未开工项放 planned/query-streaming-frontend.md |
+| active/stream-preview-eval-20261115.md | §三合并真实MySQL固定亿行表五档服务性能、LIMIT200对照、缓存/资源/验证边界；§五归档测试与跑批；§六单列取消实库回归失败，当前诊断保留active，详细实验与逐轮证据在artifacts |
