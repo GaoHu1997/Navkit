@@ -395,6 +395,9 @@ pub struct PageRequest {
     /// 数组顺序即排序优先级；Some([]) 清除排序，None 兼容旧字段。
     #[serde(default)]
     pub order_rules: Option<Vec<SortRule>>,
+    /// Keyset 锚点：上一页最后一行在唯一排序键上的值（仅连续下一页使用；缺省回退 OFFSET）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<Vec<Option<String>>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,6 +454,9 @@ pub struct PageResult {
     pub primary_keys: Vec<String>,
     #[serde(default)]
     pub elapsed_ms: u64,
+    /// Keyset 下一页锚点：本页最后一行在唯一排序键上的值（单列唯一键时提供）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after: Option<Vec<Option<String>>>,
 }
 
 /// 行修改请求。

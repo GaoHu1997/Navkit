@@ -183,6 +183,7 @@ async fn page_filter_order_count_and_metadata_are_real_sql() {
             column: "id".into(),
             ascending: false,
         }]),
+        after: None,
     };
     let page = crate::schema::page_table(f.db.as_ref(), DbKind::of("sqlite"), &req)
         .await

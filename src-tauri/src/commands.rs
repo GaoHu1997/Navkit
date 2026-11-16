@@ -689,6 +689,166 @@ pub(crate) async fn execute_registered_sql_service(
 pub async fn execute_sql_v2(window: tauri::WebviewWindow, state: State<'_, AppState>, request: crate::execution_contracts::ExecutionRequest) -> CmdResult<crate::execution_contracts::ExecutionOutcome> {
     execute_sql_service(&state, request, window.label()).await
 }
+
+/// 查询页服务器分页规划：只生成当前页 SQL，不执行、不发 SQL。
+///
+/// `mode=page` 时前端用返回的 SQL 走既有执行路径显示当前页；
+/// `mode=unsupported` 时前端回退到原有“执行一次 + 完整缓存”路径，并展示 `reason`。
+#[derive(serde::Serialize)]
+pub struct QueryPagePlanView {
+    pub mode: String,
+    pub sql: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[tauri::command]
+pub fn plan_query_pagination(
+    state: State<'_, AppState>, connection_id: String, sql: String, limit: u64, offset: u64,
+) -> CmdResult<QueryPagePlanView> {
+    let cfg = saved_config(&state, &connection_id)?;
+    Ok(match crate::query_pagination::plan_query_page(&cfg.kind, &sql, limit, offset) {
+        crate::query_pagination::PagePlan::Page(page_sql) => QueryPagePlanView {
+            mode: "page".into(), sql: Some(page_sql), reason: None,
+        },
+        crate::query_pagination::PagePlan::Unsupported(reason) => QueryPagePlanView {
+            mode: "unsupported".into(), sql: None, reason: Some(reason.to_string()),
+        },
+    })
+}
+
+/// 查询页 Keyset 判定：SQL 形状（单表 SELECT + 单列 ORDER BY）命中唯一键时返回 shape。
+///
+/// 只做结构 + 元数据判断，不执行 SQL、不发查询；返回 None 时前端继续用 OFFSET 分页。
+#[derive(serde::Serialize)]
+pub struct QueryKeysetView {
+    pub supported: bool,
+    pub reason: Option<String>,
+    /// 唯一排序列（已判定是单列唯一主键），供前端判断是否可用锚点续页。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ascending: Option<bool>,
+    /// 列是否为数字类型，决定锚点值是否按数字字符串校验。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numeric: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn plan_query_keyset(
+    state: State<'_, AppState>, connection_id: String, sql: String,
+) -> CmdResult<QueryKeysetView> {
+    let cfg = saved_config(&state, &connection_id)?;
+    let Some(shape) = crate::query_pagination::analyze_keyset(&cfg.kind, &sql) else {
+        return Ok(QueryKeysetView { supported: false, reason: Some("SQL 不是单表单列排序的简单查询".into()), column: None, ascending: None, numeric: None });
+    };
+    // 只有当排序列是该表的唯一单列主键时，锚点定位才不会重复/漏行。
+    let (_key, db) = query_db(&state, &cfg.id, Some(&cfg.database)).await?;
+    let meta = crate::schema::table_schema_for_page(db.as_ref(), cfg.kind.clone(), &shape.schema, &shape.table).await;
+    let Ok(meta) = meta else {
+        return Ok(QueryKeysetView { supported: false, reason: Some("无法读取表结构，不能确定唯一键".into()), column: None, ascending: None, numeric: None });
+    };
+    let pks = crate::design::ordered_primary_key(&meta).map_err(AppError::from).unwrap_or_default();
+    if pks.len() != 1 || pks[0] != shape.column {
+        return Ok(QueryKeysetView {
+            supported: false,
+            reason: Some(format!("排序列不是唯一主键（主键：{}）", if pks.is_empty() { "无".into() } else { pks.join(",") })),
+            column: None, ascending: None, numeric: None,
+        });
+    }
+    let numeric = meta.columns.iter()
+        .find(|c| c.name == shape.column)
+        .map(|c| crate::schema::is_numeric_type(&c.data_type))
+        .unwrap_or(false);
+    Ok(QueryKeysetView { supported: true, reason: None, column: Some(shape.column), ascending: Some(shape.ascending), numeric: Some(numeric) })
+}
+
+/// 按 Keyset 锚点生成查询页 SQL：只生成、不执行。
+///
+/// 锚点值来自上一页最后一行的唯一键列；非数字列单引号转义，数字列校验后裸拼，
+/// 都无法通过时返回 `unsupported`，前端回退 OFFSET 分页。
+#[derive(serde::Serialize)]
+pub struct QueryKeysetPageView {
+    pub mode: String,
+    pub sql: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[tauri::command]
+pub fn plan_query_keyset_page(
+    state: State<'_, AppState>, connection_id: String, sql: String, after: String, limit: u64,
+) -> CmdResult<QueryKeysetPageView> {
+    let cfg = saved_config(&state, &connection_id)?;
+    let Some(shape) = crate::query_pagination::analyze_keyset(&cfg.kind, &sql) else {
+        return Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("SQL 不是单表单列排序的简单查询".into()) });
+    };
+    let column = crate::db::quote_ident(&cfg.kind, &shape.column);
+    let numeric = after.trim_start_matches('-').chars().all(|c| c.is_ascii_digit() || c == '.');
+    let Some(predicate) = crate::query_pagination::keyset_predicate(&column, shape.ascending, Some(&after), numeric) else {
+        return Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("锚点值无法安全转义".into()) });
+    };
+    match crate::query_pagination::plan_keyset_page(&cfg.kind, &sql, &predicate, limit) {
+        Some(page_sql) => Ok(QueryKeysetPageView { mode: "page".into(), sql: Some(page_sql), reason: None }),
+        None => Ok(QueryKeysetPageView { mode: "unsupported".into(), sql: None, reason: Some("无法在该 SQL 上追加锚点谓词".into()) }),
+    }
+}
+/// 导出「重新查询全量」：重新执行原始 SQL，再从本次执行的完整缓存导出。
+///
+/// 只允许可安全重跑的单条只读查询；受现有缓存配额约束，超限时明确拒绝，
+/// 绝不静默漏行，也不把“读取完成”当成“可完整导出”。用户的编辑器内容不被改写。
+#[tauri::command]
+pub async fn export_query_requery(
+    window: tauri::WebviewWindow, state: State<'_, AppState>,
+    opts: ExportOptions, sql: String, owner_id: String, namespace: String,
+) -> CmdResult<u64> {
+    export_query_requery_service(&state, opts, &sql, &owner_id, &namespace, window.label()).await
+}
+
+pub(crate) async fn export_query_requery_service(
+    state: &AppState, opts: ExportOptions, sql: &str, owner_id: &str, namespace: &str, principal: &str,
+) -> CmdResult<u64> {
+    let cfg = saved_config(state, &opts.connection_id)?;
+    crate::transfer::validate_export(&opts)?;
+    crate::query_pagination::rerunnable_read(&cfg.kind, sql).map_err(|reason| {
+        AppError::coded(
+            "EXPORT_REQUERY_UNSAFE",
+            format!("该查询不能重新执行导出：{reason}；请对当前页手动加 LIMIT 后导出"),
+        )
+    })?;
+    let mut request = crate::execution_contracts::ExecutionRequest {
+        execution_id: uuid::Uuid::new_v4().to_string(),
+        connection_id: opts.connection_id.clone(),
+        namespace: namespace.to_string(),
+        owner_id: owner_id.to_string(),
+        sql: sql.to_string(),
+        transaction_owner: None,
+        timeout_ms: None,
+        origin: Some("export".into()),
+        execution_grant: None,
+        cancel_before_send: false,
+    };
+    grant_execution_request(state, &mut request, principal)?;
+    let outcome = execute_sql_service(state, request, principal).await?;
+    if outcome.state != crate::execution_contracts::ExecutionState::Succeeded {
+        return Err(AppError::coded(
+            "EXPORT_REQUERY_FAILED",
+            format!("重新查询未成功完成（{:?}）；本次没有生成导出文件", outcome.state),
+        ));
+    }
+    let result = outcome
+        .result
+        .ok_or_else(|| AppError::coded("EXPORT_REQUERY_FAILED", "重新查询没有返回结果"))?;
+    let spool_id = result.spool_id.ok_or_else(|| {
+        AppError::coded(
+            "EXPORT_REQUERY_NO_CACHE",
+            "该驱动未产生可完整导出的结果缓存；请改用当前页导出",
+        )
+    })?;
+    let exported =
+        export_query_spooled_service(state, opts, &spool_id, owner_id, namespace, 0, principal).await;
+    crate::query_spool::drop_spool(&spool_id);
+    exported
+}
+
 /// Opt-in native streaming. Reuses the reviewed one-use SQL grant unchanged.
 /// Unsupported adapters are rejected before registration; use execute_sql_v2 there.
 pub(crate) fn register_streaming_execution(

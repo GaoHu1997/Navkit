@@ -5,6 +5,10 @@ mod spool_tests;
 mod stream_service_tests;
 #[path = "perf_bench_tests.rs"]
 mod perf_bench;
+#[path = "execution_requery_tests.rs"]
+mod requery_tests;
+#[path = "mysql_live_pagination_tests.rs"]
+mod mysql_live_pagination_tests;
 use std::{sync::Arc, path::PathBuf, time::Duration};
 use crate::{commands::{AppState, execute_sql_service}, db::{self, Db}, execution::{Binding, Registry}, execution_contracts::*, models::*, storage::Store};
 const LONG: &str = "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n";

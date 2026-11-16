@@ -260,6 +260,8 @@ export interface PageRequest {
   order_rules?: SortRule[];
   /** false 只读取当前页，不在首屏等待全表计数；省略兼容旧调用。 */
   include_total?: boolean;
+  /** Keyset 锚点：上一页最后一行在唯一排序键上的值；仅连续下一页时提供。 */
+  after?: (string | null)[];
 }
 
 export interface PageResult {
@@ -271,6 +273,8 @@ export interface PageResult {
   has_more?: boolean | null;
   primary_keys: string[];
   elapsed_ms: number;
+  /** Keyset 下一页锚点：本页最后一行在唯一排序键上的值（单列唯一键时提供）。 */
+  next_after?: (string | null)[];
 }
 
 export interface RowUpdate {

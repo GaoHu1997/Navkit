@@ -93,7 +93,7 @@ fn hbase(s:&mut State,w:&Wire,url:&reqwest::Url,p:&[&str])->Reply{
     }
     reply(404,json!({"error":"unknown route"}))
 }
-fn page(kind:&str,offset:u64,limit:u64)->PageRequest{PageRequest{connection_id:"rest".into(),schema:if kind=="salesforce"{"v59.0".into()}else{"default".into()},table:if kind=="salesforce"{"Account".into()}else{"sentinel".into()},offset,limit,include_total:true,order_by:None,ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None}}
+fn page(kind:&str,offset:u64,limit:u64)->PageRequest{PageRequest{connection_id:"rest".into(),schema:if kind=="salesforce"{"v59.0".into()}else{"default".into()},table:if kind=="salesforce"{"Account".into()}else{"sentinel".into()},offset,limit,include_total:true,order_by:None,ascending:true,filters:vec![],filter_logic:FilterLogic::And,order_rules:None,after:None}}
 async fn execute(reg:&db::DbRegistry,req:&ConnectionRequest,value:Value)->MultiResult{db::execute(reg,"rest",&value.to_string(),req.kind.clone()).await.unwrap()}
 #[tokio::test(flavor="multi_thread",worker_threads=2)]
 async fn salesforce_actual_product_stateful_rest_contract(){
