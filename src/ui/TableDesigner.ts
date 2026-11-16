@@ -629,7 +629,7 @@ export class TableDesigner {
     pkRow.addEventListener("focusin", () => selectRow(pkRow, PRIMARY_ROW));
     pkRow.addEventListener("click", () => selectRow(pkRow, PRIMARY_ROW));
     const pkNameCell = document.createElement("td");
-    const pkName = document.createElement("input"); pkName.type = "text"; pkName.value = "PRIMARY"; pkName.readOnly = true;
+    const pkName = document.createElement("input"); pkName.type = "text"; pkName.value = "PRIMARY"; pkName.readOnly = true; pkName.disabled = !!this.editReason();
     pkName.setAttribute("aria-label", "主键 名称"); pkName.title = "主键名由数据库固定为 PRIMARY；要改的是字段、顺序与类型。";
     pkNameCell.appendChild(pkName); pkRow.appendChild(pkNameCell);
     const pkColsCell = document.createElement("td");

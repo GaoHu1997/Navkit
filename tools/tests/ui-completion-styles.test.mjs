@@ -152,7 +152,9 @@ test('F14: no-work-page title does not alter the open-connection lifecycle or ac
   assert.ok(render.includes('b.addEventListener("click", () => void this.runCommand(cmd))'));
   assert.doesNotMatch(render, /title\.textContent = "还没有打开的连接"/);
 });
-test('F15: collation keeps its value and is labelled 排序规则, not row format', async t => {
+// 「选项」页随 1.0.2 收起（TableDesigner.TABS 注释：检查 / 触发器 / 选项三页暂时收起，实现与草稿载荷仍保留），
+// 排序规则 / 行格式下拉没有可见入口；恢复页签后移除 skip 重新启用本用例。
+test('F15: collation keeps its value and is labelled 排序规则, not row format', { skip: '「选项」页随 1.0.2 收起，恢复页签后启用' }, async t => {
   const { launchDesignerBrowser, columnOrderPage } = await import('./column-order-browser-fixture.mjs');
   const browser = await launchDesignerBrowser(); t.after(() => browser.close());
   const page = await columnOrderPage(browser); t.after(() => page.close());

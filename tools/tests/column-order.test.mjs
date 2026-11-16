@@ -222,8 +222,9 @@ test('real DOM exposes accessible names/status and busy tabs cannot recreate ena
   const selected = await page.evaluate(() => designer.selected);
   await page.locator('.designer-grid tbody tr').last().dispatchEvent('mousedown');
   assert.equal(await page.evaluate(() => designer.selected), selected);
-  await page.getByRole('tab', { name: '选项', exact: true }).click();
-  assert.equal(await page.getByRole('combobox', { name: '排序规则', exact: true }).isDisabled(), true);
+  // 「选项」页随 1.0.2 收起（TableDesigner.TABS 注释），忙碌保护改在索引页验证：忙碌时切页不能得到可用控件
+  await page.getByRole('tab', { name: '索引', exact: true }).click();
+  assert.equal(await page.locator('.designer-grid input:not(:disabled), .designer-grid select:not(:disabled)').count(), 0);
   await page.getByRole('tab', { name: '字段', exact: true }).click();
   assert.equal(await page.locator('.designer-grid input:not(:disabled), .designer-grid select:not(:disabled)').count(), 0);
   assert.equal(await page.locator('.tab-toolbar button:not(:disabled)').count(), 0);

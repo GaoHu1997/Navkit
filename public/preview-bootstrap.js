@@ -882,6 +882,20 @@ try {
             spoolStore.delete(`${(args && args.connectionId) || ""}|${(args && args.namespace) || ""}`);
             return null;
           },
+          // ---- 查询页服务器分页（与后端同形：规划不发 SQL，COUNT 后台执行） ----
+          plan_query_pagination: (args) => ({
+            mode: "page",
+            sql: `${(args && args.sql) || ""} LIMIT ${Number(args && args.limit) || 0} OFFSET ${Number(args && args.offset) || 0}`,
+            reason: null,
+          }),
+          count_query_page: () => ({ supported: true, total: 42, reason: null }),
+          plan_query_keyset: () => ({ supported: true, reason: null, column: "id", ascending: true, numeric: true }),
+          plan_query_keyset_page: (args) => ({
+            mode: "page",
+            sql: `${(args && args.sql) || ""} WHERE id > ${JSON.stringify((args && args.after) ?? null)} LIMIT ${Number(args && args.limit) || 0}`,
+            reason: null,
+          }),
+          export_query_requery: () => 10,
           query_result_snapshot: (args) => {
             const ctx = (args && args.context) || {};
             const sets = spoolStore.get(`${ctx.connection_id || ""}|${ctx.namespace || ""}`) || [];
