@@ -303,6 +303,15 @@ export function passwordInput(value = "", width?: number): HTMLInputElement {
   el.type = "password";
   el.value = value;
   if (width) el.style.width = `${width}px`;
+  // 首次获得焦点时全选已有内容：用户直接键入即为"替换"，不会把新密码追加到旧值后面
+  // （历史缺陷：密码框未清空时输入会拼接，导致认证失败且难以察觉）。
+  // 只在首次 focus 全选，避免用户中途离开再回来继续编辑时被重复全选打断。
+  el.addEventListener("focus", () => {
+    if (el.dataset.selectOnFocus !== "done") {
+      el.select();
+      el.dataset.selectOnFocus = "done";
+    }
+  });
   return el;
 }
 

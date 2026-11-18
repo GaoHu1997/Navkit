@@ -410,11 +410,15 @@ fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64, speed: u64, 
 
 /// 下载更新（断点续传 + SHA-256 校验 + 停滞检测 + 指数退避重试）。
 /// 完成后落位为 navkit-new.exe，等待 update_apply 换名替换。
-pub async fn download(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+pub async fn download(
+    app: &tauri::AppHandle,
+    expected_version: Option<&str>,
+    expected_sha256: Option<&str>,
+) -> anyhow::Result<PathBuf> {
     if DOWNLOAD_IN_FLIGHT.swap(true, Ordering::SeqCst) {
         return Err(anyhow::anyhow!("已有下载任务进行中"));
     }
-    let result = download_inner(app).await;
+    let result = download_inner(app, expected_version, expected_sha256).await;
     DOWNLOAD_IN_FLIGHT.store(false, Ordering::SeqCst);
     result
 }
@@ -463,8 +467,50 @@ fn host_of(url: &str) -> String {
         .to_string()
 }
 
-async fn download_inner(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+fn normalized_update_version(version: &str) -> &str {
+    let version = version.trim();
+    version.strip_prefix('v').or_else(|| version.strip_prefix('V')).unwrap_or(version)
+}
+
+fn normalized_sha256(hash: &str) -> anyhow::Result<String> {
+    let hash = hash.trim();
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("SHA-256 无效：必须提供完整的 64 位十六进制哈希");
+    }
+    Ok(hash.to_ascii_lowercase())
+}
+
+/// 可选期望值兼容旧手动调用；新调用须绑定检查时的版本及安装包哈希。
+fn verify_manifest_identity(
+    manifest: &UpdateManifest,
+    expected_version: Option<&str>,
+    expected_sha256: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(expected) = expected_version {
+        let expected = normalized_update_version(expected);
+        if expected.is_empty() || expected != normalized_update_version(&manifest.version) {
+            anyhow::bail!("更新版本已变化或期望版本无效，请重新检查更新");
+        }
+    }
+    if let Some(expected) = expected_sha256 {
+        let expected = normalized_sha256(expected)
+            .map_err(|_| anyhow::anyhow!("期望 SHA-256 无效，请重新检查更新"))?;
+        let actual = normalized_sha256(&manifest.sha256)
+            .map_err(|_| anyhow::anyhow!("更新清单 SHA-256 无效，请重新检查更新"))?;
+        if expected != actual {
+            anyhow::bail!("更新包已变化（SHA-256 不一致），请重新检查更新");
+        }
+    }
+    Ok(())
+}
+
+async fn download_inner(
+    app: &tauri::AppHandle,
+    expected_version: Option<&str>,
+    expected_sha256: Option<&str>,
+) -> anyhow::Result<PathBuf> {
     let manifest = fetch_manifest().await?;
+    verify_manifest_identity(&manifest, expected_version, expected_sha256)?;
     let expected_hash = manifest.sha256.trim().to_lowercase();
     let known_size = manifest.size;
     let mut urls = manifest.download_urls();
@@ -730,14 +776,38 @@ pub fn status() -> UpdateStatus {
     }
 }
 
+/// 安装前重新校验实际暂存文件；固定 64 KiB 缓冲，不把整个安装包读入内存。
+fn verify_staged_sha256(staged: &Path, expected_sha256: &str) -> anyhow::Result<()> {
+    use std::io::Read;
+    let expected = normalized_sha256(expected_sha256)?;
+    let mut file = std::fs::File::open(staged)
+        .map_err(|e| anyhow::anyhow!("读取待安装更新包失败: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)
+            .map_err(|e| anyhow::anyhow!("读取待安装更新包失败: {e}"))?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        anyhow::bail!("待安装更新包 SHA-256 不匹配，已取消安装，请重新检查并下载更新");
+    }
+    Ok(())
+}
+
 /// 换名替换并重启：运行中的 exe 改名为 `*.old` → 新版落位 → 分离启动新进程 → 退出。
 /// 落位失败时把旧版改回原名（回滚），应用继续以旧版运行。
-pub fn apply_and_restart(app: &tauri::AppHandle) -> anyhow::Result<()> {
+pub fn apply_and_restart(app: &tauri::AppHandle, expected_sha256: Option<&str>) -> anyhow::Result<()> {
     use tauri::Manager;
     let exe = std::env::current_exe()?;
     let staged = staged_path();
     if !staged.exists() {
         anyhow::bail!("没有已下载的更新包，请先下载更新");
+    }
+    if let Some(expected) = expected_sha256 {
+        verify_staged_sha256(&staged, expected)?;
     }
     // 旧版落点：exe.old（已存在则 .old-2 递增，避免覆盖更早的回滚点）
     let old = aside_path(&exe);
@@ -817,8 +887,12 @@ pub async fn update_check() -> CmdResult<UpdateCheckResult> {
 
 /// 下载更新（进度通过 `update-progress` 事件推送；前端亦可 update_status 轮询）。
 #[tauri::command]
-pub async fn update_download(app: tauri::AppHandle) -> CmdResult<String> {
-    download(&app)
+pub async fn update_download(
+    app: tauri::AppHandle,
+    expected_version: Option<String>,
+    expected_sha256: Option<String>,
+) -> CmdResult<String> {
+    download(&app, expected_version.as_deref(), expected_sha256.as_deref())
         .await
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| AppError::new(format!("{e:#}")))
@@ -832,8 +906,8 @@ pub fn update_status() -> UpdateStatus {
 
 /// 安装更新：换名替换 + 重启为新版本。
 #[tauri::command]
-pub fn update_apply(app: tauri::AppHandle) -> CmdResult<()> {
-    apply_and_restart(&app).map_err(|e| AppError::new(format!("{e:#}")))
+pub fn update_apply(app: tauri::AppHandle, expected_sha256: Option<String>) -> CmdResult<()> {
+    apply_and_restart(&app, expected_sha256.as_deref()).map_err(|e| AppError::new(format!("{e:#}")))
 }
 
 // ---------------------------------------------------------------- 测试
@@ -841,6 +915,83 @@ pub fn update_apply(app: tauri::AppHandle) -> CmdResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn identity_manifest(hash: &str) -> UpdateManifest {
+        UpdateManifest {
+            version: "1.2.0".into(),
+            notes: String::new(),
+            pub_date: String::new(),
+            url: "https://example.test/navkit.exe".into(),
+            mirrors: vec![],
+            sha256: hash.into(),
+            size: 0,
+        }
+    }
+
+    #[test]
+    fn 下载身份_版本变化必须重新检查() {
+        let hash = "a".repeat(64);
+        let manifest = identity_manifest(&hash);
+        let error = verify_manifest_identity(&manifest, Some("1.1.0"), Some(&hash)).unwrap_err();
+        assert!(error.to_string().contains("重新检查"));
+        assert!(verify_manifest_identity(&manifest, Some("v"), Some(&hash)).is_err());
+    }
+
+    #[test]
+    fn 下载身份_同版本换包必须重新检查() {
+        let expected = "a".repeat(64);
+        let manifest = identity_manifest(&"b".repeat(64));
+        let error = verify_manifest_identity(&manifest, Some("1.2.0"), Some(&expected)).unwrap_err();
+        assert!(error.to_string().contains("SHA-256 不一致"));
+        assert!(error.to_string().contains("重新检查"));
+    }
+
+    #[test]
+    fn 下载身份_前缀空白和哈希大小写标准化() {
+        let manifest = identity_manifest(&format!(" {} ", "A".repeat(64)));
+        assert!(verify_manifest_identity(&manifest, Some(" V1.2.0 "), Some(&"a".repeat(64))).is_ok());
+        let legacy = identity_manifest("");
+        assert!(verify_manifest_identity(&legacy, None, None).is_ok());
+    }
+
+    #[test]
+    fn 下载身份_无效期望或清单哈希拒绝() {
+        let valid = "a".repeat(64);
+        let manifest = identity_manifest(&valid);
+        for invalid in ["".to_string(), " ".to_string(), "a".repeat(63), "g".repeat(64), "é".repeat(32)] {
+            assert!(verify_manifest_identity(&manifest, Some("1.2.0"), Some(&invalid)).is_err());
+            assert!(verify_manifest_identity(&identity_manifest(&invalid), Some("1.2.0"), Some(&valid)).is_err());
+        }
+    }
+
+    #[test]
+    fn 安装前校验_流式多块读取且损坏文件拒绝() {
+        let dir = std::env::temp_dir().join(format!("navkit-updater-hash-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let staged = dir.join("staged-test.bin");
+        let contents = vec![0x5a; 128 * 1024 + 17];
+        let expected = format!("{:x}", Sha256::digest(&contents));
+        std::fs::write(&staged, &contents).unwrap();
+        let valid = verify_staged_sha256(&staged, &format!(" {} ", expected.to_ascii_uppercase()));
+        std::fs::write(&staged, b"corrupted").unwrap();
+        let corrupted = verify_staged_sha256(&staged, &expected);
+        let untouched = std::fs::read(&staged).unwrap();
+        // 只清理本测试新建的 UUID 目录，不访问应用的实际暂存包或 exe。
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(valid.is_ok(), "{valid:?}");
+        assert!(corrupted.unwrap_err().to_string().contains("已取消安装"));
+        assert_eq!(untouched, b"corrupted");
+    }
+
+    #[test]
+    fn 安装前校验_空无效哈希与缺失文件拒绝() {
+        let missing = std::env::temp_dir().join(format!("navkit-updater-missing-{}", uuid::Uuid::new_v4()));
+        for invalid in ["".to_string(), " ".to_string(), "a".repeat(63), "g".repeat(64)] {
+            let error = verify_staged_sha256(&missing, &invalid).unwrap_err();
+            assert!(error.to_string().contains("SHA-256 无效"));
+        }
+        assert!(verify_staged_sha256(&missing, &"a".repeat(64)).unwrap_err().to_string().contains("读取待安装"));
+    }
 
     #[test]
     fn 版本比较_主版本号() {

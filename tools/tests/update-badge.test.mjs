@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { build } from 'esbuild';
 
 const built = await build({
-  stdin: { contents: 'export { UpdateBadge } from "./src/ui/UpdateBadge.ts";', resolveDir: process.cwd(), loader: 'ts' },
+  stdin: { contents: 'export { UpdateBadge } from "./src/ui/UpdateBadge.ts"; export * from "./src/core/updatePreferences.ts";', resolveDir: process.cwd(), loader: 'ts' },
   bundle: true, write: false, platform: 'node', format: 'cjs',
   loader: { '.css': 'empty' }, external: ['@tauri-apps/api/event'], logLevel: 'silent',
 });
@@ -31,8 +31,10 @@ class El {
 function makeEnv(mock) {
   const document = { createElement: t => new El(t), createElementNS: (_ns, t) => new El(t) };
   const timers = [];
+  const storage = new Map();
   const sandbox = {
     document, console,
+    localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     setTimeout: fn => { timers.push(fn); return timers.length; },
     clearInterval() {}, setInterval: () => 0,
   };
@@ -48,10 +50,45 @@ async function instantiate(mock) {
   const { UpdateBadge } = sandbox.module.exports;
   const notify = [];
   const badge = new UpdateBadge((kind, text) => notify.push({ kind, text }));
-  return { badge, sandbox, timers, notify };
+  return { badge, sandbox, timers, notify, ...sandbox.module.exports };
 }
 
-const flush = async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
+
+const fixtureManifest = { version: '1.2.0', notes: '', pub_date: '', url: '', sha256: 'a'.repeat(64), size: 10 };
+test('自动更新开启后后台下载，但运行期间不安装', async () => {
+  let downloads = 0, applies = 0;
+  const env = await instantiate({
+    update_check: () => ({ update_available: true, manifest: fixtureManifest }),
+    update_status: () => ({ phase: 'idle' }),
+    update_download: () => { downloads++; return 'D:/staged.exe'; },
+    update_apply: () => { applies++; },
+  });
+  env.saveUpdatePreferences({ autoUpdate: true });
+  env.badge.start(); await env.timers[0](); await flush();
+  assert.equal(downloads, 1); assert.equal(applies, 0);
+  assert.equal(env.badge.el.dataset.phase, 'ready');
+  assert.equal(env.readUpdatePreferences().pendingInstall.version, '1.2.0');
+});
+test('跳过只抑制同版本后台提示和自动下载，新版本正常可见', async () => {
+  let version = '1.2.0', downloads = 0;
+  const env = await instantiate({
+    update_check: () => ({ update_available: true, manifest: { ...fixtureManifest, version } }),
+    update_status: () => ({ phase: 'idle' }),
+    update_download: () => { downloads++; return 'D:/staged.exe'; },
+  });
+  env.saveUpdatePreferences({ autoUpdate: true }); env.skipUpdateVersion('1.2.0');
+  await env.badge['check'](); await flush();
+  assert.equal(env.badge.el.hidden, true); assert.equal(downloads, 0);
+  version = '1.2.1'; await env.badge['check'](); await flush();
+  assert.equal(downloads, 1); assert.equal(env.badge.el.dataset.phase, 'ready');
+});
+test('弹窗跳过当前版本时，已经显示的后台徽标立即隐藏', async () => {
+  const env = await instantiate({ update_status: () => ({ phase: 'idle' }) });
+  env.badge.start(); env.badge.setAvailable(fixtureManifest);
+  env.skipUpdateVersion('1.2.0');
+  assert.equal(env.badge.el.hidden, true);
+});
 
 test('初始为隐藏，不占位', async () => {
   const { badge } = await instantiate({});
@@ -63,7 +100,7 @@ test('初始为隐藏，不占位', async () => {
 test('发现新版本：显示绿色「更新」，并触发一次检查', async () => {
   const calls = [];
   const { badge, timers } = await instantiate({
-    update_check: async () => { calls.push('check'); return { current_version: '1.0.0', update_available: true, manifest: { version: '1.2.0', notes: '', pub_date: '', url: '', sha256: '', size: 10 } }; },
+    update_check: async () => { calls.push('check'); return { current_version: '1.0.0', update_available: true, manifest: { version: '1.2.0', notes: '', pub_date: '', url: '', sha256: 'a'.repeat(64), size: 10 } }; },
     update_status: async () => ({ phase: 'idle', done: 0, total: 0, speed: 0, message: '', staged_file: null }),
   });
   badge.start();
@@ -101,7 +138,7 @@ test('已有就绪安装包：启动即为橘黄「重启」', async () => {
 test('点击下载 → 进入进度态 → 完成后变「重启」；再次点击调用安装', async () => {
   let applied = 0;
   const { badge } = await instantiate({
-    update_check: async () => ({ current_version: '1.0.0', update_available: true, manifest: { version: '1.2.0', notes: '', pub_date: '', url: '', sha256: '', size: 10 } }),
+    update_check: async () => ({ current_version: '1.0.0', update_available: true, manifest: { version: '1.2.0', notes: '', pub_date: '', url: '', sha256: 'a'.repeat(64), size: 10 } }),
     update_status: async () => ({ phase: 'downloading', done: 40, total: 100, speed: 0, message: '', staged_file: null }),
     update_download: async () => 'staged',
     update_apply: async () => { applied += 1; },

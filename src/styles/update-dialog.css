@@ -1,246 +1,159 @@
-/* ==========================================================================
-   软件更新对话框 —— 打开即自动检查，四状态共用同一套骨架
-   状态：checking（检查中）/ latest（已是最新）/ available（发现新版本）
-        / downloading（下载中）/ ready（可安装）/ error（检查失败）
-   全部选择器限定在 .update-dialog 内，颜色与间距只消费 base.css 令牌。
-   ========================================================================== */
-
-.update-dialog .dialog-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px 20px;
-  min-height: 196px;
+/* STORY-UPD-001 / docs/design/DESIGN.md §6.22。
+   640 × 257 紧凑更新提示，独立局部样式；只消费既有基础令牌。 */
+.update-dialog {
+  border-radius: var(--r-5);
+  background: var(--bg-surface);
 }
-
-/* ------------------------------------------------------------ 头部：图标 + 标题 */
-.update-dialog .ud-hero {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
+.update-dialog .dialog-title {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 var(--sp-2) 0 var(--sp-6);
+  gap: var(--sp-2);
+  border-bottom: none;
 }
-
-.update-dialog .ud-icon {
-  flex: 0 0 auto;
+.update-dialog .dialog-title-text { visibility: hidden; }
+.update-dialog .dialog-title-close,
+.update-dialog .ud-minimize {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 44px;
-  height: 44px;
-  border-radius: var(--r-5);
-  background: var(--accent-100);
-  color: var(--accent-600);
-}
-
-.update-dialog .ud-icon svg {
-  width: 22px;
-  height: 22px;
-}
-
-/* 已是最新 / 可安装：绿色语义 */
-.update-dialog .ud-icon[data-state="latest"],
-.update-dialog .ud-icon[data-state="ready"] {
-  background: var(--ok-50);
-  color: var(--ok-600);
-}
-
-/* 检查失败：错误语义 */
-.update-dialog .ud-icon[data-state="error"] {
-  background: var(--danger-50);
-  color: var(--danger-600);
-}
-
-/* 检查中：图标缓慢自转，替代跳动的加载动画 */
-.update-dialog .ud-icon[data-state="checking"] svg {
-  animation: ud-spin 900ms linear infinite;
-}
-
-@keyframes ud-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.update-dialog .ud-hero-text {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  padding-top: 1px;
-}
-
-.update-dialog .ud-title {
-  font-size: var(--fs-15);
-  font-weight: 600;
-  line-height: 1.35;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-2);
+  background: transparent;
   color: var(--text);
-  overflow-wrap: anywhere;
+  cursor: pointer;
 }
+.update-dialog .dialog-title-close svg { width: 14px; height: 14px; }
+.update-dialog .dialog-title-close:hover,
+.update-dialog .ud-minimize:hover { background: var(--bg-pressed); }
+.update-dialog.is-minimized .dialog-body,
+.update-dialog.is-minimized .dialog-footer { display: none; }
+.update-dialog.is-minimized .dialog-title-text { visibility: visible; }
 
-.update-dialog .ud-sub {
-  font-size: var(--fs-12);
-  line-height: 1.5;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
+.update-dialog .dialog-body {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 28px;
+  min-height: 139px;
+  padding: var(--sp-2) var(--sp-6) var(--sp-6);
 }
-
-/* ------------------------------------------------------------ 版本对比条 */
-.update-dialog .ud-versions {
+.update-dialog .ud-hero {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-3);
-  background: var(--bg-subtle);
-  font-size: var(--fs-11);
-  color: var(--text-tertiary);
+  flex: 0 0 auto;
+  gap: var(--sp-5);
+  min-width: 0;
+  min-height: 56px;
 }
-
-.update-dialog .ud-chip {
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-2);
-  background: var(--bg-surface);
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  line-height: 1.5;
+.update-dialog .ud-icon { display: flex; flex: 0 0 48px; align-items: center; justify-content: center; }
+.update-dialog .ud-icon svg { width: 48px; height: 48px; }
+.update-dialog .ud-hero-text { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: var(--sp-2); }
+.update-dialog .ud-title,
+.update-dialog .ud-version-button {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--fs-18);
+  font-weight: 400;
+  line-height: var(--lh-tight);
   color: var(--text);
+  text-align: left;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.update-dialog .ud-version-button { padding: 0; border: none; background: transparent; cursor: pointer; }
+.update-dialog .ud-version-button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.update-dialog .ud-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+  line-height: var(--lh-normal);
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
-
-.update-dialog .ud-chip.is-latest {
-  border-color: var(--accent-300);
-  background: var(--accent-50);
-  color: var(--text-accent);
+.update-dialog .ud-calendar { display: inline-flex; flex: 0 0 auto; color: var(--text-tertiary); }
+.update-dialog .ud-preference {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-18);
+  line-height: 22px;
+  color: var(--text);
+  cursor: pointer;
+  text-wrap: pretty;
 }
-
-.update-dialog .ud-arrow {
-  color: var(--text-disabled);
+.update-dialog .ud-preference input {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--bg-surface);
+  cursor: pointer;
 }
-
-.update-dialog .ud-size {
-  margin-left: auto;
+.update-dialog .ud-preference input:checked { border-color: var(--n-900); background: var(--n-900); }
+.update-dialog .ud-preference input:checked::after {
+  content: "";
+  display: block;
+  width: 5px;
+  height: 10px;
+  margin: 2px 0 0 6px;
+  border: solid var(--n-0);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.update-dialog .dialog-footer {
+  height: 72px;
+  min-height: 72px;
+  padding: 0 var(--sp-6) 28px;
+  border-top: none;
+  background: var(--bg-surface);
+  gap: var(--sp-3);
+}
+.update-dialog .dialog-footer .btn {
+  height: 44px;
+  min-width: 76px;
+  padding: 0 var(--sp-5);
+  border: none;
+  border-radius: var(--r-5);
+  background: var(--n-200);
+  color: var(--text);
+  font-size: var(--fs-18);
+  font-weight: 400;
   white-space: nowrap;
 }
+.update-dialog .dialog-footer .ud-action-left { margin-right: auto; }
+.update-dialog .dialog-footer .btn:hover:not(:disabled) { background: var(--n-300); }
+.update-dialog .dialog-footer .btn.primary { background: var(--n-900); color: var(--n-0); }
+.update-dialog .dialog-footer .btn.primary:hover:not(:disabled) { background: var(--n-800); }
+.update-dialog .dialog-footer .btn:disabled { opacity: 0.5; cursor: default; }
+.update-dialog button:focus-visible,
+.update-dialog input:focus-visible,
+.update-dialog .dialog-title-close:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
 
-/* ------------------------------------------------------------ 更新内容 */
-.update-dialog .ud-notes {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-3);
-  background: var(--n-25);
-}
+.update-dialog .ud-notes { display: flex; flex-direction: column; gap: var(--sp-2); }
+.update-dialog .ud-notes-title { font-size: var(--fs-13); font-weight: 600; color: var(--text-secondary); }
+.update-dialog .ud-notes-list { max-height: 132px; margin: 0; padding-left: var(--sp-5); overflow: auto; }
+.update-dialog .ud-notes-list li { font-size: var(--fs-13); line-height: var(--lh-normal); color: var(--text); overflow-wrap: anywhere; }
+.update-dialog .ud-progress { display: flex; flex-direction: column; gap: var(--sp-2); }
+.update-dialog .ud-track { height: 6px; border-radius: var(--r-full); background: var(--n-150); overflow: hidden; }
+.update-dialog .ud-fill { width: 0; height: 100%; border-radius: var(--r-full); background: var(--n-900); }
+.update-dialog .ud-meta { font-size: var(--fs-12); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.update-dialog .ud-error { font-size: var(--fs-12); line-height: var(--lh-normal); color: var(--danger-600); white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-dialog .ud-error:empty { display: none; }
 
-.update-dialog .ud-notes-title {
-  font-size: var(--fs-12);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.update-dialog .ud-notes-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 132px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow: auto;
-}
-
-.update-dialog .ud-notes-list li {
-  position: relative;
-  padding-left: 14px;
-  font-size: var(--fs-12);
-  line-height: 1.6;
-  color: var(--n-700);
-  overflow-wrap: anywhere;
-}
-
-.update-dialog .ud-notes-list li::before {
-  content: "";
-  position: absolute;
-  top: 8px;
-  left: 2px;
-  width: 4px;
-  height: 4px;
-  border-radius: var(--r-full);
-  background: var(--accent-400);
-}
-
-/* ------------------------------------------------------------ 下载进度 */
-.update-dialog .ud-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.update-dialog .ud-track {
-  height: 6px;
-  border-radius: var(--r-full);
-  background: var(--n-150);
-  overflow: hidden;
-}
-
-.update-dialog .ud-fill {
-  width: 0;
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--accent-500);
-  transition: width var(--dur-base) var(--ease-out);
-}
-
-.update-dialog .ud-meta {
-  min-height: 15px;
-  font-size: var(--fs-11);
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 检查中的不确定进度：一段色块沿轨道循环平移（只动 transform，不触发布局） */
-.update-dialog .ud-indeterminate {
-  position: relative;
-  height: 3px;
-  border-radius: var(--r-full);
-  background: var(--n-150);
-  overflow: hidden;
-}
-
-.update-dialog .ud-indeterminate::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 38%;
-  border-radius: var(--r-full);
-  background: var(--accent-400);
-  transform: translateX(-100%);
-  animation: ud-slide 1.1s var(--ease-out) infinite;
-}
-
-@keyframes ud-slide {
-  to {
-    transform: translateX(265%);
-  }
-}
-
-/* ------------------------------------------------------------ 错误行 */
-.update-dialog .ud-error {
-  font-size: var(--fs-11);
-  line-height: 1.5;
-  color: var(--danger-600);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* 空内容不占位，避免状态切换时多出一段空白 */
-.update-dialog .ud-error:empty {
-  display: none;
+@media (max-width: 480px) {
+  .update-dialog .dialog-body { padding-right: var(--sp-4); padding-left: var(--sp-4); }
+  .update-dialog .dialog-footer { height: auto; min-height: 72px; flex-wrap: wrap; padding-right: var(--sp-4); padding-left: var(--sp-4); }
+  .update-dialog .dialog-footer .btn { min-width: 0; padding-right: var(--sp-3); padding-left: var(--sp-3); font-size: var(--fs-15); }
+  .update-dialog .ud-preference { font-size: var(--fs-15); }
 }

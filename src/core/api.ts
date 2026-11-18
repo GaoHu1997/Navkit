@@ -654,9 +654,10 @@ export const api = {
 
   // 软件更新
   updateCheck: () => call<import("./types").UpdateCheckResult>("update_check"),
-  updateDownload: () => call<string>("update_download"),
+  updateDownload: (expectedVersion?: string, expectedSha256?: string) =>
+    call<string>("update_download", { expectedVersion: expectedVersion ?? null, expectedSha256: expectedSha256 ?? null }),
   updateStatus: () => call<import("./types").UpdateStatus>("update_status"),
-  updateApply: () => call<void>("update_apply"),
+  updateApply: (expectedSha256?: string) => call<void>("update_apply", { expectedSha256: expectedSha256 ?? null }),
 
   // 数据字典导出
   dictionaryMetadata: (id: string, schemaName: string) =>
@@ -902,7 +903,7 @@ export interface StructureSyncRequest {
   review_digest: string;
 }
 export interface StructureChange {
-  kind: "add_column" | "alter_column" | "drop_column" | "primary_key" | "index" | "table_option" | string;
+  kind: "add_column" | "alter_column" | "drop_column" | "primary_key" | "index" | "drop_index" | "table_option" | string;
   object: string;
   before: string | null;
   after: string | null;

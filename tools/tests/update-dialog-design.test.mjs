@@ -18,7 +18,7 @@ test('选择器限定在 .update-dialog 内，不写死颜色', () => {
   const selectors = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{/g)].map(match => match[1].trim());
   for (const selector of selectors) {
     assert.ok(
-      selector.startsWith('.update-dialog') || selector.startsWith('@keyframes') || selector === 'to',
+      selector.startsWith('.update-dialog') || selector.startsWith('@media') || selector.startsWith('@keyframes') || selector === 'to',
       '越界选择器：' + selector,
     );
   }

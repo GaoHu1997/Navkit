@@ -9,6 +9,8 @@
 import "../styles/update-badge.css";
 import { api } from "../core/api";
 import type { UpdateManifest, UpdateProgressEvent } from "../core/types";
+import { downloadUpdate, isUpdateSkipped, readUpdatePreferences, subscribeUpdatePreferences } from "../core/updatePreferences";
+import { taskCenter } from "../core/backgroundTasks";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const BADGE_W = 54;
@@ -55,6 +57,10 @@ export class UpdateBadge {
   private checkTimer: number | null = null;
   private pollTimer: number | null = null;
   private stopEventListener: (() => void) | null = null;
+  private stopPreferences: (() => void) | null = null;
+  private checking = false;
+  private generation = 0;
+  private firstCheckTimer: number | null = null;
   private readonly notify?: UpdateBadgeNotify;
 
   constructor(notify?: UpdateBadgeNotify) {
@@ -101,13 +107,23 @@ export class UpdateBadge {
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.stopPreferences = subscribeUpdatePreferences(() => {
+      if (this.phase === "available" && this.manifest && isUpdateSkipped(this.manifest.version)) this.hide();
+    });
     void this.restoreStatus();
-    window.setTimeout(() => void this.check(), FIRST_CHECK_DELAY_MS);
+    this.firstCheckTimer = window.setTimeout(() => void this.check(), FIRST_CHECK_DELAY_MS);
     this.checkTimer = window.setInterval(() => void this.check(), CHECK_INTERVAL_MS);
   }
 
   stop(): void {
     this.started = false;
+    this.generation++;
+    this.stopPreferences?.();
+    this.stopPreferences = null;
+    if (this.firstCheckTimer !== null) {
+      window.clearTimeout(this.firstCheckTimer);
+      this.firstCheckTimer = null;
+    }
     if (this.checkTimer !== null) {
       window.clearInterval(this.checkTimer);
       this.checkTimer = null;
@@ -116,16 +132,25 @@ export class UpdateBadge {
     this.stopProgressListener();
   }
 
+  private hasActiveUpdate(): boolean {
+    return this.phase === "downloading" || this.phase === "ready";
+  }
+
   /** 静默检查新版本；网络/未配置更新源时保持原状，不打扰用户。 */
   private async check(): Promise<void> {
-    if (this.phase === "downloading" || this.phase === "ready") return;
+    if (this.checking || this.hasActiveUpdate()) return;
+    this.checking = true;
+    const generation = this.generation;
     try {
       const result = await api.updateCheck();
-      if (result.update_available && result.manifest) this.setAvailable(result.manifest);
-      else this.hide();
+      if (generation !== this.generation || this.hasActiveUpdate()) return;
+      if (result.update_available && result.manifest) {
+        this.setAvailable(result.manifest);
+        if (this.phase === "available" && readUpdatePreferences().autoUpdate) await this.download();
+      } else this.hide();
     } catch {
       /* 静默失败 */
-    }
+    } finally { this.checking = false; }
   }
 
   private async restoreStatus(): Promise<void> {
@@ -147,6 +172,7 @@ export class UpdateBadge {
   /** 发现新版本：显示绿色「更新」。 */
   setAvailable(manifest: UpdateManifest | null): void {
     this.manifest = manifest;
+    if (manifest && isUpdateSkipped(manifest.version)) { this.hide(); return; }
     this.setPhase("available");
     this.labelEl.textContent = "更新";
     const what = manifest && manifest.version ? "新版本 " + manifest.version : "有可用更新";
@@ -195,13 +221,18 @@ export class UpdateBadge {
 
   private async download(): Promise<void> {
     if (this.phase !== "available") return;
+    const manifest = this.manifest;
+    if (!manifest || isUpdateSkipped(manifest.version)) return;
     this.enterDownloading(0, 0);
     this.listenProgress();
     this.startPolling();
+    const task = taskCenter.register("update", `软件更新下载 · v${manifest.version}`);
     try {
-      await api.updateDownload();
+      const file = await downloadUpdate(manifest);
+      task.finish("更新包已就绪，下次启动前可安装", file);
       this.setReady();
     } catch (e) {
+      task.fail(String(e));
       this.stopPolling();
       this.stopProgressListener();
       this.setAvailable(this.manifest);
@@ -213,7 +244,7 @@ export class UpdateBadge {
     this.el.disabled = true;
     this.el.title = "正在重启并安装更新…";
     try {
-      await api.updateApply();
+      await api.updateApply(readUpdatePreferences().pendingInstall?.sha256);
     } catch (e) {
       this.el.disabled = false;
       this.el.title = "点击重启并安装更新";
