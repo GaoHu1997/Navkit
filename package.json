@@ -1,7 +1,7 @@
 {
   "name": "navkit",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "NavKit 数据库管理工具 (Tauri 2 + Rust + 原生 TypeScript)",
   "type": "module",
   "scripts": {
