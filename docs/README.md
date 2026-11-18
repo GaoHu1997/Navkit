@@ -4,8 +4,8 @@
 
 | 目录 | 放什么 | 当前状态 |
 |---|---|---|
-| [`completed/`](completed/) | **只有结果**：[产品状态](completed/PRODUCT-STATE.md)，含能力矩阵、25 项实现归档、验收状态 | 与当前工作树一致（2026-11-11 核对） |
-| [`active/`](active/) | 当前轮次：进行中的过程文档与证据日志 | 当前为空（上一轮已归档） |
+| [`completed/`](completed/) | **只有结果**：[产品状态](completed/PRODUCT-STATE.md)，含能力矩阵、25 项实现归档、验收状态 | 与当前工作树一致（2026-11-18 更新弹窗条目已归档） |
+| [`active/`](active/) | 当前轮次：进行中的过程文档与证据日志 | 进行中条目见 [active 索引](active/README.md)；更新弹窗已归档 |
 | [`planned/`](planned/) | 尚未开工的计划，含范围、非目标、进入条件 | 当前无待开工计划，仅留候选备忘 |
 | [`design/`](design/) | 常驻设计输入：[设计规范 DESIGN.md](design/DESIGN.md)（唯一权威）、UI 原型与设计资产索引 | 被 `src/` 源码注释按路径引用，**不搬动** |
 

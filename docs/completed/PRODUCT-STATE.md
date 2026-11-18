@@ -4,7 +4,7 @@
 > 不是过程记录。任何一条能力的代码入口都必须可打开核对。
 > 更新规则见 `.agents/skills/docs-lifecycle/SKILL.md`。
 >
-> 最后核对：2026-11-15｜代码基线：工作树（`1d01834` + 未提交修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）。2026-11-16 已把 `feature/query-server-pagination` 与 `perf/stream-preview-eval-20261115` 合并进 main，原独立工作树的结构性结论在下方保留为历史证据，不再代表"未合并"事实。
+> 最后核对：2026-11-18｜代码基线：工作树（`38f591b` + 未提交结构同步 P1–P3 与既有修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）。2026-11-16 已把 `feature/query-server-pagination` 与 `perf/stream-preview-eval-20261115` 合并进 main，原独立工作树的结构性结论在下方保留为历史证据，不再代表"未合并"事实。
 
 > 最新修复验收基线：2026-11-14 Windows 程序 `5670dd85…6b930a84`，公开大总量预览完成判定已修复并经真实 IPC 验证；旧 F44373CB 失败结论保留为历史，后续未验收改动不覆盖本结论。
 
@@ -22,6 +22,25 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 🚧 | 仍有已确认的功能缺口，需要继续写代码 |
 
 ## 三、当前验证状态
+
+### 2026-11-18 更新弹窗与安全自动更新（STORY-UPD-001，⏳ 待用户验收）
+
+- 已按用户参考图实现 640×257 紧凑白底弹窗、NavKit 标志、版本/中文日期、最小化还原、自动更新复选框及左右按钮；说明默认折叠，可点击版本标题展开。入口：[更新弹窗](<../../src/dialogs/UpdateDialog.ts>)、[局部样式](<../../src/styles/update-dialog.css>)、[设计规范](<../design/DESIGN.md#6221-软件更新弹窗story-upd-001--需求-12>)。
+- 用户确认新增功能并选择「运行期间只自动下载，下次启动进入工作界面之前自动安装」。[偏好/下载协调](<../../src/core/updatePreferences.ts>) 默认自动更新关闭；指定版本跳过立即隐藏后台徽标并阻止同版本自动下载，新版本不受影响，手动检查仍可下载；「稍后」不写跳过记录。localStorage 写入失败保持本会话自动更新关闭并就地说明。
+- [后台徽标](<../../src/ui/UpdateBadge.ts>) 定时检查自动下载非跳过版本，不自动重启；[启动入口](<../../src/main.ts>) 在构造 App 前检查成功下载记录/授权/版本未跳过/ready/路径一致，消费记录后才安装，失败继续旧版工作区且提示可关闭。下载使用版本和 SHA-256 双身份去重并绑定 [IPC](<../../src/core/api.ts>)；[后端](<../../src-tauri/src/updater.rs>) 重新拉清单后若身份变化则拒绝，安装前以 64 KiB 缓冲再次核实际包哈希，避免固定暂存路径错包。无哈希的旧记录不触发自动安装，旧手动无参调用兼容。
+- AC-UPD-001-01/02/03/04/05 技术验证：最终定向更新回归 **41/41**，覆盖六状态、跳过/偏好、共享下载、版本/哈希绑定、启动安全门、迟到回执及焦点；[弹窗测试](<../../tools/tests/update-dialog.test.mjs>)、[徽标测试](<../../tools/tests/update-badge.test.mjs>)、[偏好测试](<../../tools/tests/update-preferences.test.mjs>)。复现：`node --test tools/tests/update-dialog.test.mjs tools/tests/update-dialog-design.test.mjs tools/tests/update-badge.test.mjs tools/tests/update-preferences.test.mjs`。
+- [隔离浏览器验收](<../../tools/tests/update-dialog-browser.mjs>) 五组通过，实际组件/CSS，无真实更新 IPC：640×257、黑白布局、展开/复选框/还原、Escape 与焦点恢复、下载→就绪、错误→重试→最新、375px 窄屏长版本和缺失日期；pageErrors=0。证据：[报告](<../../artifacts/update-dialog-reference/report.json>)、[默认效果](<../../artifacts/update-dialog-reference/available.png>)。`npm run build` 通过，保留既有大 chunk 与 dialog 静态/动态混用警告。
+- 最终集成验证（2026-11-18）：`npm run test:ui` **1512 passed / 0 failed / 2 skipped**（[完整 UI 结果](<../../.tmp/update-dialog-ui-final-20261118.log#L1538-L1545>)）；主代理独立运行 `cargo test --manifest-path src-tauri/Cargo.toml --lib updater::tests --offline` **19/19 passed**，含新增 6 项清单身份与暂存包校验用例（[Rust 结果](<../../.tmp/update-dialog-rust-final-20261118.log#L659-L680>)）。文档链接、本任务差异检查及最终 `cargo check --manifest-path src-tauri/Cargo.toml --lib --offline` 均通过（[后端离线检查](<../../.tmp/update-dialog-cargo-check-final-20261118.log>)）；差异检查按 Windows CR-at-EOL 规则处理，不修改其它任务的行尾。
+- 本次仅源码及前端构建产物，未重建/替换桌面 exe，未提交/发布，未执行真实下载或跨版本自动重启；真实 Windows 跨版本演练与用户最终视觉验收仍为 ⏳。后端仅追加与自动更新直接相关的身份/校验守卫，无数据库迁移。
+
+### 2026-11-17 结构同步 P1–P3
+
+- P1：逐项展示新增/修改/删列、主键和增删索引，扫描/破坏性风险分别确认；未知/不支持计划不能应用。确认只授权后端冻结的完整计划，改连接/映射使旧 review 失效。入口：[风险预览组件](<../../src/ui/StructureSyncReview.ts>)、[确认身份](<../../src/core/structure-review.ts>)、[执行会话](<../../src/core/structure-sync.ts>)、[方案 A 窗口](<../../src/dialogs/SyncDialog.ts>)。
+- P2（⏳ 缺 MySQL/PG 现场）：已接入同方言原生 PostgreSQL / MySQL 8 的 [owned 执行通道](<../../src-tauri/src/structure_server.rs>)、[真实元数据与依赖](<../../src-tauri/src/structure_server_metadata.rs>)、[安全 SQL/影子计划](<../../src-tauri/src/structure_server_plan.rs>)、[命令路由](<../../src-tauri/src/structure_commands.rs>)。PG 事务内锁/CAS/DDL/读回，失败确认回滚；类型改动仅认证无损扩大。MySQL 影子复制、原子 RENAME、保留原表备份和明确恢复 SQL；不把隐式 DDL 标为事务回滚，不自动清除备份。复杂约束、视图/触发器/生成列/分区未无损认证时明确拒绝；需要完整元数据与事务/锁证据权限。MariaDB/TiDB/兼容协议、自定义 ODBC、跨方言不放行。
+- P3：SQLite [重建编译器](<../../src-tauri/src/structure_sqlite_rebuild.rs>) 与 [owned worker](<../../src-tauri/src/structure_execution.rs>) 在事务内保留目标数据/rowid、认证 CHECK/出站外键、普通索引、视图链和触发器原文；保留触发器注册次序。依赖待删列、入站/self 外键或未建模属性明确拒绝重建。类型转换拒绝截断/不规范转换及精度损失；失败/停止 ROLLBACK，COMMIT ACK 未知隔离且不重放。STRICT/WITHOUT ROWID/生成列/自增/自定义 collation/表达式及降序索引仍不支持。
+- 本次不实现数据同步 `delete_missing` 删除多余行；它不是结构 P1–P3，仍被后端 reviewed-deletion 门禁拒绝。
+- 验证入口：[结构契约](<../../tools/tests/structure-sync.test.mjs>)、[界面确认](<../../tools/tests/structure-review-ui.test.mjs>)、[SQLite 真库重建测试](<../../src-tauri/src/structure_sqlite_rebuild_tests.rs>)、[服务端契约/显式实库测试](<../../src-tauri/src/structure_server_tests.rs>)。复现：`pnpm run test:ui`；`cargo test --manifest-path src-tauri/Cargo.toml --lib structure --offline`；实库需设置 `NAVKIT_STRUCTURE_MYSQL_URL` / `NAVKIT_STRUCTURE_POSTGRES_URL` 并对 `structure_commands::server::tests::real_` 筛选加 `-- --ignored`。缺 URL 的 ignored 不计通过。
+- 最终验证：TypeScript/Vite 构建通过；完整 UI **1487 passed / 0 failed / 2 skipped**；主代理在最终整合树独立复跑结构 Rust **81 passed / 0 failed / 3 ignored**、C1 controlled-execution **4/4**。其中新增 SQLite 重建 19 项（18 项真实 SQLx SQLite，含真实文件丢提交 ACK），MySQL/PG 专用实库用例未运行，不计通过。Rust 库离线检查与文档链接检查通过；未重建/替换用户桌面 exe，未提交或发布。
 
 ### 2026-11-15 查询服务器分页 / 导出重查 / 表数据 Keyset（分支 feature/query-server-pagination）
 
@@ -248,10 +267,11 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 |---|---|---|---|
 | 导入导出：CSV/JSON/SQL 向导 | `src/dialogs/ImportExportDialog.ts`、`src-tauri/src/transfer.rs`、`src-tauri/src/transfer_export_cursor.rs`、`src-tauri/src/transfer_http_export.rs`、`src-tauri/src/transfer_mongo_export.rs` | ⏳ | 表级导出新增 ClickHouse/通用 ODBC（CSV/JSON/表数据 SQL）、HTTP/Native 与 MongoDB（CSV/JSON）；Mongo JSON 为 canonical Extended JSON。Redis 例外、MQTT 历史导出明确拒绝；非关系来源不生成 SQL、不接受 SQL WHERE。真实厂商验收及导入混合失败/目标 CAS 仍未做 |
 | 数据传输：仅结构/仅数据/二者、列映射、主键比较、增量 | `src-tauri/src/transfer.rs`、`src-tauri/src/datasource_sync/`、`src-tauri/src/sync_stream.rs` | ⏳ | 一致快照、有界增量与别名自同步未验收；增量仅 SQLite 双端原生通道 |
-| 结构差异同步 | `src-tauri/src/transfer.rs`、`src-tauri/src/structure_commands.rs` | ⏳ | 其他方言、外键/检查变更、保数据重建未闭环 |
+| 结构差异同步 | [结构命令](<../../src-tauri/src/structure_commands.rs>)、[SQLite 重建](<../../src-tauri/src/structure_sqlite_rebuild.rs>)、[MySQL/PG](<../../src-tauri/src/structure_server.rs>) | ⏳ SQLite 实际 C1 测试通过；MySQL/PG 缺专用实库/桌面验收 | 已落地 P1–P3 认证子集；依赖删除、SQLite 入站 FK、未建模属性不自动处理；不含数据删多余行 |
 | 大数据流式传输 | `src-tauri/src/transfer.rs` | ⏳ | 增量分支、单超大驱动行内存上界、跨厂商背压未实测 |
 | 备份 / 还原：整库 SQL 转储、备份列表与恢复 | `src/dialogs/BackupDialog.ts`、`src-tauri/src/transfer.rs` | ✅ | MySQL DDL 自动提交，重建目标表不可整体回滚 |
 | 数据字典导出：Word/PDF/Excel(单 sheet/每表)/HTML/Markdown | `src-tauri/src/data_dictionary.rs`、`src/dialogs/DataDictionaryDialog.ts` | ✅ | 模板列集照 参考模板；Word/Excel/HTML 仅表，PDF/Markdown 含视图与存储过程；PDF 内嵌系统中文字体（SimHei/等线），无字体时报错不生成 |
+| 更新弹窗：参考图样式、跳过指定版本、后台自动下载/下次启动前安装 | [弹窗](<../../src/dialogs/UpdateDialog.ts>)、[偏好/安全门](<../../src/core/updatePreferences.ts>)、[启动入口](<../../src/main.ts>) | ⏳ | 技术回归和隔离浏览器通过；运行期间不自动重启；真实跨版本与用户视觉验收未执行 |
 | 软件更新：检查/下载(SHA-256+断点续传)/换名替换重启/清理旧版 | `src-tauri/src/updater.rs`、`src/dialogs/UpdateDialog.ts` | ✅ | 清单挂自有镜像仓库 Navkit-drivers（可用 feed.json/环境变量覆盖）；换名替换参考 magpie，落位失败自动回滚；未做真实大版本跨级演练 |
 | 自动运行：任务保存、到期执行、历史 | `src-tauri/src/commands.rs`、`src/core/scheduler*`、`src-tauri/src/scheduler_offline.rs` | 🚧 | Cron/DST/lease/DAG/离线安装计划内核已接；系统任务注册与真实 headless 运行未做 |
 | 用户管理：MySQL 协议族 `mysql.user` 真实数据、编辑用户与权限管理（常规/高级/成员属于/成员/服务器权限/权限/SQL 预览） | `src-tauri/src/db_users.rs`、`src/dialogs/UserDialog.ts` | ✅ | 仅 MySQL 协议族；角色页依赖 MySQL 8.0+ 的 `mysql.role_edges` |
@@ -306,6 +326,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 | ID | 任务 | 已落地 | 待办 |
 |---|---|---|---|
+| STORY-UPD-001 | 更新弹窗与安全自动更新 | [参考图弹窗](<../../src/dialogs/UpdateDialog.ts>)、[更新偏好](<../../src/core/updatePreferences.ts>)、[启动门禁](<../../src/main.ts>)、[后端身份/哈希](<../../src-tauri/src/updater.rs>)；41 项更新定向回归、隔离浏览器布局/交互通过 | 用户视觉验收与真实跨版本自动安装 ⏳；不含 exe 重建/发布 |
 | STREAM-PREVIEW-PERF-01 | 旧完整回执与流式200行性能评估 | [stream_preview_bench_tests.rs](../../src-tauri/src/stream_preview_bench_tests.rs#L300)、隔离UUID夹具/有界播种脚本、同一亿行表五档真实服务测量、54逐轮记录、缓存截断拒绝门、逐轮真实释放；结论与证据见§三 | 流式前端另行决定⏳；本机MySQL取消回归原因待诊断🚧 |
 | PL-01 | 只读连接执行保护 | SQLite 实际只读、authorizer、保存配置权威门禁 | 远端/驱动复杂只读复核 🚧 |
 | PL-02 | 适配器图形化写入闭环 | 类型化值、唯一 C2 计划/预算、同事务 CAS/读回、未知提交冻结、JDBC/H2 桥 | 真实 H2 六入口、其他厂商负向复验 ⏳ |
@@ -316,7 +337,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | PL-07 | 离页保存提醒 | 关闭时未保存 SQL 保存到已保存查询、其它编辑显式丢弃、进行中操作阻止离页 | 本机恢复稿删除后无跨实例恢复路径 ✅ |
 | PL-08 | 网格复制 | 多格式编码、NULL/精度/二进制、失败入口 | OS 剪贴板真实读回 ⏳ |
 | PL-09 | 例程安全重建 | 精确身份、加载时定义基线、PG 受控 body 替换、一次性 CREATE | MySQL 破坏性重建/权限恢复、外部 DDL 竞争 🚧 |
-| PL-10 | 结构差异同步 | 完整有序键/引用配对、双端物理身份、一次 review 执行、事务读回 | 其他方言、外键/检查变更、保数据重建 🚧 |
+| PL-10 | 结构差异同步 | 逐项风险确认、完整 SQL review、SQLite 保数据事务重建、PG owned DDL、MySQL 影子备份与原子切换 | MySQL/PG 实库与桌面验收 ⏳；复杂依赖/未建模属性拒绝；数据 `delete_missing` 仍独立未实现 |
 | PL-11 | 业务键增量数据同步 | SQLite 快照游标、业务键 typed 定位/原值 CAS/全行读回、视图配对显式全量物化 | 实库复验、正式删除预览、跨厂商 🚧 |
 | PL-12 | 导入冲突处理 | 冲突选项与后端规则初版 | 混合失败、目标 CAS、类型化绑定实测 ⏳ |
 | PL-13 | 大数据流式传输 | 非 UTF8 固定 buffer、SQL 完整预扫、单 SELECT cursor、原子不覆文件 | 增量分支、单超大行内存上界、跨厂商背压 🚧 |
@@ -366,12 +387,16 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 17. **MySQL取消实库回归**：🚧 [execution_tests.rs](../../src-tauri/src/execution_tests.rs#L553) 的100ms SLEEP取消用例两次实际Unknown、期望TimedOut；根因未确认，不能将模拟通过写成厂商取消通过。独立重跑后该UUID会话为0、库删除，不替代回执时刻资源证据。保留 [mysql-cancel-unknown-20261115.md](../active/mysql-cancel-unknown-20261115.md#L1) 诊断范围与验收标准。
 18. **查询页服务器分页边界**：单页补齐额外受 32 MiB 内存预算约束，超限、无完整 spool、单行读取返回 0 时明确报错并提示减小每页行数，不把截断当尾页、不跳过不可见行；用户写了 LIMIT 的查询分页范围不超过该 LIMIT；SQL Server/ODBC/JDBC 暂不前置服务器分页，回退原全量路径并显示原因；UDF/函数业务副作用不能由 SQL 文本证明，导出重查只保证语句文本层面只读。
 
+19. **结构同步 P1–P3 边界**：仅同方言原生 SQLite/MySQL 8/PostgreSQL。SQLite 入站/self 外键、STRICT/WITHOUT ROWID/自增/生成列等重建拒绝；删列触及现有依赖则不自动 CASCADE。PG 仅认证无损扩大类型；MySQL 保留原表备份、需要明确的完整目录/事务/MDL 证据权限，隐式 DDL 不等于事务回滚。MySQL/PG 本轮没有实际服务器 URL，实库测试为 ignored，不能称生产服务器验证。数据 `delete_missing` 不在本结构迭代内，仍拒绝未审核删除。
+
 ## 七、文档来源合并记录
 
 本文档合并了以下过程文档与直接结果。已完成过程原件按生命周期删除；明确功能缺口的当前轮次另留 active，并在已知限制中记录：
 
 | 原件 | 合并内容 |
 |---|---|
+| active/STORY-UPD-001-update-dialog.md | 2026-11-18 合并已确认参考图样式、跳过版本、后台自动下载/下次启动前安装、清单身份绑定及安装前重校验、41 项定向回归与隔离浏览器证据至 §三/§四/§五；真实跨版本与用户视觉待验，过程原件删除 |
+| active/structure-sync-p1-p3.md | 2026-11-17 合并 P1 风险确认、SQLite 保数据重建、MySQL/PG owned 结构通道与备份恢复边界到 §三/§四/PL-10/§六；完整 UI 1487/0/2 skipped、最终结构 81/0/3 ignored、C1 4/4、构建与文档检查；实库和桌面未验不计通过，过程原件删除 |
 | NavKit-完整任务书.md | 产品事实、界面版式基准约束 |
 | 验收报告.md | 早期全量验收结论 |
 | 14项修复验收报告.md | 14 项缺陷修复结论 |

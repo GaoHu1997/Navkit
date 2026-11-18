@@ -7,6 +7,9 @@
 
 | 文档 | 内容 | 状态 |
 |---|---|---|
+| [缺陷决策清单（代码复核版）](navkit-bug-decision-list-20261118.md) | **给负责人逐条决策用**：每项回到 main 代码核实实现状态，标注「不修的后果」「改动成本」「建议修/不修」；已剔除 3 处误报、2 处已修复项 | 待用户逐条决定 |
+| [待修复缺陷清单](navkit-bug-fix-list-20261118.md) | 初版清单（按测试报告整理，20 项） | 已被决策清单取代，保留作对比 |
+| [第四轮功能与性能测试报告](navkit-round4-feature-perf-report.md) | v1.0.2 桌面实测：12 项功能矩阵（MySQL 12/12、SQLite 11/11）+ 分页/工具链性能（万→亿 + 100列×2000万专项）；新缺陷 D-R4-1~5（count 解码失败、Keyset 未激活、亿级导入实用性障碍等） | 报告完成；box 多数据源补测待 v1.0.2 deb（建议 GitHub Actions 发布后执行） |
 | [第四轮回归与全驱动性能](navkit-round4-regression-performance.md) | 第三轮 D7/YEAR/D10/D5 修复，D9 分类、D11 缺口；全驱动矩阵与 MySQL/SQLite 实库性能 A/B | 已验证结论已并入 `../completed/PRODUCT-STATE.md`；D11 仍为 🚧，本文保留以对应未完成缺口 |
 | [mysql-cancel-unknown-20261115.md](mysql-cancel-unknown-20261115.md#L1) | 独立性能实测发现真实 MySQL 取消回归返回 Unknown；两轮失败与清理证据 | 原因待诊断；性能分支未改运行时，修复需另行任务 |
 | [性能方案](<navkit-data-pipeline-performance.md>) / [实施状态](<navkit-data-pipeline-performance-status.md>) / [用户审阅对比表](<navkit-performance-comparison.md>) | 七类数据链路、负优化识别与逐项保留决策 | 审阅准备：本地原生路径、COPY/一致备份显式模式、SQLite分段与准入已开发；diff负收益不默认，实库/全负载验证边界明确，待最终统一回归和用户决定 |
