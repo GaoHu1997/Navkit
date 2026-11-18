@@ -1,5 +1,6 @@
 /** 结构同步的固定预览与受控执行；页面不生成或执行 SQL。 */
 import type { StructureDiffReport, StructureSyncRequest, StructureSyncReceipt, StructurePreview, StructurePhysicalIdentity } from "./api";
+import { hasCompleteStructureConsent, requiredStructureConsents } from "./structure-review";
 import { ExecutionController, type ExecutionOutcome, type ExecutionRequest, type ExecutionTransport } from "./execution";
 
 export interface StructureSyncPort extends Omit<ExecutionTransport, "executeSqlV2"> {
@@ -27,7 +28,8 @@ function boundObservation(report: StructurePreview, request: StructureSyncReques
   const binding = report.observation_binding;
   const identity = (value: StructurePhysicalIdentity | null, schema: string, table: string): boolean => !!value
     && value.schema === schema && value.table === table && Number.isSafeInteger(value.rootpage) && value.rootpage > 0
-    && ["sqlite-file", "sqlite-memory"].includes(value.database?.kind) && typeof value.database.identity === "string"
+    && ["sqlite-file", "sqlite-memory", "mysql-server", "postgres-server"].includes(value.database?.kind) && typeof value.database.identity === "string"
+    && (!["mysql-server", "postgres-server"].includes(value.database.kind) || value.database.canonical_path === null)
     && value.database.identity.length > 0 && value.database.identity.length <= 4096
     && (value.database.canonical_path === null || typeof value.database.canonical_path === "string");
   return revision(report.observation_digest) && revision(report.source_revision)
@@ -96,6 +98,7 @@ export class StructureSyncSession {
       if (!report || typeof report.alterable !== "boolean" || typeof report.target_exists !== "boolean" || !Array.isArray(report.changes) || !Array.isArray(report.steps) || !Array.isArray(report.unsupported) || !Array.isArray(report.warnings) || report.steps.some(step => typeof step?.sql !== "string" || !step.sql.trim() || typeof step.label !== "string")) throw new Error("STRUCTURE_PREVIEW_INVALID: 预览协议不完整");
       if (!boundObservation(report, request, this.ownerId)) throw new Error("STRUCTURE_PREVIEW_UNBOUND: 缺少完整双端物理快照与独立核对证据");
       if (report.alterable && report.target_exists && !report.unsupported.length && report.steps.length) {
+        if (report.changes.some(change => !change || typeof change.kind !== "string" || typeof change.object !== "string" || !["safe", "scan_required", "destructive"].includes(change.risk))) throw new Error("STRUCTURE_PREVIEW_INVALID: 可执行计划包含未知/不支持的风险状态");
         if (report.observation_only || !boundReport(report, request, this.ownerId) || !sameSource(report, { ...report, observation_binding: report.review_binding! }) || report.final_design?.schema !== request.target_schema || report.final_design.table !== request.target_table || !/^STRUCTURE_SYNC_REVIEW [0-9a-f]{64}$/.test(report.request_sql)) throw new Error("STRUCTURE_PREVIEW_UNBOUND: 缺少双端真实来源/固定版本/受控工作标识");
         this.review = { input: inputKey, request: { ...request, source_revision: report.source_revision, target_revision: report.target_revision, review_digest: report.review_digest }, report: structuredClone(report) };
       } else if (!report.observation_only || report.request_sql || report.review_digest || report.review_binding) {
@@ -109,10 +112,11 @@ export class StructureSyncSession {
       this.message = reconciled ? `${report.summary}；已核对当前双端结构，此前执行的未知终态保持不变` : report.summary; return report;
     } finally { this.reading = false; this.changed(); }
   }
-  async apply(confirmDestructive = false): Promise<StructureSyncReceipt> {
+  async apply(confirmDestructive = false, approvedChanges: readonly string[] = []): Promise<StructureSyncReceipt> {
     if (this.disposed || this.busy || this.unknown) throw new Error("结构执行尚未结束或回执未知；必须明确读取真实双端核对");
     const review = this.review;
     if (!review || key(this.port.current()) !== review.input) { this.invalidate(); throw new Error("STRUCTURE_REVIEW_CHANGED: 请按当前映射重新预览，未签发执行授权"); }
+    if (!hasCompleteStructureConsent(review.report, approvedChanges)) throw new Error(`STRUCTURE_CHANGE_CONFIRMATION_REQUIRED: 请逐项确认 ${requiredStructureConsents(review.report).length} 项扫描/破坏风险，未签发授权`);
     if ((review.request.allow_drop || review.report.changes.some(change => change.risk === "destructive")) && !confirmDestructive) throw new Error("STRUCTURE_DESTRUCTIVE_CONFIRMATION_REQUIRED: 尚未明确确认破坏性结构变更");
     this.review = null; this.active = structuredClone(review); this.reconciliation = structuredClone(review.report); this.receipt = null; this.message = "正在应用已确认的结构计划"; this.changed();
     try {
@@ -120,21 +124,26 @@ export class StructureSyncSession {
         namespace: review.request.target_schema, owner_id: this.ownerId, sql: review.report.request_sql, timeout_ms: 60_000, origin: "structure-sync" });
       if (!outcome || outcome.state === "unknown" || outcome.resources_pending) { this.unknown = true; throw new Error("结构回执未知或资源仍在排空；禁止重放，请明确重新预览核对真实目标"); }
       const receipt = this.currentReceipt();
+      const mysql = review.report.target_identity?.database.kind === "mysql-server";
       if (outcome.state !== "succeeded") {
-        if (outcome.effects !== "no_effect" && outcome.transaction_state !== "rolled_back") this.unknown = true;
+        const retained = mysql && ["shadow_failed_original_retained", "shadow_restored_backup_retained"].includes(outcome.transaction_state)
+          && receipt?.receipt.transaction === outcome.transaction_state && receipt.report.review_digest === review.request.review_digest
+          && boundReport(receipt.report, review.request, this.ownerId);
+        if (outcome.effects !== "no_effect" && outcome.transaction_state !== "rolled_back" && !retained) this.unknown = true;
         throw new Error(outcome.error?.message || "结构计划未成功提交；请核对后重新预览");
       }
+      const expectedTransaction = mysql ? "shadow_swapped_backup_retained" : "committed";
       if (!receipt || receipt.report?.review_digest !== review.request.review_digest || !boundReport(receipt.report, review.request, this.ownerId)
         || receipt.report.source_revision !== review.request.source_revision || receipt.report.target_revision !== review.request.target_revision
         || receipt.report.review_binding?.principal !== review.report.review_binding?.principal || receipt.report.review_binding?.source_fingerprint !== review.report.review_binding?.source_fingerprint || receipt.report.review_binding?.target_fingerprint !== review.report.review_binding?.target_fingerprint
-        || outcome.transaction_state !== "committed"
-        || receipt.receipt?.verified !== true || receipt.receipt.unverified !== false || receipt.receipt.transaction !== "committed"
+        || outcome.transaction_state !== expectedTransaction
+        || receipt.receipt?.verified !== true || receipt.receipt.unverified !== false || receipt.receipt.transaction !== expectedTransaction
         || !Array.isArray(receipt.receipt.mismatches) || receipt.receipt.mismatches.length || !Array.isArray(receipt.receipt.steps)
         || receipt.receipt.steps.length !== review.report.steps.length || receipt.receipt.steps.some((step, index) => step.status !== "applied" || step.sql !== review.report.steps[index]?.sql)
         || receipt.receipt.schema?.table !== review.request.target_table || receipt.receipt.schema.database !== review.request.target_schema) {
         this.unknown = true; throw new Error("STRUCTURE_RECEIPT_INVALID: 缺少匹配的提交及完整结构读回证据，禁止重放");
       }
-      this.message = "结构已提交并完成读回校验"; return receipt;
+      this.message = mysql ? "结构影子表已原子切换并完成校验；原表备份保留，恢复信息见预览" : "结构已提交并完成读回校验"; return receipt;
     } catch (error) {
       if (this.execution.state === "unknown" || this.execution.busy) this.unknown = true;
       this.message = String(error); throw error;

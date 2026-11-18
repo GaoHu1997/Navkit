@@ -1,4 +1,6 @@
 //! Reviewed structure synchronization over the existing C1 registry and owned workers.
+#[path = "structure_server.rs"] pub mod server;
+
 use std::sync::Arc;
 use tauri::State;
 use crate::{
@@ -47,12 +49,17 @@ pub(crate) fn recheck_runtime(state: &AppState, request: &StructureSyncRequest, 
     if review_binding(state, request, &expected.principal, &expected.owner)? != *expected {
         return Err(AppError::coded("STRUCTURE_CONTEXT_CHANGED", "读取或排队期间双端配置/凭据材料改变，请明确重新预览"));
     }
-    // These owned workers currently prove SQLite only. Never label an overridden/custom adapter as SQLite.
-    if !matches!(source.as_ref(), Db::Sqlite(_)) || !matches!(target.as_ref(), Db::Sqlite(_)) {
-        return Err(AppError::coded("STRUCTURE_CONTROLLED_DIALECT_UNSUPPORTED", "当前 owned 结构同步已认证 SQLite；此实际适配器尚未接入事务与来源校验"));
+    let source_kind = commands::saved_config(state, &request.source_connection)?.kind;
+    let target_kind = commands::saved_config(state, &request.target_connection)?.kind;
+    let sqlite = matches!((source.as_ref(), source_kind.protocol(), target.as_ref(), target_kind.protocol()),
+        (Db::Sqlite(_), crate::models::Protocol::Sqlite, Db::Sqlite(_), crate::models::Protocol::Sqlite));
+    if !sqlite && !server::native_pair(source, &source_kind, target, &target_kind) {
+        return Err(AppError::coded("STRUCTURE_CONTROLLED_DIALECT_UNSUPPORTED", "owned 结构同步仅认证实际 SQLite/同方言 MySQL 8/PostgreSQL；兼容适配器和跨方言不伪装身份"));
     }
-    if !state.connection_runtime.matches(&request.source_connection, &expected.source_fingerprint, source)
-        || !state.connection_runtime.matches(&request.target_connection, &expected.target_fingerprint, target) {
+    let source_key = commands::physical_key(&request.source_connection, &request.source_schema, source);
+    let target_key = commands::physical_key(&request.target_connection, &request.target_schema, target);
+    if !state.connection_runtime.matches(&source_key, &expected.source_fingerprint, source)
+        || !state.connection_runtime.matches(&target_key, &expected.target_fingerprint, target) {
         return Err(AppError::coded("STRUCTURE_RUNTIME_CHANGED", "实际物理池不属于已审核双端配置，没有发送 DDL"));
     }
     Ok(())
@@ -72,7 +79,11 @@ pub async fn preview_controlled_structure_sync(window: tauri::WebviewWindow, sta
     let source = commands::scoped_db(&state, &request.source_connection, &request.source_schema).await?;
     let target = commands::scoped_db(&state, &request.target_connection, &request.target_schema).await?;
     recheck_runtime(&state, &request, &binding, &source, &target)?;
-    let preflight = metadata::preflight(source.clone(), source_cfg.kind, target.clone(), target_cfg.kind, ordinary, request.clone(), binding.clone(), target_cfg.read_only).await?;
+    let preflight = if server::native_pair(&source, &source_cfg.kind, &target, &target_cfg.kind) {
+        server::preflight(source.clone(), source_cfg.kind, target.clone(), target_cfg.kind, ordinary, request.clone(), binding.clone(), target_cfg.read_only).await?
+    } else {
+        metadata::preflight(source.clone(), source_cfg.kind, target.clone(), target_cfg.kind, ordinary, request.clone(), binding.clone(), target_cfg.read_only).await?
+    };
     recheck_runtime(&state, &request, &binding, &source, &target)?;
     Ok(preflight)
 }

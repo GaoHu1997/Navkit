@@ -1,6 +1,7 @@
 /** 表对表与整库（库到库）同步向导：映射、建表与进度反馈。 */
 import { api, syncApi, transferTasks, type DbSyncOptions, type DiffMemoryOptions, type DiffMemoryStats, type StructureDiffReport, type SyncOptions, type SyncReport, type TaskProgress } from "../core/api";
 import { namespaceName } from "../core/namespace-label";
+import { StructureSyncReview } from "../ui/StructureSyncReview";
 import { StructureSyncSession } from "../core/structure-sync";
 import { structureSyncConnectionError, syncConnectionError, syncDiffConnectionError } from "../core/toolCapabilities";
 import type { ConnectionConfig } from "../core/types";
@@ -211,8 +212,9 @@ export function openSyncDialog(
   incrUpdateLabel.append(incrUpdate, incrUpdateText);
   const where = textInput("");
   const bizKey = textInput(""); bizKey.setAttribute("placeholder", "业务键列（逗号分隔，留空用主键）"); bizKey.setAttribute("aria-label", "增量同步业务键列");
+  bizKey.id = `sync-biz-key-${crypto.randomUUID()}`;
   const deleteMissing = document.createElement("input"); deleteMissing.type = "checkbox";
-  const deleteMissingLabel = document.createElement("label"); deleteMissingLabel.className = "checkbox";
+  const deleteMissingLabel = document.createElement("label"); deleteMissingLabel.className = "checkbox sync-danger-option";
   deleteMissingLabel.append(deleteMissing, document.createTextNode("增量时删除目标中多余的行（不可恢复）"));
   const create = document.createElement("input"); create.type = "checkbox"; create.checked = true;
   const createLabel = document.createElement("label"); createLabel.className = "checkbox";
@@ -389,6 +391,11 @@ export function openSyncDialog(
   dbWriteMode.addEventListener("change", () => {
     if (isDbMode() && mode.value === "structure" && dbWriteMode.value === "replace") dbWriteMode.value = "skip";
   });
+  /** 表头上方的列数摘要；文案随映射重建更新，整库模式整行隐藏。 */
+  function updateMapTitle() {
+    const el = dlg?.body.querySelector<HTMLElement>(".sync-map-title");
+    if (el) el.textContent = mappings.length ? `列映射 · ${mappings.length} 列` : "列映射";
+  }
   async function refreshMapping() {
     if (isDbMode()) return;
     if (!src.table.value || !dst.conn.value) return;
@@ -414,7 +421,7 @@ export function openSyncDialog(
       // 目标表已存在时提供其列名候选；新建表 / 元数据不可读时静默保持自由输入。
       void attachTargetColumnList(mappings.map(m => m.target), v);
     } catch (e) { if (v === mapVersion) { mapping.replaceChildren(); mappings = []; error(e); } }
-    finally { if (v === mapVersion) mapLoading = false; }
+    finally { if (v === mapVersion) { mapLoading = false; updateMapTitle(); } }
   }
   /** 只读读取目标表现有列名并附加到映射的目标列输入；失败不提示、不阻断、不触发任何写入。 */
   async function attachTargetColumnList(inputs: HTMLInputElement[], version: number): Promise<void> {
@@ -437,12 +444,13 @@ export function openSyncDialog(
     } catch { /* 目标表不存在或元数据不可读：保留手填目标列即可。 */ }
   }
   const connectionById = (id: string) => connections.find((c) => c.id === id);
-  /** 受控结构同步当前只认证 SQLite→SQLite：其他方言由后端拒绝，前端据此置灰按钮。 */
+  /** 受控结构同步支持同方言原生 SQLite/MySQL/PostgreSQL，后端仍复核真实适配器与身份。 */
   function structureLanguageReason(): string | null {
     if (mode.value === "data") return "「仅同步数据」模式不涉及结构差异；请切换为「同步结构与数据」或「仅同步结构」后再预览。";
     const source = connectionById(src.conn.value);
     const target = connectionById(dst.conn.value);
     if (!source || !target) return "请先在第一步选择源连接与目标连接。";
+    if (source.kind !== target.kind) return "结构同步暂不支持跨方言；请选择同为 SQLite、MySQL 8 或 PostgreSQL 的源与目标。";
     return structureSyncConnectionError(source) ?? structureSyncConnectionError(target);
   }
   /** 数据差异比较的方言白名单与后端 sync::supported 一致。 */
@@ -631,6 +639,7 @@ export function openSyncDialog(
   /** 表对表：只读预览目标表相对源表的结构差异。 */
   const structureLockedControls = new Set<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>();
   const structureStop = document.createElement("button"); structureStop.type = "button"; structureStop.className = "btn"; structureStop.textContent = "停止结构同步"; structureStop.disabled = true;
+  const structureReview = new StructureSyncReview(() => syncStructureUi());
   let structurePreview: StructureDiffReport | null = null;
   const structureSession = new StructureSyncSession(crypto.randomUUID(), {
     issueGrant: request => api.issueGrant(request),
@@ -648,13 +657,15 @@ export function openSyncDialog(
       } else { structureLockedControls.forEach(control => control.disabled = false); structureLockedControls.clear(); }
       wizard?.setBusy(busy || locked);
       const apply = dlg.body.querySelector<HTMLButtonElement>("[data-structure-apply]");
-      if (apply) { apply.disabled = !structureSession.canApply; apply.title = structureSession.canApply ? "应用已确认的双端结构预览" : structureSession.effectsUnknown ? "写入回执未知；请明确重新预览核对真实结构" : "请先按当前目标与映射预览结构差异"; }
+      const ready = structureSession.canApply && structureReview.ready;
+      structureReview.setLocked(locked || busy);
+      if (apply) { apply.disabled = !ready; apply.title = ready ? "应用已确认的双端结构预览" : structureSession.effectsUnknown ? "写入回执未知；请明确重新预览核对真实结构" : structureSession.canApply ? "请先逐项确认结构变化中的扫描/破坏风险" : "请先按当前目标与映射预览结构差异"; }
     }
     structureStop.disabled = !structureSession.busy;
   }
   structureStop.addEventListener("click", () => { void structureSession.stop().catch(error); });
   const allowDrop = document.createElement("input"); allowDrop.type = "checkbox";
-  const allowDropLabel = document.createElement("label"); allowDropLabel.className = "checkbox";
+  const allowDropLabel = document.createElement("label"); allowDropLabel.className = "checkbox sync-danger-option";
   allowDropLabel.append(allowDrop, document.createTextNode("允许删除目标多余的列/索引（危险）"));
   const structureSyncRequest = () => ({
     source_connection: src.conn.value, source_schema: src.schema.value, source_table: src.table.value,
@@ -665,17 +676,9 @@ export function openSyncDialog(
     target_revision: "", source_revision: "", review_digest: "",
   });
   function renderStructureReport(report: StructureDiffReport) {
-    const lines = [`结构差异：${report.summary}`];
-    if (!report.target_exists) lines.push("目标表不存在：无法原地 ALTER，请改用建表/重建同步流程。");
-    for (const c of report.changes.slice(0, 30)) {
-      const risk = c.risk === "destructive" ? "（危险）" : c.risk === "scan_required" ? "（需扫描）" : "";
-      lines.push(`· ${c.kind} ${c.object}${c.after ? ` → ${c.after}` : ""}${risk}`);
-    }
-    if (report.changes.length > 30) lines.push(`…共 ${report.changes.length} 项差异`);
-    for (const w of report.warnings) lines.push(`⚠ ${w}`);
-    for (const step of report.steps) lines.push(`${step.label}\n${step.sql}`);
-    if (report.unsupported.length) lines.push(`不支持原地修改：${report.unsupported.join("；")}`);
-    status.textContent = lines.join("\n");
+    structureReview.render(report);
+    status.textContent = `结构差异：${report.summary}`;
+    syncStructureUi();
   }
   async function previewStructure() {
     if (busy || structureSession.busy || structureClosed || isDbMode()) return;
@@ -684,6 +687,7 @@ export function openSyncDialog(
       status.textContent = "请先在第一步选择源表并填写目标表名，再预览结构差异。";
       return;
     }
+    structurePreview = null; structureReview.clear();
     status.textContent = "正在比较结构差异…";
     try {
       const report = await structureSession.preview(req);
@@ -698,8 +702,9 @@ export function openSyncDialog(
     if (!structurePreview.changes.length) { status.textContent = "结构与目标一致，无需应用。"; return; }
     const req = structureSyncRequest();
     if (!structureSession.canApply) { status.textContent = structureSession.effectsUnknown ? "上次写入结果未知；请先重新预览真实双端结构，禁止重复应用。" : "目标或映射已改变，请重新预览结构差异。"; return; }
+    if (!structureReview.ready) { status.textContent = "请先逐项确认结构变化中的扫描/破坏风险。"; return; }
     const destructive = req.allow_drop || structurePreview.changes.some(c => c.risk === "destructive");
-    if (!window.confirm(`将对目标表「${req.target_table}」应用 ${structurePreview.changes.length} 项结构修改${destructive ? "，其中包含删除列（不可恢复）" : ""}。确认继续？`)) return;
+    if (!window.confirm(`将对目标表「${req.target_table}」应用已审核的 ${structurePreview.changes.length} 项结构修改${destructive ? "，其中包含删除或重建风险" : ""}。扫描/转换及依赖限制见上方冻结计划；确认继续？`)) return;
     if (busy) return;
     busy = true; wizard.setBusy(true);
     const controls = [...dlg.body.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input:not(:disabled),select:not(:disabled),textarea:not(:disabled)")];
@@ -707,7 +712,7 @@ export function openSyncDialog(
     dlg.body.setAttribute("aria-busy", "true");
     try {
       status.textContent = "正在应用已绑定的双端结构计划…";
-      const result = await structureSession.apply(destructive);
+      const result = await structureSession.apply(destructive, structureReview.approvedIds);
       if (structureClosed) return;
       const applied = result.receipt.steps.filter(s => s.status === "applied").length;
       if (result.receipt.verified) {
@@ -872,8 +877,12 @@ export function openSyncDialog(
             const dbTables = document.createElement("div"); dbTables.id = "sync-db-tables";
             dbTables.style.cssText = "display:flex;flex-direction:column;min-height:0;max-height:340px;margin-top:8px;";
             host.appendChild(dbTables);
-            const tools = document.createElement("div");
-            tools.className = "sync-map-tools";
+            // 表头工具行在映射表上方：刷新只作用于上方的映射表，与写入选项无关。
+            const mapHead = document.createElement("div");
+            mapHead.className = "sync-table-only sync-map-head";
+            const mapTitle = document.createElement("span");
+            mapTitle.className = "sync-map-title";
+            mapTitle.textContent = "列映射";
             const refresh = document.createElement("button");
             refresh.type = "button";
             refresh.className = "btn";
@@ -881,6 +890,8 @@ export function openSyncDialog(
             refresh.addEventListener("click", () => {
               if (!busy) void refreshMapping();
             });
+            mapHead.append(mapTitle, refresh);
+            host.insertBefore(mapHead, mapWrap);
             // 表对表：执行前可先比较源表与目标表的差异（只读）。
             const diffBtn = document.createElement("button");
             diffBtn.type = "button";
@@ -890,8 +901,6 @@ export function openSyncDialog(
               if (busy || mapLoading) return;
               void runDiff();
             });
-            const structureOnly = document.createElement("span");
-            structureOnly.className = "sync-table-only sync-structure-controls";
             const structPreviewBtn = document.createElement("button");
             structPreviewBtn.type = "button"; structPreviewBtn.className = "btn";
             structPreviewBtn.textContent = "预览结构差异";
@@ -902,7 +911,6 @@ export function openSyncDialog(
             structApplyBtn.textContent = "应用结构差异"; structApplyBtn.dataset.structureApply = "true"; structApplyBtn.disabled = !structureSession.canApply;
             structApplyBtn.title = "请先按当前目标与映射预览结构差异";
             structApplyBtn.addEventListener("click", () => { void applyStructure(); });
-            structureOnly.append(structPreviewBtn, structApplyBtn, structureStop);
             const diffControls = document.createElement("div");
             diffControls.className = "sync-diff-controls sync-table-only";
             diffControls.setAttribute("role", "group");
@@ -912,25 +920,26 @@ export function openSyncDialog(
             memoryLabel.title = "仅影响“比较差异”，不改变同步写入；预算足够时优先内存快路径，必要时才溢写。默认关闭仍使用保底预算，不是无限内存。";
             memoryLabel.append(memoryControl, document.createTextNode("内存预算控制"));
             diffControls.append(diffBtn, memoryLabel, memoryMode, memoryLimitLabel, memoryInfo);
-            // 工具行只放操作按钮：映射刷新与结构操作，配置项不再挤进按钮行。
-            tools.append(refresh, structureOnly);
-            host.appendChild(tools);
             // 数据差异比较（只读）独占一行：比较按钮、内存预算与状态同组，不随结构按钮换行漂移。
             const diffRow = document.createElement("div");
             diffRow.className = "sync-table-only sync-map-diff-row";
             diffRow.append(diffControls);
             host.appendChild(diffRow);
-            // 写入选项纵向一组，各占一行：破坏性结构选项、增量业务键、增量删行。
-            const options = document.createElement("div");
-            options.className = "sync-table-only sync-map-options";
-            const structOptions = document.createElement("div");
-            structOptions.className = "sync-map-option-row";
-            structOptions.append(allowDropLabel);
-            const bizRow = document.createElement("div");
-            bizRow.className = "sync-map-biz-row";
-            bizRow.append(field("增量业务键:", bizKey));
-            options.append(structOptions, bizRow, deleteMissingLabel);
-            host.appendChild(options);
+            // 结构差异一行：预览/应用/停止与「允许删除多余列/索引」同组，因为该选项就属于结构应用请求。
+            const structureRow = document.createElement("div");
+            structureRow.className = "sync-table-only sync-structure-row";
+            structureRow.append(structPreviewBtn, structApplyBtn, structureStop, allowDropLabel);
+            host.appendChild(structureRow);
+            host.appendChild(structureReview.el);
+            // 增量配置：标题后紧跟「删除多余行」选项，业务键输入框独占下一行。
+            const incrementalRow = document.createElement("div");
+            incrementalRow.className = "sync-table-only sync-incremental-row";
+            const bizLabel = document.createElement("label");
+            bizLabel.className = "sync-incremental-key";
+            bizLabel.htmlFor = bizKey.id;
+            bizLabel.textContent = "增量业务键:";
+            incrementalRow.append(bizLabel, deleteMissingLabel, bizKey);
+            host.appendChild(incrementalRow);
           },
           validate: () => { const problem = validateMapping(); if (!problem) pendingRun = true; return problem; },
         },
@@ -1144,7 +1153,7 @@ export function openSyncDialog(
     if (memoryPreviewTimer) clearTimeout(memoryPreviewTimer);
     memoryPreviewTimer = null;
   });
-  const edited = () => { pendingRun = true; if (!structureSession.busy && !structureSession.effectsUnknown) { structurePreview = null; structureSession.invalidate(); } };
+  const edited = () => { pendingRun = true; if (!structureSession.busy && !structureSession.effectsUnknown) { structurePreview = null; structureReview.clear(); structureSession.invalidate(); } };
   dlg.body.addEventListener("input", edited); dlg.body.addEventListener("change", edited);
   accessibleDialog(dlg, "数据库同步", previousFocus);
   const feedback = taskFeedback(dlg, logStatus, logProgressHost);

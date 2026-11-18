@@ -57,7 +57,7 @@ pub struct StructureReviewBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructureChange {
-    /// add_column | alter_column | drop_column | primary_key | index | table_option
+    /// add_column | alter_column | drop_column | primary_key | index | drop_index | table_option
     pub kind: String,
     pub object: String,
     pub before: Option<String>,
@@ -180,7 +180,7 @@ pub fn diff(
                         object: name,
                         before: Some(col_signature(t)),
                         after: Some(col_signature(c)),
-                        risk: if c.nullable && t.nullable { "safe" } else { "scan_required" }.into(),
+                        risk: if c.data_type != t.data_type || c.length != t.length || c.precision != t.precision || c.scale != t.scale || (!c.nullable && t.nullable) { "scan_required" } else { "safe" }.into(),
                     });
                 }
             }
@@ -236,6 +236,19 @@ pub fn diff(
                 after: Some(signature),
                 risk: if cols.is_empty() { "unsupported" } else if idx.unique { "scan_required" } else { "safe" }.into(),
             });
+        }
+    }
+    // 最终设计按语义复用目标索引名；删除项必须逐项进入 review，而非只藏在 SQL 中。
+    if let Ok(desired) = final_design(source, target, mapping, allow_drop) {
+        for index in target.indexes.iter().filter(|index| !index.primary) {
+            if !desired.indexes.as_deref().unwrap_or(&[]).iter().any(|kept| kept.name == index.name) {
+                changes.push(StructureChange { kind: "drop_index".into(), object: index.name.clone(), before: Some(index_signature(index)), after: None, risk: "destructive".into() });
+            } else if !allow_drop && !source.indexes.iter().filter(|index| !index.primary).any(|source_index| {
+                let mut mapped_index = source_index.clone(); mapped_index.columns = source_index.columns.iter().map(|name| mapped(mapping, name)).collect();
+                index_signature(&mapped_index) == index_signature(index)
+            }) {
+                warnings.push(format!("目标额外索引 {} 已保留（未启用删除）", index.name));
+            }
         }
     }
     if !source.foreign_keys.is_empty() {

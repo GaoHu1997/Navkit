@@ -143,6 +143,37 @@ for (const [name, mutate] of [
   await session.preview(); await assert.rejects(session.apply(), /未知/); observation(report); mutate(report);
   await assert.rejects(session.preview(), /RECONCILIATION_INCOMPLETE/); assert.equal(session.effectsUnknown, true); assert.equal(session.canApply, false); assert.equal(grants(log).length, 1);
 });
+test('scan and destructive changes each require exact frozen-plan consent before any grant', async t => {
+  const { session, current, report, log } = fixture(t); current.allow_drop = true;
+  report.changes = [
+    { kind: 'alter_column', object: 'value', before: 'TEXT', after: 'INTEGER', risk: 'scan_required' },
+    { kind: 'drop_index', object: 'extra_idx', before: 'value', after: null, risk: 'destructive' },
+  ];
+  const ids = report.changes.map((c, i) => JSON.stringify([i, c.kind, c.object, c.before, c.after, c.risk]));
+  await session.preview();
+  for (const consent of [[], [ids[0]], [ids[0], ids[0]], [ids[0], 'foreign-plan']]) {
+    await assert.rejects(session.apply(true, consent), /CHANGE_CONFIRMATION_REQUIRED/); assert.equal(grants(log).length, 0);
+  }
+  await assert.rejects(session.apply(false, ids), /DESTRUCTIVE_CONFIRMATION_REQUIRED/);
+  await session.apply(true, ids); assert.equal(sent(log).length, 1);
+});
+test('unknown risk never becomes an executable plan', async t => {
+  const { session, report, log } = fixture(t); report.changes[0].risk = 'unsupported';
+  await assert.rejects(session.preview(), /PREVIEW_INVALID/); assert.equal(grants(log).length, 0);
+});
+for (const dialect of ['postgres-server', 'mysql-server']) test(`${dialect} accepts proven physical table identity and its own completion semantics`, async t => {
+  const { session, report, port } = fixture(t);
+  for (const identity of [report.source_identity, report.target_identity]) { identity.database.kind = dialect; identity.database.canonical_path = null; }
+  const transaction = dialect === 'mysql-server' ? 'shadow_swapped_backup_retained' : 'committed';
+  port.execute = async request => { const r = receipt(report); r.receipt.transaction = transaction; return { outcome: outcome(request, { transaction_state: transaction }), receipt: r }; };
+  await session.preview(); await session.apply(); assert.equal(session.effectsUnknown, false);
+});
+test('MySQL shadow completion cannot be claimed by a SQLite plan', async t => {
+  const { session, report, port } = fixture(t);
+  port.execute = async request => { const r = receipt(report); r.receipt.transaction = 'shadow_swapped_backup_retained'; return { outcome: outcome(request, { transaction_state: r.receipt.transaction }), receipt: r }; };
+  await session.preview(); await assert.rejects(session.apply(), /RECEIPT_INVALID/);
+});
+
 test('an observation never bypasses C1 pending resource drainage', async t => {
   const { session, port, report, log } = fixture(t); port.execute = async request => ({ outcome: outcome(request, { state: 'unknown', resources_pending: true, effects: 'unknown', transaction_state: 'unknown' }), receipt: null });
   await session.preview(); await assert.rejects(session.apply(), /未知/); observation(report); const calls = log.length;
@@ -165,7 +196,7 @@ test('real preview handler rejects closed, active and database mode before metad
 });
 test('real sync UI freezes context and finish while unknown, retaining stop and explicit review', () => {
   const input = { disabled: false }, apply = { disabled: false, title: '' }, busyStates = [];
-  const context = { structureClosed: false, structureSession: { busy: false, effectsUnknown: true, canApply: false }, structureLockedControls: new Set(), dlg: { body: { querySelectorAll: () => input.disabled ? [] : [input], querySelector: () => apply } }, wizard: { setBusy: value => busyStates.push(value) }, busy: false, structureStop: { disabled: false } };
+  const context = { structureClosed: false, structureReview: { ready: false, setLocked: () => {} }, structureSession: { busy: false, effectsUnknown: true, canApply: false }, structureLockedControls: new Set(), dlg: { body: { querySelectorAll: () => input.disabled ? [] : [input], querySelector: () => apply } }, wizard: { setBusy: value => busyStates.push(value) }, busy: false, structureStop: { disabled: false } };
   const update = dialogMethod('syncStructureUi', context); update(); assert.equal(input.disabled, true); assert.equal(apply.disabled, true); assert.equal(busyStates.at(-1), true); assert.equal(context.structureStop.disabled, true);
   context.structureSession.effectsUnknown = false; update(); assert.equal(input.disabled, false); assert.equal(busyStates.at(-1), false); assert.equal(context.structureLockedControls.size, 0);
 });

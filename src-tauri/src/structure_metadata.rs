@@ -372,7 +372,8 @@ impl OwnedPair {
             let query_only: i64 = crate::sql_history::query_scalar("PRAGMA query_only").fetch_one(&mut *self.target).await?;
             let foreign_keys: i64 = crate::sql_history::query_scalar("PRAGMA foreign_keys").fetch_one(&mut *self.target).await?;
             let legacy: i64 = crate::sql_history::query_scalar("PRAGMA legacy_alter_table").fetch_one(&mut *self.target).await?;
-            ensure!(query_only == 0 && foreign_keys == 1 && legacy == 0, "STRUCTURE_CONNECTION_POLICY_UNPROVEN: 不关闭 query_only/外键检查，也不静默修改 legacy_alter_table");
+            let ignore_checks: i64 = crate::sql_history::query_scalar("PRAGMA ignore_check_constraints").fetch_one(&mut *self.target).await?;
+            ensure!(query_only == 0 && foreign_keys == 1 && legacy == 0 && ignore_checks == 0, "STRUCTURE_CONNECTION_POLICY_UNPROVEN: 不关闭 query_only/外键/CHECK 检查，也不静默修改 legacy_alter_table");
         }
         let begin = if write { "BEGIN IMMEDIATE" } else { "BEGIN DEFERRED" };
         let target_begin = crate::sql_history::query(begin).execute(&mut *self.target).await;
@@ -437,17 +438,12 @@ pub async fn preflight(source: Arc<Db>, source_kind: DbKind, target: Arc<Db>, ta
             ensure!(source_before.revision == source_after.revision && target_before.as_ref().map(|s| &s.revision) == target_after.as_ref().map(|s| &s.revision), "STRUCTURE_PREVIEW_STALE: owned 读取跨目录 generation");
             let mut report = structure_sync::preview_from_schemas(&source_before.schema, target_before.as_ref().map(|s| &s.schema), &target_kind, &request,
                 &source_before.revision, target_before.as_ref().map(|s| s.revision.as_str()).unwrap_or(""))?;
-            if read_only { report.alterable = false; report.unsupported.push("目标保存连接是只读；预览保留，但没有写入资格".into()); }
-            if request.allow_drop { report.alterable = false; report.unsupported.push("原生 SQLite 受控流程当前仅认证非破坏增列/新增普通索引；不 DROP/CASCADE/整表重建".into()); }
             if let Some(target_snapshot) = target_before.as_ref() {
-                if let (Some(final_design), true) = (report.final_design.as_ref(), report.alterable) {
-                    if let Err(error) = super::safe_steps(target_snapshot, final_design, &report.steps) {
-                        report.alterable = false; report.unsupported.push(format!("原生安全 DDL 子集拒绝：{error:#}"));
-                    }
-                }
+                super::sqlite_rebuild::complete_report(&mut pair.target, target_snapshot, &mut report, request.allow_drop).await?;
             } else {
                 report.alterable = false; report.unsupported.push("目标表不存在：当前 owned 子集未认证新建表的 absence 基线，不把缺表当可增列".into());
             }
+            if read_only { report.alterable = false; report.unsupported.push("目标保存连接是只读；预览保留，但没有写入资格".into()); }
             let mut request_sql = String::new();
             if report.alterable && !report.steps.is_empty() {
                 structure_sync::bind_review(&request, &mut report, &binding)?;

@@ -39,16 +39,12 @@ export function syncDiffConnectionError(connection: ConnectionConfig | undefined
   return null;
 }
 
-/**
- * 受控结构差异预览 / 应用的方言白名单：后端只认证了原生 SQLite 对 SQLite，
- * 其他方言会在 IPC 层返回 STRUCTURE_CONTROLLED_DIALECT_UNSUPPORTED，
- * 因此前端提前置灰，避免用户点击后才看到报错。
- */
+/** 原生 SQLite / MySQL 8 / PostgreSQL 的 bound 结构预览；兼容/自定义驱动不借标称协议放行。 */
 export function structureSyncConnectionError(connection: ConnectionConfig | undefined): string | null {
   if (!connection) return "请先选择一个连接";
   const kind = kindMeta(connection.kind);
-  if (!kind || kind.planned || parseDriverParams(connection.params) || kind.protocol !== "sqlite") {
-    return "结构差异预览/应用仅支持 SQLite → SQLite（其他方言的受控结构同步尚未接入，后端已认证 SQLite）";
+  if (!kind || kind.planned || parseDriverParams(connection.params) || !["sqlite", "mysql", "postgresql"].includes(connection.kind)) {
+    return "结构差异预览/应用支持同方言原生 SQLite、MySQL 8、PostgreSQL；不支持自定义 ODBC 或兼容驱动";
   }
   return null;
 }

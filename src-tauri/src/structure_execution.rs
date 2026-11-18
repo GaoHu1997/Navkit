@@ -3,10 +3,12 @@
 
 #[path = "structure_metadata.rs"]
 pub mod metadata;
+#[path = "structure_sqlite_rebuild.rs"]
+mod sqlite_rebuild;
 
 use std::{sync::Arc, time::Instant};
 use anyhow::{anyhow, ensure, Result};
-use crate::{db::Db, design::{self, DesignReceipt, DesignStep, DesignStepResult, TableDesign},
+use crate::{db::Db, design::{self, DesignReceipt, DesignStepResult},
     error::{AppError, CmdResult}, execution::{self, Entry}, manual_transaction::OrdinaryLease,
     models::{DbKind, MultiResult}, structure_sync::{self, StructureDiffReport, StructureReviewBinding, StructureSyncReceipt, StructureSyncRequest}};
 use metadata::{OwnedPair, OwnedTableSnapshot};
@@ -22,6 +24,8 @@ enum TestMode {
     #[cfg(test)] FailAfterFirstDdl,
     #[cfg(test)] StopAfterFirstDdl,
     #[cfg(test)] LoseCommitAcknowledgement,
+    #[cfg(test)] FailAfterTableReplacement,
+    #[cfg(test)] StopAfterTableReplacement,
 }
 struct Applied {
     result: Result<MultiResult>,
@@ -40,7 +44,6 @@ fn confirmed_stop(result: &CmdResult<MultiResult>) -> bool {
 }
 fn validate_entry(entry: &Entry, request: &StructureSyncRequest, binding: &StructureReviewBinding, read_only: bool) -> CmdResult<()> {
     if read_only { return Err(AppError::coded("STRUCTURE_READ_ONLY", "目标保存连接是只读，未取 pool/发送 DDL")); }
-    if request.allow_drop { return Err(AppError::coded("STRUCTURE_DESTRUCTIVE_UNSUPPORTED", "当前原生受控流程不 DROP/CASCADE/重建表，未取 pool")); }
     metadata::validate_scopes(request, binding).map_err(AppError::from)?;
     structure_sync::validate_review_request(request, binding).map_err(AppError::from)?;
     if entry.binding.principal != binding.principal || entry.binding.owner != binding.owner
@@ -66,6 +69,11 @@ fn validate_constant(value: &str) -> Result<()> {
     let value = value.trim();
     ensure!(value.len() <= 256 && !value.is_empty(), "STRUCTURE_DEFAULT_UNSUPPORTED");
     if ["NULL", "TRUE", "FALSE", "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP"].iter().any(|k| value.eq_ignore_ascii_case(k)) { return Ok(()); }
+    if value.len() >= 3 && (value.starts_with("X'") || value.starts_with("x'")) && value.ends_with('\'') {
+        let hex = &value[2..value.len()-1];
+        ensure!(hex.len() % 2 == 0 && hex.bytes().all(|b| b.is_ascii_hexdigit()), "STRUCTURE_DEFAULT_UNSUPPORTED: 非法 blob literal");
+        return Ok(());
+    }
     if value.starts_with('\'') {
         let b = value.as_bytes(); let mut i = 1;
         while i < b.len() {
@@ -78,40 +86,10 @@ fn validate_constant(value: &str) -> Result<()> {
     ensure!(!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit() || b == b'.') && number.bytes().filter(|b| *b == b'.').count() <= 1 && number.bytes().any(|b| b.is_ascii_digit()), "STRUCTURE_DEFAULT_UNSUPPORTED: 不执行自定义函数/表达式 default");
     Ok(())
 }
-fn safe_steps(current: &OwnedTableSnapshot, design: &TableDesign, steps: &[DesignStep]) -> Result<()> {
-    ensure!(steps.len() <= 1024, "STRUCTURE_DDL_QUOTA");
-    ensure!(design.schema == "main" && design.table == current.identity.table && design.foreign_keys.is_none(), "STRUCTURE_DDL_SCOPE_UNPROVEN");
-    for column in design.columns.iter().filter(|column| column.orig_name.is_none()) {
-        validate_type(&column.data_type)?;
-        ensure!(column.length.as_deref().map_or(true, |v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())) && column.scale.as_deref().map_or(true, |v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit())), "STRUCTURE_TYPE_UNSUPPORTED");
-        if let Some(default) = &column.default_value { validate_constant(default)?; }
-    }
-    let table = metadata::ident(&design.table)?;
-    let add_prefix = format!("ALTER TABLE {table} ADD COLUMN ");
-    let indexes = design.indexes.as_deref().unwrap_or(&[]);
-    for step in steps {
-        let allowed = step.sql.starts_with(&add_prefix) || indexes.iter().any(|index| {
-            if index.name.starts_with("sqlite_") { return false; }
-            let Ok(name) = metadata::ident(&index.name) else { return false; };
-            let prefix = format!("CREATE {}INDEX {name} ON {table} (", if index.unique { "UNIQUE " } else { "" });
-            step.sql.starts_with(&prefix)
-        });
-        ensure!(allowed, "STRUCTURE_DDL_UNSUPPORTED: 只执行后端重编的增列/普通列索引，拒绝 DROP/rename/cascade/任意 SQL");
-    }
-    Ok(())
-}
 fn same<T: serde::Serialize>(a: &T, b: &T) -> Result<bool> { Ok(serde_json::to_value(a)? == serde_json::to_value(b)?) }
 fn verify_preserved(before: &OwnedTableSnapshot, after: &OwnedTableSnapshot) -> Result<()> {
-    ensure!(before.identity == after.identity, "STRUCTURE_READBACK_IDENTITY_CHANGED");
-    ensure!(design::ordered_primary_key(&before.schema)? == design::ordered_primary_key(&after.schema)?, "STRUCTURE_READBACK_PRIMARY_KEY_CHANGED");
-    for original in &before.schema.columns {
-        let current = after.schema.columns.iter().find(|c| c.name == original.name).ok_or_else(|| anyhow!("STRUCTURE_READBACK_EXTRA_COLUMN_DROPPED"))?;
-        ensure!(same(original, current)?, "STRUCTURE_READBACK_EXISTING_COLUMN_CHANGED: {}", original.name);
-    }
-    for original in &before.schema.indexes {
-        let current = after.schema.indexes.iter().find(|i| i.name == original.name).ok_or_else(|| anyhow!("STRUCTURE_READBACK_EXTRA_INDEX_DROPPED"))?;
-        ensure!(same(original, current)?, "STRUCTURE_READBACK_EXISTING_INDEX_CHANGED: {}", original.name);
-    }
+    // 重建会改变 rootpage；物理库/schema/表名仍必须相同。列/PK/索引由完整 final_design 验证。
+    ensure!(before.identity.database == after.identity.database && before.identity.schema == after.identity.schema && before.identity.table == after.identity.table, "STRUCTURE_READBACK_IDENTITY_CHANGED");
     ensure!(same(&before.schema.foreign_keys, &after.schema.foreign_keys)?, "STRUCTURE_READBACK_FOREIGN_KEY_CHANGED");
     ensure!(same(&before.objects.checks, &after.objects.checks)?, "STRUCTURE_READBACK_CHECK_CHANGED");
     ensure!(same(&before.objects.triggers, &after.objects.triggers)?, "STRUCTURE_READBACK_TRIGGER_CHANGED");
@@ -146,12 +124,15 @@ async fn apply_pair(pair: &mut OwnedPair, kind: &DbKind, request: &StructureSync
         let (source_before, target_before) = pair.snapshots(request).await?;
         let target_before = target_before.ok_or_else(|| anyhow!("STRUCTURE_TARGET_NOT_FOUND"))?;
         let mut report = structure_sync::preview_from_schemas(&source_before.schema, Some(&target_before.schema), kind, request, &source_before.revision, &target_before.revision)?;
+        sqlite_rebuild::complete_report(&mut pair.target, &target_before, &mut report, request.allow_drop).await?;
         structure_sync::validate_review(request, &report, binding)?;
         structure_sync::bind_review(request, &mut report, binding)?;
-        let (final_design, steps) = structure_sync::prepare_reviewed_design(request, &report, binding, &target_before.schema, kind)?;
-        safe_steps(&target_before, &final_design, &steps)?;
+        let final_design = report.final_design.clone().ok_or_else(|| anyhow!("STRUCTURE_PLAN_MISSING"))?;
+        let steps = sqlite_rebuild::compile(&mut pair.target, &target_before, &final_design, request.allow_drop).await?;
+        ensure!(steps == report.steps, "STRUCTURE_RECOMPILE_CHANGED: owned 编译与完整 review SQL 不同");
         ensure!(!steps.is_empty(), "STRUCTURE_NO_CHANGES: 无 DDL 计划，不把空步骤当作应用成功");
         saved_report = Some(report.clone()); saved_target = Some(target_before.clone());
+        let dependency_catalog: Vec<(String, String, String)> = crate::sql_history::query_as("SELECT type,name,sql FROM main.sqlite_schema WHERE type IN ('view','trigger') ORDER BY type,name").fetch_all(&mut *pair.target).await?;
         for (ordinal, step) in steps.iter().enumerate() {
             if entry.stopping() { return Err(AppError::coded("STRUCTURE_STOPPED_ROLLED_BACK", "停止发生在 COMMIT 前，必须确认回滚").into()); }
             let outcome = crate::sql_history::query(&step.sql).execute(&mut *pair.target).await;
@@ -167,12 +148,17 @@ async fn apply_pair(pair: &mut OwnedPair, kind: &DbKind, request: &StructureSync
                 if matches!(mode, TestMode::FailAfterFirstDdl) { crate::sql_history::query("SELECT * FROM main.__navkit_missing_structure_test_table__").fetch_all(&mut *pair.target).await?; }
                 if matches!(mode, TestMode::StopAfterFirstDdl) { entry.request_stop(false); }
             }
+            #[cfg(test)] if step.label == "恢复目标物理表名" {
+                if matches!(mode, TestMode::FailAfterTableReplacement) { return Err(anyhow!("STRUCTURE_TEST_AFTER_REPLACEMENT")); }
+                if matches!(mode, TestMode::StopAfterTableReplacement) { entry.request_stop(false); }
+            }
         }
         if entry.stopping() { return Err(AppError::coded("STRUCTURE_STOPPED_ROLLED_BACK", "停止发生在读回/COMMIT 前，必须确认回滚").into()); }
         let target_after = metadata::snapshot(&mut pair.target, &pair.target_physical, &request.target_schema, &request.target_table).await?;
         let mismatches = design::verify(&target_after.schema, &final_design, kind);
         ensure!(mismatches.is_empty(), "STRUCTURE_READBACK_MISMATCH: {}", mismatches.join("；"));
         verify_preserved(&target_before, &target_after)?;
+        sqlite_rebuild::verify_dependencies(&mut pair.target, &dependency_catalog).await?;
         pair.validate_paths()?;
         let source_after = if let Some(source) = pair.source.as_mut() { metadata::snapshot(source, &pair.source_physical, &request.source_schema, &request.source_table).await? }
             else { metadata::snapshot(&mut pair.target, &pair.target_physical, &request.source_schema, &request.source_table).await? };
@@ -250,6 +236,10 @@ async fn run_mode(source: Arc<Db>, source_kind: DbKind, target: Arc<Db>, target_
     let receipt = if can_publish { published.lock().take() } else { None };
     BoundResult { result, confirmed, receipt }
 }
+
+#[cfg(test)]
+#[path = "structure_sqlite_rebuild_tests.rs"]
+mod rebuild_tests;
 
 #[cfg(test)]
 mod tests {
