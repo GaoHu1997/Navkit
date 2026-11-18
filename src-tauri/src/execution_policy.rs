@@ -94,7 +94,12 @@ fn protected_control_keyword(name: &str) -> bool {
     matches!(name, "BEGIN" | "START" | "COMMIT" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" | "END" | "USE" | "SET" | "RESET" | "DISCARD" | "ATTACH" | "DETACH" | "LOCK" | "UNLOCK" | "PRAGMA" | "LISTEN" | "UNLISTEN")
 }
 fn protected_control() -> AppError {
-    AppError::coded("EXECUTION_PROTECTED_CONTROL", "事务/会话/命名空间控制请使用明确的连接和事务操作；批次没有发送")
+    // 常见场景：mysqldump 导出的脚本开头带 USE / SET，用户直接丢进"运行 SQL 文件"。
+    // 明确告诉用户删哪几行，而不是只说"控制语句被拒"。
+    AppError::coded(
+        "EXECUTION_PROTECTED_CONTROL",
+        "事务/会话/命名空间控制语句（USE、BEGIN/COMMIT、SET、LOCK 等）不能出现在批次中：运行 SQL 文件固定作用于当前所选库。请删除文件中的这类语句（mysqldump 导出的脚本常见于开头）后重试；批次没有发送",
+    )
 }
 pub fn readonly_batch(sql: &str) -> CmdResult<ReadPlan> {
     let tokens = lex(sql)?; let mut tables = Vec::new(); let mut count = 0;

@@ -142,7 +142,7 @@ fn make(bytes:Vec<u8>,keywords:Vec<String>,dialect:Dialect)->Result<Option<State
     // INSERT payloads again just to prove they are not session-control statements.
     if !(matches!(first,"SET"|"PRAGMA")&&dump_guard(&sql,dialect)) { crate::execution_policy::ordinary_native_batch(&keywords.join(" "))?; }
     if matches!(first,"VACUUM"|"ABORT"|"COPY"|"PREPARE"|"EXECUTE"|"CALL"|"DO"|"DELIMITER"|"GRANT"|"REVOKE"|"LOAD"|"INSTALL"|"UNINSTALL"|"FLUSH") { bail!("SQL 含需要专门通道的过程/文件/控制命令"); }
-    if matches!(first,"CREATE"|"DROP"|"ALTER")&&keywords.iter().take(4).any(|w|matches!(w.as_str(),"DATABASE"|"ROLE"|"USER"|"TABLESPACE"|"SERVER"|"EXTENSION")) { bail!("SQL 不能改变数据库/身份/服务器授权范围"); }
+    if matches!(first,"CREATE"|"DROP"|"ALTER")&&keywords.iter().take(4).any(|w|matches!(w.as_str(),"DATABASE"|"ROLE"|"USER"|"TABLESPACE"|"SERVER"|"EXTENSION")) { bail!("SQL 不能改变数据库/身份/服务器授权范围：运行 SQL 文件固定作用于当前所选库。请删除脚本中的 CREATE/DROP/ALTER DATABASE、ROLE、USER 等语句后重试（mysqldump 导出文件常见于开头）"); }
     if keywords.windows(2).any(|p|p[0]=="INTO"&&matches!(p[1].as_str(),"OUTFILE"|"DUMPFILE")) { bail!("SQL 不能请求服务器文件输出"); }
     Ok(Some(Statement{sql,keywords}))
 }

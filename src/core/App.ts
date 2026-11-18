@@ -769,6 +769,22 @@ export class App {
 
   // ------------------------------------------------------------ 树
 
+  /**
+   * 可以安全"折叠即失效"的容器节点：数据库/模式，以及对象清单类分组。
+   *
+   * 这些节点的 children 来自服务端元数据，库里可能被其他客户端新建/删除对象；
+   * 表/视图节点自身的字段、索引、外键、触发器属于结构详情，重查成本高且变化少，
+   * 不在此列（它们仍随父级重载而更新）。
+   */
+  private isRefreshableContainer(node: TreeItem): boolean {
+    if (!node.expandable) return false;
+    // 数据库/模式：conn:<id>/db/<name>
+    if (/^conn:[^/]+\/db\/[^/]+$/.test(node.id)) return true;
+    // 对象清单分组：表/视图/函数/事件/序列/查询/备份。
+    // 排除结构详情分组（字段/索引/外键/触发器）：它们是表内元数据，折叠不必重查。
+    return /\/grp-(table|view|function|event|sequence|materialized|query|backup)$/.test(node.id);
+  }
+
   private refreshTree(): void {
     const previous = new Map<string, TreeItem>();
     const remember = (nodes: TreeItem[]) => nodes.forEach((node) => { previous.set(node.id, node); remember(node.children); });
@@ -781,6 +797,13 @@ export class App {
         if (node.type === "connection") {
           node.children = old.children;
           node.loaded = old.loading ? false : old.loaded;
+        } else if (this.isRefreshableContainer(node) && old.expanded) {
+          // 重建后这些容器的 children 已丢失，但展开状态被保留：
+          // 标记为未加载，让它们在下一次渲染/展开时重新读取，避免出现
+          // "展开着却是空的"——这正是建表/建库后看不到新对象的另一半原因。
+          node.loaded = false;
+          node.children = [];
+          this.treeLoads.delete(old);
         }
       }
       restore(node.children);
@@ -789,6 +812,42 @@ export class App {
     this.tree.setNodes(this.treeNodes);
     this.refreshQueryGroups();
     this.syncConnIcons();
+    void this.reloadExpandedContainers();
+  }
+
+  /**
+   * 重新加载仍然展开着的刷新型容器（库/分组）。
+   *
+   * `refreshTree` 保留了展开状态但清空了 children；这里主动补一次读取，
+   * 让"新建表/新建库"之类的操作完成后，用户不需要手动折叠再展开。
+   */
+  private async reloadExpandedContainers(): Promise<void> {
+    const targets: TreeItem[] = [];
+    const walk = (nodes: TreeItem[]) => nodes.forEach((node) => {
+      if (node.expanded && this.isRefreshableContainer(node) && !node.loaded && !node.loading) targets.push(node);
+      walk(node.children);
+    });
+    walk(this.treeNodes);
+    for (const node of targets) {
+      if (!node.expanded || node.loaded || node.loading) continue;
+      const generation = {};
+      this.treeLoads.set(node, generation);
+      const current = () => this.treeLoads.get(node) === generation && this.tree.find(node.id) === node;
+      node.loading = true;
+      try {
+        await this.loadChildren(node, current);
+        if (!current()) continue;
+        node.loaded = true;
+      } catch {
+        if (current()) { node.loaded = false; node.children = []; }
+      } finally {
+        if (current()) {
+          this.treeLoads.delete(node);
+          node.loading = false;
+        }
+      }
+    }
+    if (targets.length) this.tree.render();
   }
 
   /** 依据连接打开状态同步连接节点图标：已连接=彩色官方 logo，未连接=灰色。 */
@@ -963,6 +1022,15 @@ export class App {
         node.loaded = false;
         this.treeLoads.delete(node);
         node.loading = false;
+      } else if (this.isRefreshableContainer(node)) {
+        // 库（schema）与"表/视图/函数/查询/备份"分组：库里可能新建了表、视图、函数，
+        // 折叠再展开必须重新读取，否则沿用旧 children 会让新对象一直不出现。
+        // 只失效这两类容器：表节点下的字段/索引/触发器属于结构详情，
+        // 每次展开都重查会带来无意义往返。
+        node.loaded = false;
+        this.treeLoads.delete(node);
+        node.loading = false;
+        node.children = [];
       }
       this.tree.render();
       return;

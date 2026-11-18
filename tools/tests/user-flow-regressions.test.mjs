@@ -94,7 +94,9 @@ function treeHarness(kind = 'mysql') {
   context.api = { listDatabases: () => new Promise((resolve, reject) => gates.push({ resolve, reject })),
     listTables: async () => [['fresh_table', 'table']] };
   context.namespaceType = () => 'database'; context.namespaceName = () => '数据库';
-  runTs(`globalThis.TreeApp = class { treeLoads = new WeakMap(); ${members('App', ['toggleNode', 'loadChildren', 'cmdTreeRefresh', 'cmdCloseConnection'])} };`, context);
+  // refreshTree 依赖 TreePanel.buildGroups；默认返回空，测试可覆盖。
+  context.TreePanel = { buildGroups: () => [] };
+  runTs(`globalThis.TreeApp = class { treeLoads = new WeakMap(); ${members('App', ['toggleNode', 'loadChildren', 'cmdTreeRefresh', 'cmdCloseConnection', 'isRefreshableContainer', 'refreshTree', 'reloadExpandedContainers'])} };`, context);
   const app = new context.TreeApp();
   const node = { id: 'conn:a', type: 'connection', children: [], expandable: true, expanded: false, loaded: false };
   let live = node;
@@ -105,7 +107,7 @@ function treeHarness(kind = 'mysql') {
     currentConnectionId: () => 'a', guardLeave: async (_ids, _label, action) => { await action(); return true; },
     manualTransactionController: { closeConnection: async () => true }, suspendDatasourceTabs() {}, stopKeepAlive() {},
   });
-  return { app, node, gates, errors, replace: replacement => { live = replacement; } };
+  return { app, node, gates, errors, context, replace: replacement => { live = replacement; } };
 }
 const treeSettle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
@@ -121,6 +123,63 @@ test('D5: collapse/re-expand refreshes added and removed databases and retains u
   assert.deepEqual(plain(h.node.children.map(child => child.label)), ['keep', 'created']);
   assert.equal(h.node.children[0], keep); assert.equal(keep.expanded, true);
   assert.equal(keep.children[0].id, 'cached-table'); assert.equal(h.node.loading, false);
+});
+
+// 第四轮实测缺陷（B6）：库/分组节点折叠后仍沿用旧 children，
+// 导致其他客户端新建的表/视图在树里一直不出现，必须重开连接才可见。
+test('B6: collapsing a database or object group invalidates its children so new objects appear', async () => {
+  const h = treeHarness();
+  const db = { id: 'conn:a/db/shop', label: 'shop', type: 'database', children: [],
+    expandable: true, expanded: true, loaded: true };
+  // 库节点下的"表"分组是另一个刷新型容器。
+  const group = { id: 'conn:a/db/shop/grp-table', label: '表', type: 'folder', children: [],
+    expandable: true, expanded: true, loaded: true };
+  db.children = [group];
+  Object.assign(h.app, { tree: { find: id => (id === db.id ? db : id === group.id ? group : undefined), selectedNodeId: db.id, render() {} } });
+
+  await h.app.toggleNode(db);
+  assert.equal(db.expanded, false);
+  assert.equal(db.loaded, false, '库节点折叠后必须失效，不能沿用缓存');
+  assert.deepEqual(plain(db.children), [], '旧对象列表必须被丢弃，否则新表永远不出现');
+
+  await h.app.toggleNode(group);
+  assert.equal(group.expanded, false);
+  assert.equal(group.loaded, false, '对象分组折叠后同样必须失效');
+  assert.deepEqual(plain(group.children), []);
+});
+
+test('B6: structural detail groups stay cached (fields/indexes are not re-read on every collapse)', async () => {
+  const h = treeHarness();
+  const detail = { id: 'conn:a/db/shop/table/orders/grp-column', label: '字段', type: 'folder',
+    children: [{ id: 'cached-column' }], expandable: true, expanded: true, loaded: true };
+  Object.assign(h.app, { tree: { find: id => (id === detail.id ? detail : undefined), selectedNodeId: detail.id, render() {} } });
+
+  await h.app.toggleNode(detail);
+  assert.equal(detail.expanded, false);
+  assert.equal(detail.loaded, true, '字段等结构详情不应因折叠而失效');
+  assert.deepEqual(plain(detail.children.map(child => child.id)), ['cached-column'], '缓存必须保留');
+});
+
+// refreshTree 的重载路径依赖真实 Tree 实例的对象身份（tree.find 返回同一节点），
+// vm harness 无法忠实复现；此处只锁定"哪些节点算刷新型容器"的判定，
+// 以及"折叠即失效"的行为，重载本身由真机回归覆盖。
+test('B6: refreshable-container classification covers databases and object groups only', async () => {
+  const h = treeHarness();
+  const kindOf = node => h.app.isRefreshableContainer(node);
+  const make = (id, expandable = true) => ({ id, expandable });
+
+  assert.equal(kindOf(make('conn:a/db/shop')), true, '库/模式节点必须可刷新');
+  for (const grp of ['table', 'view', 'function', 'event', 'sequence', 'query', 'backup']) {
+    assert.equal(kindOf(make(`conn:a/db/shop/grp-${grp}`)), true, `${grp} 分组必须可刷新`);
+  }
+  // 表内结构详情：变化少、重查贵，不应因折叠而失效。
+  for (const grp of ['column', 'index', 'fk', 'trigger']) {
+    assert.equal(kindOf(make(`conn:a/db/shop/table/orders/grp-${grp}`)), false, `${grp} 属于结构详情，不应刷新`);
+  }
+  // 表/视图对象自身与连接节点由各自的既有逻辑处理。
+  assert.equal(kindOf(make('conn:a/db/shop/table/orders')), false);
+  assert.equal(kindOf(make('conn:a')), false);
+  assert.equal(kindOf(make('conn:a/db/shop', false)), false, '不可展开的节点不可能刷新');
 });
 
 test('D5: failed refresh remains retryable, including an empty successful database list', async () => {
@@ -177,15 +236,18 @@ test('D5: a late connection handshake cannot mark a collapsed or disconnected no
   assert.equal(h.node.loaded, false); assert.equal(h.node.expanded, false);
 });
 
-test('D5: SQLite re-expand refreshes tables while database child collapse remains cached', async () => {
+test('D5: SQLite re-expand refreshes tables and database nodes also refresh (B6)', async () => {
   const h = treeHarness('sqlite');
   h.node.children = [{ id: 'stale-table' }]; h.node.loaded = h.node.expanded = true;
   await h.app.toggleNode(h.node);
   const pending = h.app.toggleNode(h.node); await treeSettle(); h.gates[0].resolve([['main']]); await pending;
   assert.equal(h.node.children[0].label, 'fresh_table');
+  // B6（第四轮实测）：库/分组折叠后必须失效。旧行为"保持 cached"会让其他客户端
+  // 新建的表一直不出现，因此这里断言缓存被丢弃、按需重读。
   const child = { id: 'conn:a/db/main', children: [{ id: 'cached' }], expandable: true, expanded: true, loaded: true };
-  await h.app.toggleNode(child); await h.app.toggleNode(child);
-  assert.equal(child.loaded, true); assert.equal(child.children[0].id, 'cached'); assert.equal(h.gates.length, 1);
+  await h.app.toggleNode(child);
+  assert.equal(child.loaded, false, '库节点折叠后必须失效');
+  assert.deepEqual(plain(child.children), [], '旧 children 必须丢弃');
 });
 
 function gridView(hidden = []) {

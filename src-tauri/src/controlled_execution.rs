@@ -169,7 +169,11 @@ pub(crate) async fn execute(state: &AppState, request: ExecutionRequest, princip
                 let source_cfg = commands::saved_config(state, &sync_request.source_connection)?;
                 let source = commands::scoped_db(state, &sync_request.source_connection, &sync_request.source_schema).await?;
                 crate::structure_commands::recheck_runtime(state, &sync_request, &reviewed, &source, &db)?;
-                let r = crate::structure_execution::run(source, source_cfg.kind, db, cfg.kind.clone(), entry.clone(), ordinary, sync_request, reviewed, cfg.read_only).await;
+                let r = if crate::structure_commands::server::native_pair(&source, &source_cfg.kind, &db, &cfg.kind) {
+                    crate::structure_commands::server::run(source, source_cfg.kind, db, cfg.kind.clone(), entry.clone(), ordinary, sync_request, reviewed, cfg.read_only).await
+                } else {
+                    crate::structure_execution::run(source, source_cfg.kind, db, cfg.kind.clone(), entry.clone(), ordinary, sync_request, reviewed, cfg.read_only).await
+                };
                 Ok(WorkReport { result: r.result, confirmed: r.confirmed, call: None, replacement: None, creation: None, structure: r.receipt })
             }
         }

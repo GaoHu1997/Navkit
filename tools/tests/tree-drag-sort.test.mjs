@@ -226,7 +226,8 @@ test('App move/refresh preserve expanded loaded children, open pools/databases a
   const source = fs.readFileSync(new URL('../../src/core/App.ts', import.meta.url), 'utf8');
   const parsed = ts.createSourceFile('App.ts', source, ts.ScriptTarget.ES2021, true);
   const appClass = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'App');
-  const methods = ['moveConnectionToGroup', 'refreshTree', 'syncConnIcons'].map(name => appClass.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === name).getText(parsed));
+  // refreshTree 现在会调用 isRefreshableContainer / reloadExpandedContainers，需一并取出。
+  const methods = ['moveConnectionToGroup', 'refreshTree', 'syncConnIcons', 'isRefreshableContainer', 'reloadExpandedContainers'].map(name => appClass.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === name).getText(parsed));
   const requests = []; const responses = [];
   const api = { async moveConnection(...args) { requests.push(args); const response = responses.shift(); if (response instanceof Error) throw response; return response; } };
   const context = vm.createContext({ api, TreePanel: h.panel.constructor, DB_META: { sqlite: { icon: 'sqlite' } } });

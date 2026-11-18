@@ -201,6 +201,63 @@ async fn open_odbc_or_jdbc(req: &ConnectionRequest) -> Result<Db> {
     Ok(Db::Odbc(Arc::new(odb)))
 }
 
+/// 标量解码：文本优先，失败后按有符号整数 → 无符号整数 → 浮点依次回退，
+/// 数值统一转成十进制文本，保持“标量对外都是字符串”的契约。
+///
+/// 各驱动对同一列的声明类型不同（MySQL 的 `COUNT(*)` 是 `BIGINT`，而
+/// `query_scalar::<_, Option<String>>` 只接受 VARCHAR 兼容集合），单类型解码
+/// 会在换库/换查询时失败。全部回退都失败时返回首次（文本）错误，保留真实原因。
+/// 标量解码公共部分：文本 → 有符号整数 → 浮点。
+///
+/// 各驱动对同一列的声明类型不同（MySQL 的 `COUNT(*)` 是 `BIGINT`，而
+/// `query_scalar::<_, Option<String>>` 只接受 VARCHAR 兼容集合），单类型解码
+/// 会在换库/换查询时失败。全部回退都失败时返回首次（文本）错误，保留真实原因。
+macro_rules! scalar_text_common {
+    ($pool:expr, $sql:expr) => {{
+        let text = crate::sql_history::query_scalar::<_, Option<String>>($sql)
+            .fetch_optional($pool).await;
+        match text {
+            Ok(value) => Ok(value.flatten()),
+            Err(text_error) => {
+                let signed = crate::sql_history::query_scalar::<_, Option<i64>>($sql)
+                    .fetch_optional($pool).await;
+                if let Ok(value) = signed { return Ok(value.flatten().map(|v| v.to_string())); }
+                let float = crate::sql_history::query_scalar::<_, Option<f64>>($sql)
+                    .fetch_optional($pool).await;
+                match float {
+                    Ok(value) => Ok(value.flatten().map(|v| v.to_string())),
+                    Err(_) => Err(text_error.into()),
+                }
+            }
+        }
+    }};
+}
+
+/// SQLite / MySQL：额外尝试无符号整数（两后端都实现了 u64 解码）。
+macro_rules! scalar_text_unsigned {
+    ($pool:expr, $sql:expr) => {{
+        let text = crate::sql_history::query_scalar::<_, Option<String>>($sql)
+            .fetch_optional($pool).await;
+        match text {
+            Ok(value) => Ok(value.flatten()),
+            Err(text_error) => {
+                let unsigned = crate::sql_history::query_scalar::<_, Option<u64>>($sql)
+                    .fetch_optional($pool).await;
+                if let Ok(value) = unsigned { return Ok(value.flatten().map(|v| v.to_string())); }
+                let signed = crate::sql_history::query_scalar::<_, Option<i64>>($sql)
+                    .fetch_optional($pool).await;
+                if let Ok(value) = signed { return Ok(value.flatten().map(|v| v.to_string())); }
+                let float = crate::sql_history::query_scalar::<_, Option<f64>>($sql)
+                    .fetch_optional($pool).await;
+                match float {
+                    Ok(value) => Ok(value.flatten().map(|v| v.to_string())),
+                    Err(_) => Err(text_error.into()),
+                }
+            }
+        }
+    }};
+}
+
 impl Db {
     /// 通用文本行查询（ClickHouse / ODBC / SQL Server 用；sqlx 变体不支持）。
     pub async fn generic_rows(
@@ -260,16 +317,19 @@ impl Db {
     ///
     /// 覆盖 SQLite / MySQL / PostgreSQL（sqlx 池）与 ClickHouse / ODBC /
     /// SQL Server（generic 标量）；其它非 SQL 型返回错误，由调用方决定回退。
+    ///
+    /// 文本优先，但数值列（如 `COUNT(*)` 被 MySQL 报为 `BIGINT`）不能按
+    /// `VARCHAR` 解码；sqlx 的类型检查会直接报 mismatched types。因此按
+    /// 文本 → 有符号整数 → 无符号整数 → 浮点依次尝试，成功即转成十进制文本，
+    /// 保持“标量统一为字符串”的契约。全部失败时返回第一次（文本）解码错误，
+    /// 不吞掉真实原因。
     pub async fn sql_scalar(&self, sql: &str) -> Result<Option<String>> {
     let __sql_history_context = crate::sql_history::db_context(self);
     crate::sql_history::scope(__sql_history_context, async {
         match self {
-            Db::Sqlite(pool) => Ok(crate::sql_history::query_scalar::<_, Option<String>>(sql)
-                .fetch_optional(pool).await?.flatten()),
-            Db::Mysql(pool) => Ok(crate::sql_history::query_scalar::<_, Option<String>>(sql)
-                .fetch_optional(pool).await?.flatten()),
-            Db::Postgres(pool) => Ok(crate::sql_history::query_scalar::<_, Option<String>>(sql)
-                .fetch_optional(pool).await?.flatten()),
+            Db::Sqlite(pool) => scalar_text_unsigned!(pool, sql),
+            Db::Mysql(pool) => scalar_text_unsigned!(pool, sql),
+            Db::Postgres(pool) => scalar_text_common!(pool, sql),
             Db::ClickHouse(_) | Db::Odbc(_) | Db::Mssql(_) => self.generic_scalar(sql).await,
             _ => Err(anyhow!("该连接类型不支持标量查询")),
         }
@@ -277,6 +337,8 @@ impl Db {
     }).await
 }
 }
+
+
 
 /// 由已保存的连接配置构造请求。
 pub fn request_from_config(cfg: &ConnectionConfig, password: &str) -> ConnectionRequest {
@@ -997,6 +1059,10 @@ fn split_protocol_commands(command: &str) -> Vec<String> {
 #[cfg(test)]
 #[path = "db_protocol_dispatch_tests.rs"]
 mod protocol_dispatch_tests;
+
+#[cfg(test)]
+#[path = "db_scalar_decode_tests.rs"]
+mod scalar_decode_tests;
 
 #[cfg(test)]
 #[path = "mysql_dialect_tests.rs"]

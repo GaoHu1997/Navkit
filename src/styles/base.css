@@ -5071,14 +5071,19 @@ select {
 .driver-library-ready { color: var(--text-accent); font-size: var(--fs-11); }
 .driver-library-feedback { margin-top: var(--sp-3); }
 
-/* 列映射：表格下方工具行 */
-.sync-map-tools {
+/* 列映射表头上方的工具行：左侧列数摘要，右侧刷新映射。 */
+.sync-map-head {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3);
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
   flex: 0 0 auto;
   flex-wrap: wrap;
+}
+.sync-map-title {
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
 }
 /* 「映射确认与执行」页：映射区独占滚动，工具条按组排布，不再与说明挤在一起。 */
 .sync-map {
@@ -5088,7 +5093,7 @@ select {
   min-height: 0;
   flex: 1 1 auto;
 }
-/* 下半区（比较 + 写入选项）变高时，映射表仍保底显示约三行，超出部分交给整页滚动。 */
+/* 下半区（比较 + 结构 + 增量）变高时，映射表仍保底显示约三行，超出部分交给整页滚动。 */
 .sync-map-panel > .sync-map { min-height: 148px; }
 /* 映射表在自身滚动容器里；表格不能收缩，直接放在 flex 容器里会溢出并盖住后面的工具条。 */
 .sync-map-scroll {
@@ -5098,8 +5103,6 @@ select {
 }
 .sync-map > table,
 .sync-map .mini-table { min-width: 0; }
-.sync-map-tools > .btn { flex: 0 0 auto; }
-.sync-map-tools > .sync-table-only { margin-left: auto; }
 /* 数据差异比较独立一行：比较按钮、内存预算与状态自成一组，不随结构按钮换行漂移。 */
 .sync-map-diff-row {
   display: flex;
@@ -5130,13 +5133,89 @@ select {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.sync-map-tools > .sync-structure-controls {
-  display: inline-flex;
+/* 结构同步一行：预览/应用/停止与「允许删除多余列/索引」同组，该选项属于结构应用请求。 */
+.sync-structure-row {
+  display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  max-width: 100%;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
   flex-wrap: wrap;
 }
+.sync-structure-row > .checkbox { margin-left: var(--sp-2); }
+/* 增量配置：标题与删除选项同行，输入框在下一行占满可用宽度。 */
+.sync-incremental-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+.sync-incremental-key {
+  flex: 0 0 auto;
+  font-size: var(--fs-12);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.sync-incremental-row > input[type="text"] {
+  flex: 1 0 100%;
+  width: 100%;
+  min-width: 0;
+}
+.sync-incremental-row > .checkbox { flex: 0 1 auto; min-width: 0; }
+/* 这两行是按钮旁的同行选项：覆盖 form-stacked 的堆叠勾选样式，让框与按钮/输入框同轴。 */
+.form-stacked .sync-structure-row > .checkbox,
+.form-stacked .sync-incremental-row > .checkbox {
+  align-items: center;
+  min-height: 0;
+  line-height: 1.5;
+}
+.form-stacked .sync-structure-row > .checkbox > input,
+.form-stacked .sync-incremental-row > .checkbox > input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+/* 后端完整结构计划：确认项是原生表单控件，SQL/依赖说明只读展开。 */
+.sync-structure-review {
+  min-width: 0;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  max-height: 280px;
+  overflow: auto;
+}
+.sync-structure-review[hidden] { display: none; }
+.sync-structure-review legend { padding: 0 var(--sp-1); font-size: var(--fs-12); color: var(--text-secondary); }
+.sync-structure-review-progress { margin: 0 0 var(--sp-2); font-size: var(--fs-11); color: var(--text-secondary); }
+.sync-structure-review-list { margin: 0; padding: 0 0 0 20px; }
+.sync-structure-review-list > li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-subtle); }
+.sync-structure-review-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); font-size: var(--fs-12); }
+.sync-structure-review-consent { display: inline-flex; align-items: center; gap: var(--sp-2); cursor: pointer; min-width: 0; overflow-wrap: anywhere; }
+.sync-structure-review-consent > input { margin: 0; flex: 0 0 auto; }
+.sync-structure-review-consent:has(input:disabled) { cursor: default; }
+.sync-structure-review-badge { font-size: var(--fs-11); color: var(--ok-600); }
+.sync-structure-review-badge[data-risk="scan_required"] { color: var(--warn-600); }
+.sync-structure-review-badge[data-risk="destructive"],
+.sync-structure-review-badge[data-risk="unsupported"],
+.sync-structure-review-blocked { color: var(--danger-600); }
+.sync-structure-review-values { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px var(--sp-2); margin: var(--sp-1) 0 0; font-size: var(--fs-11); }
+.sync-structure-review-values dt { color: var(--text-tertiary); }
+.sync-structure-review-values dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.sync-structure-review-warnings { color: var(--text-secondary); }
+.sync-structure-review-blocked, .sync-structure-review-warnings { margin: var(--sp-2) 0; padding-left: 20px; font-size: var(--fs-11); }
+.sync-structure-review details { margin-top: var(--sp-2); font-size: var(--fs-11); }
+.sync-structure-review summary { cursor: pointer; color: var(--text-secondary); }
+.sync-structure-review pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); margin-bottom: 0; }
+.sync-structure-review input:focus-visible, .sync-structure-review summary:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
+/* 破坏性勾选项：与普通选项区分，避免和只读开关混看。 */
+.sync-danger-option { color: var(--danger-600); }
 .sync-diff-memory-option {
   display: inline-flex;
   align-items: center;
@@ -5154,38 +5233,6 @@ select {
   .sync-map-panel { flex: 0 0 auto; }
   .sync-map-panel .sync-map-scroll { flex: 0 1 auto; max-height: 160px; }
 }
-/* 写入选项：破坏性结构选项、增量业务键、增量删行纵向一组，各占一行；与只读比较区用发丝线分开。 */
-.sync-map-options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  margin-top: var(--sp-3);
-  padding-top: var(--sp-3);
-  border-top: 1px solid var(--border);
-  flex: 0 0 auto;
-}
-.sync-map-options > .checkbox { margin-left: 0; align-self: flex-start; }
-.sync-map-option-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  flex-wrap: wrap;
-}
-.sync-map-option-row > .checkbox { margin-left: 0; }
-/* 增量业务键：标签固定宽、输入框撑满剩余宽度，和上下两行复选框左缘对齐。 */
-.sync-map-biz-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  min-width: 0;
-}
-.sync-map-biz-row > .field {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin-bottom: 0;
-}
-.sync-map-biz-row .field-control { flex: 1; }
-.sync-map-biz-row .field-control > input { width: 100%; }
 
 /* 导入 / 导出向导：执行日志独立页与提示行 */
 .transfer-hint {

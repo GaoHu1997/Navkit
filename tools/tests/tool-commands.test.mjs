@@ -54,7 +54,8 @@ function harness() {
     openServerMonitorDialog: (...args) => launched.push({ tool: 'monitor', args }),
   });
   function load(file, source = read(file)) { source = source.replace(/^import .*;\r?$/gm, ''); vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS }), context, { filename: file }); Object.assign(context, context.exports); }
-  load('src/core/execution.ts'); load('src/core/structure-sync.ts');
+  load('src/core/execution.ts'); load('src/core/structure-review.ts'); load('src/core/structure-sync.ts');
+  load('src/ui/StructureSyncReview.ts');
   load('src/core/connection-health-client.ts');
   load('src/core/dbcatalog.ts'); load('src/core/toolCapabilities.ts');
   const source = read('src/core/App.ts');
@@ -404,10 +405,12 @@ test('sync disables diff / structure preview when the dialect cannot support the
   assert.equal(button('预览结构差异').disabled, false);
   sqlite.close();
 
-  // MySQL → MySQL：比较差异可用；受控结构同步未接入该方言，预览结构差异必须置灰并说明原因。
+  // MySQL → MySQL：原生服务端已接入；元数据和版本限制由后端预览进一步检查。
   const mysql = h.context.openSyncDialog([cfg('m1', { kind: 'mysql' }), cfg('m2', { kind: 'mysql' })], cfg('m1', { kind: 'mysql' })); await flush();
   assert.equal(button('比较差异').disabled, false);
-  assert.equal(button('预览结构差异').disabled, true);
-  assert.match(button('预览结构差异').title, /SQLite/);
+  assert.equal(button('预览结构差异').disabled, false);
   mysql.close();
+  const cross = h.context.openSyncDialog([cfg('s'), cfg('m', { kind: 'mysql' })], cfg('s')); await flush();
+  assert.equal(button('预览结构差异').disabled, true); assert.match(button('预览结构差异').title, /跨方言/);
+  cross.close();
 });
