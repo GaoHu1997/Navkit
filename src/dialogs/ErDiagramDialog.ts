@@ -116,6 +116,7 @@ export function openErDiagramDialog(
   const instanceId = Math.random().toString(36).slice(2, 8);
   /** 每张表一个独立表设计器（owner 唯一）；切换表不丢失未保存草稿。 */
   const designers = new Map<string, ErTableEditor>();
+  let activeDesigner: ErTableEditor | undefined;
 
   // ---------------------------------------------------------------- 工具栏
   const toolbar = document.createElement("div");
@@ -368,7 +369,7 @@ export function openErDiagramDialog(
     const initial = currentScope();
     if (!initial || disposed) return;
     const active = (): boolean => !disposed && generation === loadGeneration && initial.connection.id === connectionId;
-    if (force && selectedTable) designers.get(selectedTable)?.reload();
+    if (force) for (const designer of designers.values()) designer.reload();
     showOverlay("正在加载表结构...");
     try {
       if (preferDb !== undefined || dbSelect.options.length === 0) {
@@ -398,7 +399,7 @@ export function openErDiagramDialog(
         comment: schema.comment ?? "",
         columns: schema.columns.map((c) => ({ name: c.name, type: c.type, primary_key: c.primary_key,
           auto_increment: c.auto_increment, nullable: c.nullable, comment: c.comment, length: c.length })),
-        indexes: schema.indexes.map((index) => ({ columns: index.columns, unique: index.unique, primary: index.primary })),
+        indexes: schema.indexes.map((index) => ({ name: index.name, columns: index.columns, unique: index.unique, primary: index.primary })),
         foreignKeys: schema.foreign_keys.map((fk) => ({ name: fk.name, columns: fk.columns,
           ref_table: fk.ref_table, ref_schema: fk.ref_schema, ref_columns: fk.ref_columns })),
       })).sort((a, b) => a.name.localeCompare(b.name));
@@ -1055,12 +1056,14 @@ export function openErDiagramDialog(
 
   function resetDesigners(): void {
     for (const d of designers.values()) d.destroy();
-    designers.clear();
+    designers.clear(); activeDesigner = undefined;
     ownerTokens.clear();
     inspBody.replaceChildren();
   }
 
   function updateInspector(): void {
+    const existing = selectedTable ? designers.get(selectedTable) : undefined;
+    if (activeDesigner && activeDesigner !== existing) { activeDesigner.deactivate?.(); activeDesigner = undefined; }
     if (!selectedTable) {
       inspTitle.textContent = "表设计";
       const empty = document.createElement("p");
@@ -1079,13 +1082,15 @@ export function openErDiagramDialog(
       return;
     }
     inspTitle.textContent = `表 · ${selectedTable}`;
-    let designer = designers.get(selectedTable);
+    const summary = tables.find(t => t.name === selectedTable);
+    let designer = existing;
     if (!designer) {
       const holder = document.createElement("div");
-      designer = new ErTableEditor({ connectionId, schema: database, table: selectedTable, ownerId: ownerIdFor(selectedTable) }, makeHost(scope), holder);
+      designer = new ErTableEditor({ connectionId, schema: database, table: selectedTable, ownerId: ownerIdFor(selectedTable), summary }, makeHost(scope), holder);
       designers.set(selectedTable, designer);
-    }
+    } else designer.setSummary?.(summary);
     if (designer.el.parentElement !== inspBody) inspBody.replaceChildren(designer.el);
+    activeDesigner = designer;
     designer.activate();
     renderPending();
   }

@@ -56,6 +56,12 @@
 .er-te-btn.pri { background: var(--accent-500, #2f7de1); border-color: var(--accent-500, #2f7de1); color: #fff; font-weight: 600; }
 .er-fkform-hint { color: var(--text-tertiary); font-size: 11px; margin: 9px 0 0; line-height: 1.5; }
 .er-te-status { flex: 0 0 auto; padding: 8px 12px; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 11px; }
+.er-te-summary-note { color: var(--text-secondary); margin: 0 0 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.er-te-summary-list { list-style: none; margin: 0; padding: 0; }
+.er-te-summary-item { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 9px; margin-bottom: 9px; background: var(--bg-subtle); overflow-wrap: anywhere; }
+.er-te-summary-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.er-te-summary-line code { font-family: var(--font-mono); color: var(--text-secondary); }
+.er-te-summary-meta { margin: 5px 0 0; color: var(--text-secondary); line-height: 1.5; }
 
 @media (max-width: 1000px) {
   .er-te-idxrow { grid-template-columns: minmax(0, 1fr) 86px 24px; }

@@ -31,26 +31,28 @@ class El {
 function makeEnv(mock) {
   const document = { createElement: t => new El(t), createElementNS: (_ns, t) => new El(t) };
   const timers = [];
+  const intervals = [];
   const storage = new Map();
   const sandbox = {
     document, console,
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     setTimeout: fn => { timers.push(fn); return timers.length; },
-    clearInterval() {}, setInterval: () => 0,
+    clearTimeout() {},
+    clearInterval(id) { intervals[id - 1] = null; }, setInterval: fn => { intervals.push(fn); return intervals.length; },
   };
   sandbox.window = sandbox;
   sandbox.__PREVIEW_MOCK__ = mock;
-  return { sandbox, timers };
+  return { sandbox, timers, intervals };
 }
 
 async function instantiate(mock) {
-  const { sandbox, timers } = makeEnv(mock);
+  const { sandbox, timers, intervals } = makeEnv(mock);
   sandbox.exports = {}; sandbox.module = { exports: sandbox.exports };
   vm.runInNewContext(built.outputFiles[0].text, sandbox, { filename: 'update-badge.cjs' });
   const { UpdateBadge } = sandbox.module.exports;
   const notify = [];
   const badge = new UpdateBadge((kind, text) => notify.push({ kind, text }));
-  return { badge, sandbox, timers, notify, ...sandbox.module.exports };
+  return { badge, sandbox, timers, intervals, notify, ...sandbox.module.exports };
 }
 
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
@@ -155,4 +157,98 @@ test('点击下载 → 进入进度态 → 完成后变「重启」；再次点�
   badge.el.dispatch('click');
   await flush();
   assert.equal(applied, 1);
+});
+
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function assertBusy(badge, phase) {
+  assert.equal(badge.el.dataset.phase, phase);
+  assert.equal(badge.el.disabled, true);
+  assert.equal(badge.el.getAttribute('aria-busy'), 'true');
+  const loading = badge.el.children[0].children.find(child => child.className === 'ub-loading');
+  assert.equal(loading.getAttribute('aria-hidden'), 'true');
+  assert.equal(loading.children[0].className, 'ub-spinner');
+}
+function assertIdle(badge, phase) {
+  assert.equal(badge.el.dataset.phase, phase);
+  assert.equal(badge.el.disabled, false);
+  assert.equal(badge.el.getAttribute('aria-busy'), 'false');
+}
+
+test('更新点击同步进入忙碌，下载期间重复事件只调用一次 IPC', async () => {
+  const pending = deferred(); let calls = 0;
+  const { badge } = await instantiate({ update_download: () => { calls++; return pending.promise; } });
+  badge.setAvailable(fixtureManifest); assertIdle(badge, 'available');
+  badge.el.dispatch('click'); assertBusy(badge, 'downloading');
+  for (let i = 0; i < 10; i++) badge.el.dispatch('click');
+  await badge['download'](); await flush(); assert.equal(calls, 1);
+  badge['enterDownloading'](40, 100); assertBusy(badge, 'downloading');
+  assert.match(badge.el.title, /40%/);
+  pending.resolve('staged'); await flush(); assertIdle(badge, 'ready');
+});
+
+test('下载失败解除忙碌，用户可重试并在成功后看到重启', async () => {
+  const first = deferred(); let calls = 0;
+  const { badge, notify } = await instantiate({ update_download: () => ++calls === 1 ? first.promise : 'staged' });
+  badge.setAvailable(fixtureManifest); badge.el.dispatch('click'); await flush();
+  first.reject(new Error('网络失败')); await flush();
+  assertIdle(badge, 'available'); assert.match(notify[0].text, /网络失败/);
+  badge.el.dispatch('click'); assertBusy(badge, 'downloading'); await flush();
+  assert.equal(calls, 2); assertIdle(badge, 'ready');
+});
+
+test('重启同步锁定，程序派发与直接重入均只安装一次，成功回执后仍忙碌', async () => {
+  const pending = deferred(); let calls = 0;
+  const { badge } = await instantiate({ update_apply: () => { calls++; return pending.promise; } });
+  badge['setReady'](); badge.el.dispatch('click'); assertBusy(badge, 'applying');
+  for (let i = 0; i < 10; i++) badge.el.dispatch('click');
+  await badge['apply'](); await flush(); assert.equal(calls, 1);
+  badge['setReady'](); badge.setAvailable(fixtureManifest); badge['enterDownloading'](30, 100);
+  assertBusy(badge, 'applying'); assert.match(badge.el.getAttribute('aria-label'), /正在重启/);
+  pending.resolve(); await flush(); badge.el.dispatch('click'); await flush();
+  assert.equal(calls, 1); assertBusy(badge, 'applying');
+});
+
+test('重启失败恢复可点击状态和错误提示，重试成功后保持锁定', async () => {
+  const first = deferred(); let calls = 0;
+  const { badge, notify } = await instantiate({ update_apply: () => ++calls === 1 ? first.promise : undefined });
+  badge['setReady'](); badge.el.dispatch('click'); await flush();
+  first.reject(new Error('文件占用')); await flush();
+  assertIdle(badge, 'ready'); assert.match(badge.el.title, /文件占用/);
+  assert.match(badge.el.getAttribute('aria-label'), /失败.*重试/); assert.match(notify[0].text, /文件占用/);
+  badge.el.dispatch('click'); assertBusy(badge, 'applying'); await flush(); assert.equal(calls, 2);
+});
+
+test('迟到启动 ready 回执不能提前解锁正在下载的更新', async () => {
+  const status = deferred(), download = deferred();
+  const { badge } = await instantiate({ update_status: () => status.promise, update_download: () => download.promise });
+  badge.start(); badge.setAvailable(fixtureManifest); badge.el.dispatch('click'); await flush();
+  status.resolve({ phase: 'ready' }); await flush(); assertBusy(badge, 'downloading');
+  download.resolve('staged'); await flush(); assertIdle(badge, 'ready'); badge.stop();
+});
+
+test('在途轮询 ready 回执和迟到下载成功不能解除重启锁定', async () => {
+  const status = deferred(), download = deferred(), apply = deferred(); let applies = 0;
+  const { badge, intervals } = await instantiate({
+    update_status: () => status.promise,
+    update_download: () => download.promise,
+    update_apply: () => { applies++; return apply.promise; },
+  });
+  badge.setAvailable(fixtureManifest); badge.el.dispatch('click'); await flush();
+  const poll = intervals.find(Boolean); poll(); await flush();
+  badge['setReady'](); badge.el.dispatch('click'); await flush(); assertBusy(badge, 'applying');
+  status.resolve({ phase: 'ready' }); download.resolve('staged'); await flush();
+  assertBusy(badge, 'applying'); badge.el.dispatch('click'); await flush(); assert.equal(applies, 1);
+  apply.resolve(); await flush(); assertBusy(badge, 'applying');
+});
+
+test('停止后迟到启动状态不显示或解锁徽标', async () => {
+  const status = deferred();
+  const { badge } = await instantiate({ update_status: () => status.promise });
+  badge.start(); badge.stop(); status.resolve({ phase: 'ready' }); await flush();
+  assertIdle(badge, 'hidden');
 });

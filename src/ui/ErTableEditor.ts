@@ -1,11 +1,13 @@
 import { api, type TableDesignSnapshot, type TableDesignResponse, type ForeignKeyDesign } from "../core/api";
 import type { ConnectionConfig } from "../core/types";
+import type { ErTable } from "../core/erDiagram";
+import { scheduleErDesignRead, ErDesignReadCancelled, type ErDesignReadTask } from "../core/erDesignReadQueue";
 import { ExecutionController, formatError } from "../core/execution";
 import { assertDesignSnapshot, designClone, draftFromSnapshot, draftSignature, payloadFromDraft, verifiedDesignResponse, type TableDesignerDraft, type DesignerColumn } from "../core/table-design-draft";
 import { reviewErSyncPlan } from "../dialogs/ErSyncDialog";
 import "../styles/er-table-editor.css";
 
-export interface ErTableEditorOptions { connectionId: string; schema: string; table: string; ownerId: string; }
+export interface ErTableEditorOptions { connectionId: string; schema: string; table: string; ownerId: string; summary?: ErTable; }
 export interface ErTableEditorHost {
   connection(): ConnectionConfig | undefined;
   writeReason(): string | null;
@@ -50,42 +52,111 @@ export class ErTableEditor {
   private readonly refColumns = new Map<string, { values: string[] | null; loading: boolean; error: string }>();
   private form = { local: "", refTable: "", refCol: "", cardinality: "N:1", onDelete: "RESTRICT", onUpdate: "CASCADE" };
   private fieldSeq = 0;
+  private summary: ErTable | null = null;
+  private summarySource: ErTable | undefined;
+  private active = false;
+  private loadVersion = 0;
+  private readTask: ErDesignReadTask | null = null;
+  private reloadAfterRead = false;
+  private slow = false;
+  private slowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly opts: ErTableEditorOptions, private readonly host: ErTableEditorHost, el: HTMLElement) {
     this.el = el;
     this.el.classList.add("er-te");
+    this.setSummary(opts.summary);
     this.render();
   }
 
-  activate(): void { if (this.loadState === "idle") void this.load(); }
-  /** 图数据刷新只能更新干净基线，切表、刷新与重试都不能丢弃已有草稿。 */
-  reload(): void { if (!this.draftDirty()) void this.load(); }
+  activate(): void { this.active = true; if (this.loadState === "idle") void this.load(); }
+  deactivate(): void {
+    this.active = false;
+    // 已发送的读取继续受后端预算保护，切回时复用它；未发送选择不占用数据库。
+    if (this.readTask?.cancelQueued()) {
+      ++this.loadVersion; this.readTask = null; this.loadState = "idle";
+      this.clearSlowTimer(); this.render();
+    }
+  }
+  setSummary(summary?: ErTable): void {
+    if (!summary || summary === this.summarySource || summary.name !== this.opts.table || (summary.schema && summary.schema !== this.opts.schema)) return;
+    this.summarySource = summary;
+    this.summary = designClone(summary);
+    // 摘要更新永远不改变完整基线或已有草稿。
+    if (!this.disposed && !this.snapshot) this.render();
+  }
+  /** 刷新使所有干净基线失效；在途旧回执不能冒充刷新后的新基线。 */
+  reload(): void {
+    if (this.disposed || this.saving || this.draftDirty()) return;
+    ++this.loadVersion; ++this.metadataVersion;
+    this.reloadAfterRead = true;
+    if (this.readTask && !this.readTask.cancelQueued()) {
+      this.loadState = "loading"; this.render(); this.host.changed(); return;
+    }
+    this.readTask = null; this.loadState = "idle"; this.clearSlowTimer();
+    if (this.active) void this.load(); else this.render();
+  }
   draftDirty(): boolean { return !!this.draft && draftSignature(this.draft) !== this.baseline; }
   saveReason(): string | null {
     return this.editReason() || (!this.snapshot || !this.draft ? "完整表设计尚未载入，请先读取或重试。" : !this.draftDirty() ? "没有待保存的结构修改。" : null);
   }
-  dispose(): void { this.disposed = true; ++this.metadataVersion; this.execution?.dispose(); }
+  dispose(): void {
+    this.disposed = true; this.active = false; ++this.metadataVersion; ++this.loadVersion;
+    this.readTask?.cancelQueued(); this.readTask = null; this.clearSlowTimer(); this.execution?.dispose();
+  }
   destroy(): void { this.dispose(); }
 
+  private clearSlowTimer(): void {
+    if (this.slowTimer !== null) clearTimeout(this.slowTimer);
+    this.slowTimer = null; this.slow = false;
+  }
+
   private async load(): Promise<void> {
-    if (this.loadState === "loading" || this.saving || this.disposed || this.draftDirty()) return;
-    ++this.metadataVersion;
+    if (this.readTask || this.saving || this.disposed || this.draftDirty()) return;
+    const version = ++this.loadVersion;
+    ++this.metadataVersion; this.reloadAfterRead = false;
     this.refTables = { values: null, loading: false, error: "" };
-    this.refColumns.clear();
+    this.refColumns.clear(); this.clearSlowTimer();
     this.loadState = "loading"; this.loadError = ""; this.message = "";
+    const c = this.host.connection();
+    // 只在内存中用端点身份分组，不存储或打印配置，不跨 owner 复用快照。
+    const key = JSON.stringify([this.opts.connectionId, this.opts.schema, c?.kind, c?.host, c?.port,
+      c?.user, c?.password, c?.database, c?.file, c?.params, c?.read_only]);
+    const task = scheduleErDesignRead(key,
+      () => api.readTableDesignSnapshot(this.opts.connectionId, this.opts.schema, this.opts.table, this.opts.ownerId),
+      () => {
+        if (this.disposed || this.readTask !== task) return;
+        this.slowTimer = setTimeout(() => {
+          this.slowTimer = null;
+          if (!this.disposed && this.readTask === task) { this.slow = true; this.render(); }
+        }, 10_000);
+        this.render();
+      });
+    this.readTask = task;
     this.render(); this.host.changed();
     try {
-      const s = await api.readTableDesignSnapshot(this.opts.connectionId, this.opts.schema, this.opts.table, this.opts.ownerId);
-      if (this.disposed) return;
+      const s = await task.promise;
+      if (this.disposed || version !== this.loadVersion) return;
       assertDesignSnapshot(s);
+      if (s.owner_id !== this.opts.ownerId || s.design.schema !== this.opts.schema || s.design.table !== this.opts.table) {
+        throw new Error("表设计回执归属不一致，请重新读取。");
+      }
       this.accept(s);
       this.loadState = "ready";
     } catch (e) {
-      if (this.disposed) return;
-      this.loadState = "error";
-      this.loadError = "读取表设计失败：" + formatError(e);
+      if (this.disposed || version !== this.loadVersion) return;
+      this.loadState = e instanceof ErDesignReadCancelled ? "idle" : "error";
+      this.loadError = e instanceof ErDesignReadCancelled ? "" : "读取表设计失败：" + formatError(e);
     } finally {
-      if (!this.disposed) { this.render(); this.host.changed(); }
+      if (this.readTask === task) {
+        this.readTask = null; this.clearSlowTimer();
+        if (!this.disposed) {
+          if (this.reloadAfterRead) {
+            this.loadState = "idle";
+            if (this.active) void this.load();
+          }
+          this.render(); this.host.changed();
+        }
+      }
     }
   }
 
@@ -121,10 +192,55 @@ export class ErTableEditor {
     this.host.changed();
   }
 
+  private loadingText(): string {
+    if (this.readTask && !this.readTask.started) return "正在排队补齐完整表设计；切换表会撤销尚未发送的读取。";
+    if (this.slow) return "完整表设计读取较慢，仍在等待数据库响应；已有内容可查看，失败后可重试。";
+    return this.reloadAfterRead ? "刷新已使旧读取失效，正在等待旧请求结束后重新读取。" : "正在后台补齐完整表设计…";
+  }
+
+  private renderSummary(body: HTMLElement): void {
+    const summary = this.summary!;
+    const wrap = elem("section", "er-te-summary");
+    wrap.setAttribute("aria-label", `${this.opts.table} 的只读结构摘要`);
+    wrap.appendChild(elem("p", "er-te-summary-note", "已显示关系图结构摘要（只读），不是完整设计基线；默认值、完整约束与选项需等待读取。"));
+    const list = elem("ul", "er-te-summary-list");
+    if (this.tab === "字段") {
+      for (const c of summary.columns) {
+        const item = elem("li", "er-te-summary-item");
+        const line = elem("div", "er-te-summary-line");
+        line.append(elem("strong", undefined, c.name), elem("code", undefined, c.type));
+        const flags = [c.primary_key ? "PK" : "", c.auto_increment ? "自增" : "", c.nullable ? "允许 NULL" : "NOT NULL"].filter(Boolean);
+        item.append(line, elem("p", "er-te-summary-meta", flags.join(" · ")));
+        if (c.comment) item.appendChild(elem("p", "er-te-summary-meta", c.comment));
+        list.appendChild(item);
+      }
+    } else if (this.tab === "索引") {
+      for (const index of summary.indexes ?? []) {
+        const item = elem("li", "er-te-summary-item");
+        item.append(elem("strong", undefined, index.name || (index.primary ? "PRIMARY" : "索引名称未载入")),
+          elem("p", "er-te-summary-meta", `${index.primary ? "主键" : index.unique ? "唯一索引" : "普通索引"} · ${index.columns.join(", ")}`));
+        list.appendChild(item);
+      }
+    } else {
+      for (const fk of summary.foreignKeys) {
+        const item = elem("li", "er-fkitem er-te-summary-item");
+        item.append(elem("strong", undefined, fk.name || "外键名称未载入"),
+          elem("p", "er-te-summary-meta", `${fk.columns.join(", ")} → ${fk.ref_schema || summary.schema || this.opts.schema}.${fk.ref_table} (${fk.ref_columns.join(", ")})`));
+        list.appendChild(item);
+      }
+    }
+    if (!list.children.length) wrap.appendChild(elem("p", "er-te-empty", `关系图摘要未列出${this.tab}；以完整设计读取结果为准。`));
+    else wrap.appendChild(list);
+    body.appendChild(wrap);
+  }
+
   private render(): void {
     if (this.disposed) return;
+    const focus = document.activeElement;
+    const focusedTab = focus?.parentElement === this.el.querySelector(".er-te-tabs") ? focus?.textContent : null;
     this.el.dataset.loadState = this.loadState;
-    this.el.setAttribute("aria-busy", String(this.loadState === "loading" || this.saving));
+    // 已有摘要保持可访问，不让整个区域的 busy 阻塞读屏器读取已有内容。
+    this.el.setAttribute("aria-busy", String((this.loadState === "loading" && !this.summary && !this.snapshot) || this.saving));
     this.el.replaceChildren();
     const tabs = elem("div", "er-te-tabs");
     tabs.setAttribute("role", "tablist");
@@ -135,6 +251,8 @@ export class ErTableEditor {
       tabs.appendChild(t);
     });
     this.el.appendChild(tabs);
+    // 渲染/异步补齐不丢掉当前页签的键盘焦点。
+    if (focusedTab) (Array.from(tabs.children).find(t => t.textContent === focusedTab) as HTMLElement | undefined)?.focus();
     const body = elem("div", "er-te-body");
     this.el.appendChild(body);
     if (this.loadError) {
@@ -149,13 +267,14 @@ export class ErTableEditor {
       body.appendChild(retry);
     }
     if (!this.snapshot || !this.draft) {
-      const status = elem("p", "er-te-empty", this.loadState === "loading" ? "正在读取完整表设计…" : this.loadState === "error" ? "尚未取得完整表设计，请重试读取。" : "选择表后读取完整表设计。");
+      const status = elem("p", "er-te-summary-note", this.loadState === "loading" ? this.loadingText() : this.loadState === "error" ? "完整设计尚未取得；已有结构摘要仍可查看，请重试读取。" : "选择表后后台读取完整表设计。");
       status.setAttribute("role", "status");
       body.appendChild(status);
+      if (this.summary) this.renderSummary(body);
       return;
     }
     if (this.loadState === "loading") {
-      const status = elem("p", "er-te-empty", "正在重新读取完整表设计…");
+      const status = elem("p", "er-te-summary-note", this.loadingText());
       status.setAttribute("role", "status");
       body.appendChild(status);
     }

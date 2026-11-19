@@ -2371,36 +2371,7 @@ pub async fn list_db_users(state: State<'_, AppState>, id: String) -> CmdResult<
     let crate::db::Db::Mysql(pool) = db.as_ref() else {
         return Ok(Vec::new());
     };
-    let rows = crate::sql_history::query(
-        "SELECT user, host, ssl_type, max_questions, max_updates, max_connections, \
-         max_user_connections, Super_priv FROM mysql.user ORDER BY user, host",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(AppError::from)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let cols = r.columns();
-        // mysql.user 的 User/Host 为 VARBINARY：走元数据解码，显示可读文本（BUG-R1-012）。
-        let vals = crate::schema::mysql_meta_row_values(r);
-        let get = |i: usize| vals.get(i).cloned().flatten().unwrap_or_default();
-        let name = format!("{}@{}", get(0), get(1));
-        // Super_priv 权限列是 'Y'/'N' 枚举（MySQL 5.7/8.0 通用；旧版 Super 列 8.0 已移除）
-        let su = match get(7).to_ascii_uppercase().as_str() {
-            "Y" => "是".to_string(),
-            _ => "否".to_string(),
-        };
-        out.push(vec![
-            name,
-            get(2),
-            get(3),
-            get(4),
-            get(5),
-            get(6),
-            su,
-        ]);
-    }
-    Ok(out)
+    crate::db_users::read_user_list(pool).await.map_err(AppError::from)
 }
 
 // ---------------------------------------------------------------- 用户管理（MySQL 协议族）

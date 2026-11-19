@@ -149,6 +149,87 @@ const editorElement = h => h.document.body.querySelector('.er-te');
 const syncButton = h => h.document.body.querySelector('.er-toolbar-write').querySelector('.primary');
 const callsOf = (h, kind) => h.calls.filter(c => c[0] === kind);
 
+test('各数据库完整读取挂起时字段/索引/跨模式外键摘要可读，失败仍保留且不可保存', async () => {
+  for (const kind of ['tidb', 'mysql', 'mariadb', 'postgresql', 'opengauss', 'sqlite', 'sqlserver']) {
+    const pending = deferred();
+    const summary = table('items', 'db', [column('summary_id', true)]);
+    summary.indexes = [{ name: 'idx_summary', columns: ['summary_id'], unique: true, primary: false }];
+    summary.foreign_keys = [{ name: 'fk_summary', columns: ['summary_id'], ref_table: 'parents', ref_schema: 'other', ref_columns: ['parent_id'] }];
+    const h = harness({ realEditor: true, connections: [{ ...connection('a'), kind }], load: () => metadata([summary]), design: () => pending.promise });
+    const dlg = h.open(); await h.flush();
+    assert.match(editorElement(h).querySelector('.er-te-summary').textContent, /summary_id/);
+    assert.equal(editorElement(h).querySelectorAll('input').length, 0, kind + ' 摘要只包含文本');
+    assert.equal(syncButton(h).disabled, true);
+    h.button('索引').emit('click'); assert.match(editorElement(h).textContent, /idx_summary.*唯一索引/);
+    h.button('外键').emit('click'); assert.match(editorElement(h).textContent, /fk_summary.*other.parents/);
+    assert.equal(callsOf(h, 'reference-tables').length, 0, '摘要不查询引用候选');
+    pending.reject(new Error('fixture metadata timeout')); await h.flush();
+    assert.equal(editorElement(h).dataset.loadState, 'error'); assert.match(editorElement(h).textContent, /fk_summary/);
+    assert.ok(h.button('重试读取表设计')); assert.equal(callsOf(h, 'preview').length, 0); dlg.close();
+  }
+});
+
+test('快速切表最多两个真实在途请求，撤销中间排队，切回在途/成功表不重复读', async () => {
+  const pending = new Map();
+  const h = harness({ realEditor: true, load: () => metadata(['a', 'b', 'c', 'd', 'e'].map(n => table(n))),
+    design: a => { const p = deferred(); pending.set(a.table, { ...p, args: a }); return p.promise; } });
+  const dlg = h.open(); await h.flush();
+  const select = async name => { h.cards().find(c => c.dataset.table === name).emit('click'); await h.flush(); };
+  await select('b'); await select('c'); await select('d'); await select('e');
+  assert.deepEqual(callsOf(h, 'design').map(([, a]) => a.table), ['a', 'b']);
+  assert.match(editorElement(h).textContent, /排队/); assert.match(editorElement(h).querySelector('.er-te-summary').textContent, /只读/);
+  await select('a'); assert.equal(callsOf(h, 'design').length, 2);
+  await select('e'); pending.get('a').resolve(designSnapshot(pending.get('a').args)); await h.flush();
+  assert.deepEqual(callsOf(h, 'design').map(([, a]) => a.table), ['a', 'b', 'e']);
+  for (const name of ['b', 'e']) pending.get(name).resolve(designSnapshot(pending.get(name).args)); await h.flush();
+  const ready = editorElement(h); await select('b'); await select('e');
+  assert.equal(editorElement(h), ready); assert.equal(callsOf(h, 'design').length, 3); dlg.close();
+});
+
+test('慢提示只更新反馈、不释放实际在途槽位或自动重试；关闭撤销排队和定时器', async () => {
+  const pending = new Map();
+  const h = harness({ realEditor: true, load: () => metadata(['a', 'b', 'c'].map(n => table(n))),
+    design: a => { const p = deferred(); pending.set(a.table, { ...p, args: a }); return p.promise; } });
+  const dlg = h.open(); await h.flush(); h.cards().find(c => c.dataset.table === 'b').emit('click'); await h.flush();
+  for (const [id, fire] of [...h.timers]) { h.timers.delete(id); fire(); }
+  assert.match(editorElement(h).textContent, /读取较慢/); assert.equal(h.button('重试读取表设计'), undefined);
+  h.cards().find(c => c.dataset.table === 'c').emit('click'); await h.flush(); assert.equal(callsOf(h, 'design').length, 2);
+  dlg.close(); assert.equal(h.timers.size, 0);
+  for (const p of pending.values()) p.resolve(designSnapshot(p.args)); await h.flush();
+  assert.equal(callsOf(h, 'design').length, 2); assert.equal(h.document.body.children.length, 0);
+});
+
+test('在途读取期间刷新不接受旧快照、不并发重读，结束后读取最新代次', async () => {
+  const old = deferred(), fresh = deferred(); const requests = [];
+  const h = harness({ realEditor: true, design: a => { requests.push(a); return requests.length === 1 ? old.promise : fresh.promise; } });
+  const dlg = h.open(); await h.flush(); h.button('刷新').emit('click'); h.button('刷新').emit('click'); await h.flush();
+  assert.equal(requests.length, 1);
+  const stale = designSnapshot(requests[0]); stale.design.columns[0].name = 'stale_id'; old.resolve(stale); await h.flush();
+  assert.equal(requests.length, 2); assert.equal(editorElement(h).dataset.loadState, 'loading');
+  assert.equal(editorElement(h).querySelector('[aria-label="字段名称"]'), null, '旧回执不转换草稿');
+  const current = designSnapshot(requests[1]); current.design.columns[0].name = 'fresh_id'; fresh.resolve(current); await h.flush();
+  assert.equal(editorElement(h).querySelector('[aria-label="字段名称"]').value, 'fresh_id'); dlg.close();
+});
+
+test('刷新同时失效未选中的干净设计器，切回按新代次读取；脏草稿保持原样', async () => {
+  const h = harness({ realEditor: true, load: () => metadata(['a', 'b', 'c'].map(n => table(n))) }); const dlg = h.open(); await h.flush();
+  h.cards().find(c => c.dataset.table === 'b').emit('click'); await h.flush();
+  const input = editorElement(h).querySelector('[aria-label="字段名称"]'); input.value = 'draft_b'; input.emit('input');
+  h.cards().find(c => c.dataset.table === 'c').emit('click'); await h.flush(); h.button('刷新').emit('click'); await h.flush();
+  assert.equal(callsOf(h, 'design').length, 4);
+  h.cards().find(c => c.dataset.table === 'a').emit('click'); await h.flush(); assert.equal(callsOf(h, 'design').length, 5);
+  h.cards().find(c => c.dataset.table === 'b').emit('click'); await h.flush(); assert.equal(callsOf(h, 'design').length, 5);
+  assert.equal(editorElement(h).querySelector('[aria-label="字段名称"]'), input); assert.equal(input.value, 'draft_b'); dlg.close();
+});
+
+test('完整回执的 owner/模式/表名不匹配时拒绝，不能将其它表误转成基线', async () => {
+  for (const mutate of [s => { s.owner_id = 'other-owner'; }, s => { s.design.schema = 'other'; }, s => { s.design.table = 'other'; }]) {
+    const h = harness({ realEditor: true, design: a => { const s = designSnapshot(a); mutate(s); return s; } }); const dlg = h.open(); await h.flush();
+    assert.equal(editorElement(h).dataset.loadState, 'error'); assert.match(editorElement(h).textContent, /归属不一致/);
+    assert.equal(editorElement(h).querySelector('[aria-label="字段名称"]'), null); assert.ok(editorElement(h).querySelector('.er-te-summary')); dlg.close();
+  }
+});
+
 test('固定两个工具栏排，写操作与画布工具分组；编辑器挂载后激活', async () => {
   const h = harness(); const dlg = h.open(); await h.flush();
   const toolbar = h.document.body.querySelector('.er-toolbar');
@@ -168,8 +249,10 @@ test('真实编辑器激活发起完整设计读取，重复激活不并发，�
   const dlg = h.open(); await h.flush();
   assert.equal(callsOf(h, 'design').length, 1);
   assert.equal(editorElement(h).dataset.loadState, 'loading');
-  assert.equal(editorElement(h).getAttribute('aria-busy'), 'true');
-  assert.match(editorElement(h).textContent, /正在读取完整表设计/);
+  assert.equal(editorElement(h).getAttribute('aria-busy'), 'false', '已有摘要不被读屏 busy 阻塞');
+  assert.match(editorElement(h).textContent, /正在后台补齐完整表设计/);
+  assert.match(editorElement(h).querySelector('.er-te-summary').textContent, /只读/);
+  assert.equal(editorElement(h).querySelector('[aria-label="字段名称"]'), null, '摘要不伪造可编辑草稿');
   assert.equal(syncButton(h).disabled, true);
   h.button('工程 ER 图').emit('click'); h.button('表结构图').emit('click'); await h.flush();
   assert.equal(callsOf(h, 'design').length, 1);
@@ -517,7 +600,7 @@ test('真实Chrome+原CSS：两排工具栏无溢出、卡片高度、拖动徽�
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const executablePath = [process.env.NAVKIT_TEST_BROWSER, process.env.BROWSER_EXE, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe', '/usr/bin/chromium', '/usr/bin/chromium-browser'].filter(Boolean).find(existsSync);
-    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    browser = await chromium.launch({ headless: true, args: [`--explicitly-allowed-ports=${server.address().port}`], ...(executablePath ? { executablePath } : {}) });
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } }); const errors = []; page.on('pageerror', e => errors.push(e.message)); page.setDefaultTimeout(5000);
     await page.goto(`http://127.0.0.1:${server.address().port}/`); await page.evaluate(() => window.openGraph()); await page.waitForFunction(() => document.querySelectorAll('.er-card').length === 4);
     for (const width of [1600, 1100, 900, 720, 480, 360]) {
@@ -572,9 +655,10 @@ test('真实Chrome+真实编辑器：读取失败可重试，刷新/切表保护
     bundle: true, write: false, format: 'iife', platform: 'browser', loader: { '.css': 'empty' }, plugins: graphPlugins(true), logLevel: 'silent' });
   const css = (await Promise.all(['src/styles/base.css', 'src/styles/er-diagram.css', 'src/styles/er-table-editor.css'].map(file => readFile(path.join(root, file), 'utf8')))).join('\n');
   const snapshots = Object.fromEntries(['a', 'b'].map(name => [name, designSnapshot({ table: name })]));
-  const install = `window.graphConnections=${JSON.stringify([connection('a')])}; window.graphData=${JSON.stringify(metadata([table('a'), table('b')]))}; window.snapshots=${JSON.stringify(snapshots)}; window.designMode='error'; window.designCalls=[];
+  const install = `window.graphConnections=${JSON.stringify([connection('a')])}; window.graphData=${JSON.stringify(metadata([table('a'), table('b')]))}; window.snapshots=${JSON.stringify(snapshots)}; window.designMode='pending'; window.designCalls=[];
     window.__PREVIEW_MOCK__={list_databases:()=>[['db','mysql']], get_diagram_metadata:()=>structuredClone(window.graphData), read_table_design_snapshot:a=>{
-      window.designCalls.push(a); if(window.designMode==='error') throw {message:'没有读取完整表设计的权限，请检查当前连接。详细诊断：字段/约束读取失败。', code:'METADATA_DENIED', retryable:true};
+      window.designCalls.push(a); if(window.designMode==='pending') return new Promise((resolve,reject)=>{window.pendingDesign={resolve,reject};});
+      if(window.designMode==='error') throw {message:'没有读取完整表设计的权限，请检查当前连接。详细诊断：字段/约束读取失败。', code:'METADATA_DENIED', retryable:true};
       const s=structuredClone(window.snapshots[a.table]); s.owner_id=a.ownerId; return s;
     }};`;
   const server = createServer((req, res) => {
@@ -586,9 +670,21 @@ test('真实Chrome+真实编辑器：读取失败可重试，刷新/切表保护
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const executablePath = [process.env.NAVKIT_TEST_BROWSER, process.env.BROWSER_EXE, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe', '/usr/bin/chromium', '/usr/bin/chromium-browser'].filter(Boolean).find(existsSync);
-    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    browser = await chromium.launch({ headless: true, args: [`--explicitly-allowed-ports=${server.address().port}`], ...(executablePath ? { executablePath } : {}) });
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } }); const errors = []; page.on('pageerror', e => errors.push(e.message)); page.setDefaultTimeout(6000);
     await page.goto(`http://127.0.0.1:${server.address().port}/`); await page.evaluate(() => window.openGraph());
+    await page.waitForSelector('.er-te[data-load-state="loading"] .er-te-summary');
+    assert.match(await page.locator('.er-te-summary').innerText(), /只读/);
+    assert.equal(await page.locator('.er-te input').count(), 0, '完整快照挂起时不构造可写草稿');
+    assert.equal(await page.getByRole('button', { name: '同步到数据库', exact: true }).isEnabled(), false);
+    await page.getByRole('tab', { name: '索引', exact: true }).click();
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), '索引');
+    await page.getByRole('tab', { name: '字段', exact: true }).click();
+    await page.setViewportSize({ width: 480, height: 1000 });
+    const summaryBounds = await page.locator('.er-te-summary').evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth }));
+    assert.ok(summaryBounds.scroll <= summaryBounds.client + 1, '摘要在窄窗完整换行');
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.evaluate(() => window.pendingDesign.reject({ message: '没有读取完整表设计的权限，请检查当前连接。详细诊断：字段/约束读取失败。', code: 'METADATA_DENIED', retryable: true }));
     await page.waitForSelector('.er-te[data-load-state="error"]');
     assert.match(await page.locator('.er-te [role="alert"]').innerText(), /METADATA_DENIED/);
     assert.equal(await page.getByRole('button', { name: '重试读取表设计', exact: true }).isVisible(), true);

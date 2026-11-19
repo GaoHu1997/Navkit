@@ -46,17 +46,32 @@ test('field grid keeps type select, single-box default with choices, clickable k
   // 类型是纯下拉：只能选方言清单里的类型
   await page.getByLabel('字段 computed 类型', { exact: true }).selectOption('bigint');
   assert.equal(await page.evaluate(() => designer.draft.columns[2].data_type), 'bigint');
-  // 默认值：一个框承担回显与手输，候选浮层选中后直接回显
-  await page.getByRole('button', { name: '字段 computed 默认值候选', exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.popover-option-value')].map(el => el.textContent)), ['0', '1', 'NULL']);
-  await page.getByRole('button', { name: '0', exact: true }).click();
+  // 默认值：整格是可输入下拉——点输入框展开候选，输入即筛选，无匹配时保留手输
+  const computedDefault = page.locator('input[aria-label="字段 computed 默认值"]');
+  await computedDefault.click();
+  await page.locator('.searchable-input-popover').waitFor();
+  assert.deepEqual(await page.locator('.searchable-input-popover .searchable-select-option').allTextContents(), ['0', '1', 'NULL']);
+  await page.getByRole('option', { name: '0', exact: true }).click();
   assert.equal(await page.evaluate(() => designer.draft.columns[2].default_value), '0');
-  assert.equal(await page.getByRole('textbox', { name: '字段 computed 默认值', exact: true }).inputValue(), '0');
-  await page.getByRole('textbox', { name: '字段 computed 默认值', exact: true }).fill('CURRENT_TIMESTAMP');
+  assert.equal(await computedDefault.inputValue(), '0');
+  // 输入即筛选候选；没有匹配也可以直接保存用户输入
+  await computedDefault.click();
+  await computedDefault.fill('1');
+  assert.deepEqual(await page.locator('.searchable-input-popover .searchable-select-option').allTextContents(), ['1']);
+  await page.keyboard.press('Escape');
+  await computedDefault.fill('my_custom_default');
+  assert.equal(await page.evaluate(() => designer.draft.columns[2].default_value), 'my_custom_default');
+  await computedDefault.click();
+  assert.equal(await page.locator('.searchable-input-popover .searchable-select-empty').innerText(), '没有匹配建议，可继续手动输入');
+  // 点提示区关闭浮层，不会挡住下方相邻单元格
+  await page.locator('.searchable-input-popover .searchable-select-empty').click();
+  await page.locator('.searchable-input-popover').waitFor({ state: 'detached' });
+  await computedDefault.fill('CURRENT_TIMESTAMP');
   assert.equal(await page.evaluate(() => designer.draft.columns[2].default_value), 'CURRENT_TIMESTAMP');
+  await page.keyboard.press('Escape');
   // 时间类型的候选随类型变化
-  await page.getByRole('button', { name: '字段 updated 默认值候选', exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.popover-option-value')].map(el => el.textContent)), ['CURRENT_TIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIME', 'NULL']);
+  await page.locator('input[aria-label="字段 updated 默认值"]').click();
+  assert.deepEqual(await page.locator('.searchable-input-popover .searchable-select-option').allTextContents(), ['CURRENT_TIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIME', 'NULL']);
   await page.keyboard.press('Escape');
   // 主键钥匙每行都有：点一下加入，再点一下移出
   assert.equal(await page.locator('.designer-grid.designer-fields .designer-key').count(), 4);
@@ -134,6 +149,8 @@ test('index and foreign-key controls preserve compound order, real reference col
   await page.getByRole('combobox', { name: '索引 1 字段 1', exact: true }).selectOption('id');
   await page.getByRole('button', { name: '为索引 1添加字段', exact: true }).click();
   await page.getByRole('combobox', { name: '索引 1 字段 2', exact: true }).selectOption('title');
+  // 排序只有 ASC / DESC：标记 data-no-search，增强层不渲染搜索框
+  assert.equal(await page.getByRole('combobox', { name: '索引 1 字段 2 排序', exact: true }).getAttribute('data-no-search'), '');
   await page.getByRole('combobox', { name: '索引 1 字段 2 排序', exact: true }).selectOption('DESC');
   await page.getByRole('button', { name: '确定', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => designer.draft.indexes[0].columns), ['id', 'title']);

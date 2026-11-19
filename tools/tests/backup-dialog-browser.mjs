@@ -48,7 +48,7 @@ try {
   await next.dispatchEvent('click');
   assert.equal(await page.evaluate(() => requests.length), 1, 'running submit must be idempotent');
   const savedPath = 'D:\\真实备份目录\\demo_20261113_1411.sql';
-  await page.evaluate(saved => requests[0].resolve([3, 1434, saved]), savedPath);
+  await page.evaluate(saved => requests[0].resolve({ rows: 3, bytes: 1434, path: saved, warnings: [] }), savedPath);
   await waitIdle();
   assert.equal(await next.textContent(), '备份已完成');
   assert.equal(await next.isDisabled(), true);
@@ -82,7 +82,7 @@ try {
   await page.waitForFunction(() => requests.length === 2);
   assert.equal(await page.evaluate(() => requests[1].args.opts.include_data), false);
   assert.equal(await page.evaluate(() => requests[1].args.opts.file_name), 'changed');
-  await page.evaluate(() => requests[1].resolve([0, 900, 'D:/backups/changed.sql']));
+  await page.evaluate(() => requests[1].resolve({ rows: 0, bytes: 900, path: 'D:/backups/changed.sql', warnings: [] }));
   await waitIdle();
   // Step-header navigation also clears completion, not just the back button.
   await dialog.locator('.wizard-step').first().click();
@@ -96,23 +96,36 @@ try {
   assert.match(await status.textContent(), /备份失败.*disk-full fixture/);
   await next.click();
   const longPath = 'D:/长目录/' + '实际文件夹/'.repeat(20) + '<special>&.sql';
-  await page.evaluate(saved => requests[3].resolve([9, 1024, saved]), longPath);
+  await page.evaluate(saved => requests[3].resolve({ rows: 9, bytes: 1024, path: saved, warnings: [] }), longPath);
   await waitIdle();
   assert.equal(await dialog.locator('.backup-success-location').textContent(), `存储位置：${longPath}`);
   const bounds = await dialog.locator('.backup-success-location').evaluate(el => ({ width: el.clientWidth, scroll: el.scrollWidth }));
   assert.ok(bounds.scroll <= bounds.width + 1, 'long path must wrap, not be truncated');
+  // 成功块改为「左图标 + 右文案、下方路径」，不再撑出滚动条，也不再显示关闭提示
+  const overflow = await dialog.locator('.wizard-body').evaluate(el => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+  assert.ok(overflow.scroll <= overflow.client + 1, `success panel must not add a scrollbar: ${JSON.stringify(overflow)}`);
+  assert.equal(await dialog.locator('.backup-success-hint').count(), 0);
+  assert.doesNotMatch(await dialog.innerText(), /可关闭此窗口/);
+  const successLayout = await dialog.locator('.backup-success-main').evaluate(el => {
+    const icon = el.querySelector('.backup-success-icon').getBoundingClientRect();
+    const title = el.querySelector('.backup-success-title').getBoundingClientRect();
+    const location = el.parentElement.querySelector('.backup-success-location').getBoundingClientRect();
+    return { iconLeft: icon.left, iconRight: icon.right, titleLeft: title.left, titleBottom: title.bottom, locationTop: location.top, locationLeft: location.left };
+  });
+  assert.ok(successLayout.titleLeft > successLayout.iconRight, 'icon stays left of the text');
+  assert.ok(successLayout.locationTop > successLayout.titleBottom, 'storage path sits below the icon and text');
   await close.click();
   assert.equal(await page.locator('#trigger').evaluate(button => button === document.activeElement), true);
   await page.evaluate(() => openFixture(true));
   await toExecution(); await next.click();
-  await page.evaluate(() => requests[4].resolve([1, 42, 'D:/backups/callback.sql']));
+  await page.evaluate(() => requests[4].resolve({ rows: 1, bytes: 42, path: 'D:/backups/callback.sql', warnings: [] }));
   await waitIdle();
   assert.equal(await next.isDisabled(), true, 'callback error cannot unlock a published backup');
   assert.equal(await dialog.locator('.backup-success-title').textContent(), '备份成功');
   await close.click();
   await page.evaluate(() => openFixture());
   await toExecution(); await next.click(); await close.click();
-  await page.evaluate(() => requests[5].resolve([1, 12, 'D:/backups/background.sql']));
+  await page.evaluate(() => requests[5].resolve({ rows: 1, bytes: 12, path: 'D:/backups/background.sql', warnings: [] }));
   await page.waitForFunction(() => completed.length === 5);
   assert.equal(await page.locator('.backup-dialog').count(), 0, 'close does not resurrect background task dialog');
   assert.deepEqual(errors, []);

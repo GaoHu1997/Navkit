@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import path from 'node:path';
-const bundle = await build({ stdin: { contents: `export { TableDesigner } from './src/ui/TableDesigner'; export { openTableOperationDialog } from './src/dialogs/TableOperationDialog'; export * from './src/core/table-design-draft';`, resolveDir: process.cwd(), sourcefile: 'table-designer-browser-fixture.ts' }, bundle: true, platform: 'browser', format: 'iife', globalName: 'DesignerModules', loader: { '.css': 'empty' }, write: false, logLevel: 'silent', plugins: [{ name: 'isolated-api', setup(plugin) { plugin.onResolve({ filter: /(?:^|\/)core\/api$|^\.\/api$/ }, () => ({ path: 'api', namespace: 'test-api' })); plugin.onLoad({ filter: /.*/, namespace: 'test-api' }, () => ({ contents: 'export const api = globalThis.__api;', loader: 'js' })); } }] });
+const bundle = await build({ stdin: { contents: `export { TableDesigner } from './src/ui/TableDesigner'; export { openTableOperationDialog } from './src/dialogs/TableOperationDialog'; export * from './src/core/table-design-draft'; export { installSearchableInputs } from './src/ui/SearchableInput';`, resolveDir: process.cwd(), sourcefile: 'table-designer-browser-fixture.ts' }, bundle: true, platform: 'browser', format: 'iife', globalName: 'DesignerModules', loader: { '.css': 'empty' }, write: false, logLevel: 'silent', plugins: [{ name: 'isolated-api', setup(plugin) { plugin.onResolve({ filter: /(?:^|\/)core\/api$|^\.\/api$/ }, () => ({ path: 'api', namespace: 'test-api' })); plugin.onLoad({ filter: /.*/, namespace: 'test-api' }, () => ({ contents: 'export const api = globalThis.__api;', loader: 'js' })); } }] });
 export async function launchDesignerBrowser() {
   const executablePath = [process.env.NAVKIT_TEST_BROWSER, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/chromium', '/usr/bin/chromium-browser'].filter(Boolean).find(file => fs.existsSync(file));
   return chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
@@ -17,7 +17,7 @@ export async function launchOwnedDesignerBrowser(onServer = () => {}) {
 export async function designerPage(browser, kind = 'mysql') {
   const page = await browser.newPage({ viewport: { width: 1500, height: 980 } }); page.setDefaultTimeout(5000);
   await page.setContent('<button id="outside">外部焦点</button><div id="designer"></div>');
-  await page.addStyleTag({ content: fs.readFileSync(path.resolve('src/styles/table-designer.css'), 'utf8') + '\n.dialog-backdrop{position:fixed;inset:0;background:#ddd8;display:grid;place-items:center}.dialog{background:white;border:1px solid #888;padding:12px}.dialog-footer{display:flex;gap:8px}.dialog-body{max-height:65vh;overflow:auto}' });
+  await page.addStyleTag({ content: fs.readFileSync(path.resolve('src/styles/table-designer.css'), 'utf8') + '\n' + fs.readFileSync(path.resolve('src/ui/searchable-select.css'), 'utf8') + '\n.dialog-backdrop{position:fixed;inset:0;background:#ddd8;display:grid;place-items:center}.dialog{background:white;border:1px solid #888;padding:12px}.dialog-footer{display:flex;gap:8px}.dialog-body{max-height:65vh;overflow:auto}' });
   await page.evaluate(kind => {
     let uuid = 0; if (!crypto.randomUUID) crypto.randomUUID = () => `12345678-1234-4123-8123-${String(++uuid).padStart(12, '0')}`;
     const feature = { supported: true, reason: null };
@@ -47,6 +47,8 @@ export async function designerPage(browser, kind = 'mysql') {
     };
   }, kind);
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
+  // 表设计器默认值单元格用应用级的可搜索输入增强；单独挂载 fixture 时也要安装，否则点击不展开候选。
+  await page.evaluate(() => { DesignerModules.installSearchableInputs(); });
   await page.evaluate(async () => {
     const f = globalThis.fixture;
     globalThis.tab = { id: 't', connectionId: 'c', schema: 'db', object: 'items', kind: 'structure', dirty: false };

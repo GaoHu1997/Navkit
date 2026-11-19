@@ -45,10 +45,13 @@
 .table-designer .designer-type { display: flex; gap: 4px; align-items: center; }
 .table-designer .designer-type select { flex: 1 1 110px; min-width: 0; width: auto; }
 .table-designer .designer-type input { flex: 1 1 100px; min-width: 0; }
-/* 默认值单元格：左侧候选下拉（NULL / 0 / 1 / CURRENT_* 等，随字段类型变化），右侧可手输任意表达式 */
-.table-designer .designer-default-cell { display: flex; gap: 4px; align-items: center; width: 100%; min-width: 0; }
-.table-designer .designer-default-cell .designer-default-pick { flex: 0 0 88px; min-width: 0; width: 88px; color: var(--text-secondary); }
+/* 默认值单元格：整格是一个可输入的下拉（点任意位置展开、输入即筛选、无匹配保留手输） */
+.table-designer .designer-default-cell { display: flex; align-items: center; width: 100%; min-width: 0; position: relative; }
 .table-designer .designer-default-cell .designer-default-input { flex: 1 1 auto; min-width: 0; }
+.table-designer .designer-default-chevron {
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  display: grid; place-items: center; color: var(--text-tertiary); pointer-events: none;
+}
 /* 列表页操作列：行尾不再放删除按钮，删除统一由顶部操作栏完成（保留类名给其它列表页复用）。 */
 .table-designer .designer-grid .designer-op { white-space: nowrap; width: 1%; }
 .table-designer .designer-grid .designer-op .btn { min-width: 0; padding: 0 10px; }
@@ -174,20 +177,14 @@
 .table-designer .designer-picker-more:disabled { opacity: .45; cursor: not-allowed; }
 .table-designer .designer-pk-clear { margin-left: 8px; }
 
-/* 默认值：一个框承担回显与手输，右侧箭头只给候选（不再并列第二个输入框） */
-.table-designer .designer-default-cell { display: flex; align-items: center; height: 100%; width: 100%; }
+/* 默认值：整格是可输入下拉，箭头只作装饰（pointer-events:none，点击落在输入框上） */
+.table-designer .designer-grid td .designer-default-cell { height: 100%; }
 .table-designer .designer-grid td .designer-default-cell .designer-default-input {
-  flex: 1 1 auto; min-width: 0; width: auto; height: 30px; border: 1px solid transparent; border-radius: 0; background: transparent; padding: 0 2px 0 8px; box-shadow: none;
+  width: 100%; height: 30px; padding: 0 22px 0 8px; border: 1px solid transparent; border-radius: 0; background: transparent; box-shadow: none; cursor: pointer;
 }
-.table-designer .designer-grid td .designer-default-cell .designer-default-input:hover { background: transparent; }
-.table-designer .designer-grid td .designer-default-cell .designer-default-input:focus { border-color: var(--accent-500); background: var(--bg-surface); }
-.table-designer .designer-default-pick {
-  flex: 0 0 22px; height: 22px; margin-right: 4px; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--r-1);
-  background: transparent; color: var(--text-tertiary); cursor: pointer;
-}
-.table-designer .designer-default-pick:hover { background: var(--bg-pressed); color: var(--text-secondary); }
-.table-designer .designer-default-pick.open { background: var(--accent-50); border-color: var(--accent-200); color: var(--accent-600); }
-.table-designer .designer-default-pick:disabled { opacity: .4; cursor: not-allowed; }
+.table-designer .designer-grid td .designer-default-cell .designer-default-input:hover { background: var(--bg-hover); }
+.table-designer .designer-grid td .designer-default-cell .designer-default-input:focus { border-color: var(--accent-500); background: var(--bg-surface); cursor: text; }
+.table-designer .designer-grid td .designer-default-cell .designer-default-input:disabled { cursor: not-allowed; }
 
 /* 扩展列：自增 / 无符号 / 填充零只在浮层里改，单元格只显示已启用的标签 */
 .table-designer .designer-ext {

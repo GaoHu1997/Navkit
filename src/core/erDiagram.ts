@@ -33,7 +33,7 @@ export interface ErTable {
   columns: ErColumn[];
   foreignKeys: ErForeignKey[];
   /** Only fully represented, unfiltered unique keys may prove a 1:1 FK. */
-  indexes?: { columns: string[]; unique: boolean; primary?: boolean }[];
+  indexes?: { name?: string; columns: string[]; unique: boolean; primary?: boolean }[];
 }
 
 export type Cardinality = "1" | "N";

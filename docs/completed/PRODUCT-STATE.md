@@ -4,7 +4,7 @@
 > 不是过程记录。任何一条能力的代码入口都必须可打开核对。
 > 更新规则见 `.agents/skills/docs-lifecycle/SKILL.md`。
 >
-> 最后核对：2026-11-18｜代码基线：工作树（`38f591b` + 未提交结构同步 P1–P3 与既有修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）。2026-11-16 已把 `feature/query-server-pagination` 与 `perf/stream-preview-eval-20261115` 合并进 main，原独立工作树的结构性结论在下方保留为历史证据，不再代表"未合并"事实。
+> 最后核对：2026-11-19｜代码基线：main 工作树（`5d90efb` + 查询结果页脚/表设计默认值下拉/备份成功卡/MySQL 结构同步身份查询修复、关系图渐进加载/读取预算优化、TiDB 用户列表兼容修复、显示字段列表反馈与对齐修复、标题栏更新/重启忙碌反馈及其它并行/既有修改；保留既有 IPC/例程/分页/数据源修复，新增受控数据管线代码、本地正确性/规模验证与显式策略；性能改动仍待用户逐项决定保留，不代表已发布桌面程序）。2026-11-16 已把 `feature/query-server-pagination` 与 `perf/stream-preview-eval-20261115` 合并进 main，原独立工作树的结构性结论在下方保留为历史证据，不再代表"未合并"事实。
 
 > 最新修复验收基线：2026-11-14 Windows 程序 `5670dd85…6b930a84`，公开大总量预览完成判定已修复并经真实 IPC 验证；旧 F44373CB 失败结论保留为历史，后续未验收改动不覆盖本结论。
 
@@ -22,6 +22,58 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 🚧 | 仍有已确认的功能缺口，需要继续写代码 |
 
 ## 三、当前验证状态
+
+
+### 2026-11-19 标题栏更新/重启忙碌反馈（BUG-UPD-BUSY-001，⏳ 待用户桌面验收）
+
+- 来源 / 归属 / 状态：用户明确要求更新按钮内部遮罩和 loading、禁止反复点击，重启同样处理，并确认目标为 NavKit 标题栏；归属 STORY-UPD-001。负责人 lead，P1，代码开发完成、待用户验收。
+- AC-BUG-UPD-BUSY-001-01/02：[徽标状态入口](<../../src/ui/UpdateBadge.ts>) 和 [局部样式](<../../src/styles/update-badge.css>) 在点击更新前同步进入 downloading，下载/校验持续显示内部半透明遮罩和居中 12px 加载环；保留 54×22 尺寸与边框进度。原生 disabled 与 aria-busy 同步，重复鼠标、Enter/Space 与程序派发 click 不重复下载；下载成功恢复橙色重启，失败解除忙碌、提示并允许重试。
+- AC-BUG-UPD-BUSY-001-03/04：重启使用独立 applying 阶段，先锁定再调用既有安装接口，成功回执后仍锁定直至程序退出；失败恢复可点击的重启并在 title/可访问名称提示重试。迟到启动/轮询/下载回执不能解除重启锁定；prefers-reduced-motion 下停止转圈但保留遮罩、静态环和禁用。无需新依赖、权限或数据库/API 变化；[现行 UI 方案](<../design/DESIGN.md#622-更新徽标标题栏>) 已同步。
+- 本地技术验证（2026-11-19 Windows/main 工作树，保留既有未提交内容）：更新组件/弹窗/设计/偏好定向 **48 passed / 0 failed / 0 skipped**（新增 7 项忙碌/失败重试/迟到回执回归），入口 [徽标回归](<../../tools/tests/update-badge.test.mjs>)。复现：`node --test tools/tests/update-badge.test.mjs tools/tests/update-dialog.test.mjs tools/tests/update-dialog-design.test.mjs tools/tests/update-preferences.test.mjs`。
+- [实际 Chrome 组件/CSS 隔离验收](<../../tools/tests/update-badge-browser.mjs>) 四组通过，加载环中心误差 0px、徽标尺寸 54×22、鼠标/键盘/派发事件去重、失败重试和减少动态效果均通过，pageErrors=0；[报告](<../../artifacts/update-badge-busy/report.json>)、[下载效果](<../../artifacts/update-badge-busy/downloading.png>)、[重启效果](<../../artifacts/update-badge-busy/applying.png>) 已核对。复现：`node tools/tests/update-badge-browser.mjs`。`pnpm run build` 与 `cargo check --manifest-path src-tauri/Cargo.toml --lib --offline` 通过；保留既有 Vite chunk/静态动态混用与 Rust 警告，未重跑完整 UI/Rust 测试。
+- 交付边界：仅源码、回归与前端构建；没有执行真实更新/跨版本重启，未重建或替换桌面 exe、未提交/推送/发布。需重新编译桌面程序后验收原按钮，状态 ⏳；无数据库迁移。
+
+### 2026-11-19 查询结果页脚 / 表设计默认值 / 备份成功卡 / MySQL 结构同步身份查询（BUG-UI-POLISH-001、BUG-STRUCT-SYNC-MYSQL-001，⏳ 待用户桌面验收）
+
+- 来源与范围：用户第五轮桌面反馈四组问题——查询结果页左下文案与每页条数、表设计字段默认值下拉与索引排序下拉、MySQL 预览结构差异报 1064、备份成功提示过高出现滚动条。只改前端交互/样式与一条 MySQL 身份查询，不改公开 API、权限门禁、分页缓存语义或持久化结构，无数据库迁移。
+- 查询结果页（[状态与页脚](<../../src/core/App.ts>)、[页脚控件样式](<../../src/styles/base.css>)、[单页状态](<../../src/core/queryResultPages.ts>)）：左下统一为 `运行耗时 0.456s（共 100001 行）`，不再重复「第 N 页 · 本页 M 行」（页码已由右侧控件表达）；服务端分页总数未知时显示「本页 N 行（总数统计中…）」。右下「每页 [200 ▾] 条」为固定候选下拉 `100 / 200 / 500 / 1000 / 2000`（默认 200，`QueryTabView.PAGE_SIZE_CHOICES`），切换即回首页并读取本次执行缓存、不重跑 SQL；单页上限从 1000 放宽到 2000，仍低于缓存读取的 5000 行上限。每页条数与右侧翻页控件之间加 1px、14 高、`--border` 的竖分隔线（`query-pager-divider`），非行集结果与分页控件一同隐藏。
+- 表设计默认值（[单元格](<../../src/ui/TableDesigner.ts>)、[可搜索输入](<../../src/ui/SearchableInput.ts>)）：默认值改为整格一个可输入下拉（`datalist` + 应用级 `SearchableInput` 增强）——点任意位置展开候选、浮层与单元格同宽、键入即筛选候选、没有匹配时保留用户键入的任意表达式；`data-search-open-all` 让打开时先列全部候选，回显表达式不当作筛选词；浮层空白与「没有匹配」提示点开即关，不遮挡下方相邻单元格。索引浮层「排序」下拉加 `data-no-search`，只列 ASC/DESC、不再渲染搜索框。
+- 备份成功卡（[回执渲染](<../../src/dialogs/BackupDialog.ts>)、[样式](<../../src/styles/backup-dialog.css>)）：改为左 32px 圆形图标 + 右 15/600「备份成功」与统计，下方用分隔线单列存储位置；卡片按内容高度收缩（`flex: 0 0 auto`），不再占满执行页或撑出滚动条；删除「备份文件已保存，可关闭此窗口」提示（关闭入口是底部按钮），跳过表的警告仍保留。顺带修复该对话框关闭后焦点未回到打开按钮的问题。
+- MySQL 结构同步（[物理身份查询](<../../src-tauri/src/structure_server_metadata.rs>)、[回归](<../../src-tauri/src/structure_server_tests.rs>)）：根因是身份查询里 `DATABASE() AS database` 把 MySQL 8 **保留字** `DATABASE` 用作别名，整条 SELECT 以 1064 语法错误失败，随后被统一包装成 `STRUCTURE_MYSQL_UUID_UNPROVEN`（文案指向 server_uuid，掩盖了真实原因）。改为反引号别名 `AS \`database\`` 并提取为常量供回归断言。原始 `{e:#}` 完整原因链保持不变，真实语法/权限错误仍原样透出。仍保留 MySQL 8 + InnoDB + 全局元数据可见性 + `performance_schema` mdl 的 fail-closed 门禁。
+- 验收标准：AC-BUG-UI-POLISH-001-01 查询结果页脚只保留「运行耗时（总行数）」，每页条数为 `100/200/500/1000/2000` 下拉（默认 200）、带「条」单位，且与翻页控件之间有竖分隔线（CR-2026-11-19-01 由可编辑输入框改为固定候选下拉）；-02 默认值单元格点任意位置展开、浮层同宽、输入即筛选、无匹配可保存手输值；-03 索引排序下拉无搜索框；-04 备份成功卡不出现滚动条且无关闭提示；AC-BUG-STRUCT-SYNC-MYSQL-001-01 MySQL 物理身份查询别名已转义且不再产生 1064。
+- 本地技术验证（2026-11-19，Windows/main 工作树，保留并行/既有改动）：`npx tsc --noEmit`、`npm run build` 通过；`node --test --test-concurrency=1 tools/tests/sql-completion-execution.test.mjs` **79 passed / 0 failed**（含每页条数下拉候选、2000 单页读取、分割线隐藏）；`searchable-input / searchable-select / searchable-dialogs / searchable-business` **37 passed / 0 failed**；`tools/tests/table-designer.test.mjs` **18 passed / 0 failed**；`approved-ui-styles + query-result-panel + query-result-host` **90 passed / 0 failed**；`backup-consistency + table-designer-metadata` **7 passed / 0 failed**。真实 Chrome 布局脚本：[查询结果分页](<../../tools/tests/query-result-layout-browser.mjs>) 通过（选项集合 `100/200/500/1000/2000`、2000 行/页 → 51 页、分割线 1px 且位于每页条数与翻页按钮之间、非行集时随之隐藏；截图 `artifacts/query-result-pagination.png`）、[备份向导](<../../tools/tests/backup-dialog-browser.mjs>) 通过（截图 `artifacts/backup-dialog-success.png`，含无滚动条与存储位置在图标/文案下方断言）。Rust：`cargo check --lib --offline` 通过；`cargo test --lib structure_commands::server::tests --offline` **6 passed / 0 failed / 2 ignored**。显式 mock IPC / 前端夹具不等于厂商实库和桌面验收。
+- 交付状态：代码开发完成、技术回归通过；用户原 MySQL 连接的结构同步预览与四项界面效果仍需在**重新编译的桌面程序**里验收，状态 ⏳。仅源码、测试与前端构建，未重建/替换桌面 exe、未提交/推送/发布。
+- 边界：修复 1064 后，若账号缺少全局 `SELECT / SHOW VIEW / TRIGGER / PROCESS` 或 `performance_schema` 的 mdl instrumentation 未启用，会得到另一条明确的「可见性/mdl 未证明」错误——那是既有的 fail-closed 校验，不是本缺陷；MariaDB/TiDB 仍按设计拒绝走 MySQL 8 身份认证。
+- 变更记录：CR-2026-11-19-01（用户同日明确调整）把每页条数从「可编辑输入框（1–1000）」改为「固定候选下拉 `100/200/500/1000/2000`，默认 200」，并在每页条数与翻页控件之间增加竖分隔线；同步把前端单页上限从 1000 放宽到 2000，后端缓存读取上限 5000 不变。影响：`App.ts` 页脚控件、`queryResultPages.ts` 上限、`base.css` 控件与分隔线样式、两份回归测试与 `DESIGN.md` 规格；不改变分页缓存语义、IPC 契约与数据结构。
+
+### 2026-11-19 关系图表设计渐进加载（STORY-ER-LOAD-001 / BUG-ER-LOAD-001，⏳ 待用户实库验收）
+
+- 确认范围：2026-11-18 用户报告 TiDB 右侧长期“正在读取完整表设计”，并明确要求“改吧，其他的也需要优化”；归属既有关系图需求 1.4，扩展到同一加载链的其它数据库，不改无关功能、权限、数据结构或 TiDB 写能力门禁。
+- AC-01/02：[右侧编辑器](<../../src/ui/ErTableEditor.ts>) 先用现有 [图元数据](<../../src/dialogs/ErDiagramDialog.ts>) 展示字段/索引/真实外键**只读摘要**，不构造可保存草稿或伪造默认值/完整约束。完整快照验证完整性及 owner/模式/表身份后才接受基线；失败保留摘要或旧基线，可显式重试、不自动循环。摘要区域不因 aria-busy 阻塞读屏，页签焦点保持、窄窗文本换行；[局部 CSS](<../../src/styles/er-table-editor.css>) 与 [现行设计](<../design/DESIGN.md#618-关系图--er-图1280860-对话框>) 同步。
+- AC-03/04：[读取调度](<../../src/core/erDesignReadQueue.ts>) 按端点/库最多 2 个实际在途，切表撤销未发送旧任务，槽位直到真实响应结束才释放；10 秒慢反馈不通过 Promise.race 伪造取消。切回同一表复用编辑器/在途结果；刷新失效全部已访问干净基线（未选中者激活时重读），在途旧回执不能满足新刷新代次，未保存草稿不覆盖。空闲队列即删除，不跨 owner/端点持久化设计缓存。
+- AC-05：[同会话探测/目录读取](<../../src-tauri/src/table_workflows_native_metadata.rs>) 复用 MySQL 协议族版本与变量证据；TiDB 不再发无意义的 SHOW GRANTS/TRIGGERS 查询，TABLES 属性与 TIDB_TABLE_ID 一次读取并验证唯一/非空/正数，首次完整读取少 **4 条 SQL**；MySQL/MariaDB 首次少一次重复版本查询，同会话后续快照复用探测。原生 TRIGGER 权限证明、InnoDB/MariaDB 身份回退、PG 兼容能力探测、CAS/SQL mode 与 TiDB 结构保存拒绝保留；未实测厂商耗时，不承诺提速倍数。
+- AC-06：[公开读取/预览租约](<../../src-tauri/src/table_workflows.rs>) 最多等 15 秒，未取得租约不发送目录 SQL、不抢占已有操作；[原生 MySQL/PG owned 读取](<../../src-tauri/src/table_workflows_native.rs>) 获取会话 15 秒、完整读取 30 秒、回滚/恢复/池归还 5 秒。超时丢弃完整快照，异常连接同步隔离销毁，lease 保持至安全归还/本机物理销毁；服务端回滚效果未确认保守报 Unknown，不污染连接池、不扩大受控写入超时范围。**预算不含上层 scoped_db 初始化，SQLite 目录读取仍沿用原实现**；其它数据库复用前端渐进加载/调度及公开租约等待，不冒称全驱动完整设计已认证或全阶段硬超时。
+- 最终本地技术验证（2026-11-19 Windows/main 工作树，保留并行/既有改动）：主代理 `npm run build` 通过；`node --test tools/tests/er-design-read-queue.test.mjs tools/tests/er-diagram-dialog.test.mjs tools/tests/er-diagram.test.mjs tools/tests/er-diagram-regressions.test.mjs tools/tests/er-diagram-match.test.mjs tools/tests/table-designer-metadata.test.mjs tools/tests/table-designer.test.mjs tools/tests/ipc-errors.test.mjs` **140 passed / 0 failed / 0 skipped**。[调度回归](<../../tools/tests/er-design-read-queue.test.mjs>)、[生产关系图/编辑器回归](<../../tools/tests/er-diagram-dialog.test.mjs>) 覆盖 7 类连接摘要、挂起/失败、两槽位/撤销/迟到、刷新代次/草稿/归属、真实 Chrome 首屏/窄窗/焦点、既有图布局和受控保存；显式 mock IPC 不是厂商实库性能。首轮 84/86 中旧 busy 断言与 Chrome 随机受限本地端口问题已定位修正并完整复跑，未修改产品安全设置来规避失败。
+- 主代理独立 `cargo test --manifest-path src-tauri/Cargo.toml --lib table_workflows --offline` **66 passed / 0 failed / 4 ignored**，含 [真实 SQLx + loopback 协议测试](<../../src-tauri/src/table_workflows_native_read_tests.rs>)、[租约竞争/取消测试](<../../src-tauri/src/table_workflows_tests.rs>) 及 SQLite 既有读写工作流；4 项 MySQL/PG/TiDB 显式实库测试未运行、不计通过。`cargo check --manifest-path src-tauri/Cargo.toml --lib --offline` 通过。独立只读审查发现并修复 reserved/started 微任务窗口与前置租约排队预算缺口；最终差异按 Windows CR-at-EOL 检查通过，文档链接闸门通过（750 条引用、24 份结果/设计文档）；保留既有 Vite 大 chunk/静态动态混用及 Rust 警告；未重跑完整 UI/Rust 库。
+- 交付状态：代码开发完成、技术回归通过、用户原 TiDB/其它厂商桌面现场验收仍为**待验收**。仅源码、测试与前端构建产物，未重建/替换桌面 exe、未提交/推送/发布，无数据库迁移。重新编译桌面程序后在原连接打开关系图、切表和刷新验收；明确不把前端摘要可读视为完整设计已取得。
+
+### 2026-11-18 显示字段列表反馈与对齐（BUG-COLUMN-LIST-001，⏳ 待用户视觉验收）
+
+- 来源与范围：用户要求表数据页“显示字段”悬浮变色、浅色行分割线，以及有备注时调整复选框和拖拽块；归属既有 PL-21 共享列侧栏。不改勾选、搜索、恢复、排序回调、API、权限或数据库结构，无新依赖/动画。
+- [局部样式](<../../src/ui/data-grid-controls.css#L16-L30>) 使用 24px 名称首行、16px 原生复选框和 24px 拖拽块，控件中心统一对齐名称；备注继续在下方自然换行。相邻字段行使用 1px `--border-subtle`、末行不添底线，名称/备注/拖拽块悬浮或键盘焦点进入时整行 `--bg-hover`，拖拽目标保留独立强调反馈。表数据页、查询结果页、有/无排序回调均覆盖；[组件语义与业务事件](<../../src/ui/ColumnSidebar.ts>) 不变，[当前 UI 规范](<../design/DESIGN.md#69-查询结果面板>) 已同步。
+- AC-BUG-COLUMN-LIST-001-01/02/03/04 本地技术验证（2026-11-18，Windows/main 工作树）：[实际组件/CSS 浏览器回归](<../../tools/tests/data-grid-controls.test.mjs#L115-L185>) 四组（两种宿主×有/无排序）通过，检查无/单/多行备注控件中心偏差 ≤0.5px、长名称省略、备注换行无水平溢出、hover 离开恢复、focus 描边、勾选焦点、最后可见字段保护、全选、Alt+上下排序、拖拽回调及 drop-target 优先级、搜索空态与 Escape 焦点恢复，pageErrors=0。[悬浮效果截图](<../../artifacts/column-sidebar-layout/hover.png>) 已直接审阅；不等同完整桌面/用户实库验收。
+- 最近定向回归 **93 passed / 0 failed / 0 skipped**：`node --test tools/tests/data-grid-controls.test.mjs tools/tests/query-result-panel.test.mjs tools/tests/query-result-host.test.mjs`。初次浏览器夹具因普通脚本加载 TypeScript 模块失败，已修正为 ES module 并完整复跑上述范围；未改业务代码来规避失败。`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml --lib --offline`、文档链接与 CR-at-EOL 范围 diff 检查通过；Vite 既有大 chunk/静态动态混用和 Rust 警告保留。未重跑完整 UI/Rust 测试。
+- 交付仅局部源码、回归测试与前端构建；未重建/替换桌面 exe、未提交或发布。用户最终视觉验收仍为 ⏳，已编译桌面程序需重新构建才会包含该修改；无需数据库迁移。
+
+### 2026-11-18 TiDB 用户列表缺列兼容（BUG-TIDB-USERS-001，⏳ 待 MySQL/TiDB 现场验收）
+
+- 来源：用户报告 `list_db_users` 返回 1054 / 42S22，缺少 `ssl_type`。根因是旧列表固定读取 MySQL 系统表可选列，而兼容协议的实际结构不同。
+- [列表命令](<../../src-tauri/src/commands.rs#L2365-L2375>) 保留原 MySQL 协议门禁；[列表读取](<../../src-tauri/src/db_users.rs#L251-L275>) 优先执行与旧实现完全相同的 MySQL 查询，成功时不增加字段目录请求。仅服务端 SQLSTATE 42S22（未知列 1054）才复用用户编辑器的 `information_schema.COLUMNS` 探测与 [动态投影](<../../src-tauri/src/db_users.rs#L208-L249>)；缺列用 NULL 别名固定顺序，不读认证字符串。权限、连接、表不存在等错误直接返回，不误触发回退。该调整依据用户追补「注意影响 mysql 的数据源」，SQLSTATE 接口已按实际 SQLx 0.8.6 MySQL 依赖源码核对。
+- 接口保持七列；实际 SSL/资源限制及超级权限 Y/N 仍按原值显示，缺失属性为空，不虚构为 0 或「否」。元数据继续按 UTF-8 文本解码 User/Host。没有前端布局、账号写入语法或持久化数据结构变化，无数据库迁移。
+- AC-BUG-TIDB-USERS-001-01/02/03/05/06：缺列、混合列、列顺序、Unicode/匿名账号、Y/N/未知值、敏感列排除、原 MySQL SQL 不变及仅未知列触发回退均有 [Rust 回归](<../../src-tauri/src/db_users.rs#L777-L919>)；最新 **13 passed / 0 failed / 1 ignored**。3 项隔离 SQLite 模拟 mysql.user 的实际 SQL 投影覆盖完整 MySQL 原查询、稀疏/混合列，只证明 SQL/映射正确，不是厂商实库认证。复现：`cargo test --manifest-path src-tauri/Cargo.toml --lib db_users::tests --offline`。
+- AC-BUG-TIDB-USERS-001-04/07 本地技术验证（2026-11-18，Windows / main `5d90efb` + 本次工作树变更）：直接用户编辑/搜索回归 `node --test tools/tests/user-editor.test.mjs tools/tests/searchable-dialogs.test.mjs` 最新 **14 passed / 0 failed**；`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml --lib --offline`、代码 diff/CR-at-EOL 空白与文档链接检查通过，保留既有构建警告。首轮 39/39 为历史结果；本次扩大到 user-flow-regressions 的最近结果是 **36 passed / 3 failed**，不能称完整范围通过。TEST-QUERY-FIXTURE-001：3 处查询结果夹具仍初始化 pageSizeSelect，而并行 [查询页](<../../src/core/App.ts>) 已改成 pageSizeInput（夹具取 parentElement 失败）；归属查询页并行工作，下一步由该工作同步 [测试夹具](<../../tools/tests/user-flow-regressions.test.mjs#L271-L289>)，本次不覆盖该代码。
+- MySQL 实库对照入口：[只读对照测试](<../../src-tauri/src/db_users.rs#L900-L919>) 使用显式授权隔离 `NAVKIT_DB_USERS_MYSQL_URL`，对比新旧列表与真实未知列错误，不创建/修改/删除用户或表。当前无 URL，1 项 ignored **未运行，不计通过**；配置后执行 `cargo test --manifest-path src-tauri/Cargo.toml --lib db_users::tests::user_list_real_mysql_matches_original_query --offline -- --ignored`。MySQL/TiDB 及其它兼容厂商现场仍为 ⏳。
+- 交付仅源码及前端构建，未重建/替换桌面 exe、未提交或发布；重新编译桌面程序后，在原 MySQL/TiDB 连接打开/刷新用户页验收，仍需现有账号具备读取 mysql.user 的权限，不通过修改系统表补列来修复。
 
 ### 2026-11-18 更新弹窗与安全自动更新（STORY-UPD-001，⏳ 待用户验收）
 
@@ -258,7 +310,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 网格复制：TSV/NULL/精度/二进制 | `src/core/grid-clipboard.ts` | ⏳ | OS 剪贴板真实读回未实机验收 |
 | 例程：定义读取、安全重建、参数调用 | `src-tauri/src/commands.rs`、`src/core/routine-*.ts` | ⏳ | MySQL 既有例程破坏性重建/权限恢复未闭环；PG/MySQL 专用实库未提供 |
 | 视图设计器：读取定义 → 编辑 → 保存 | `src-tauri/src/commands.rs` | ✅ | — |
-| 关系图：表结构图 + 工程 ER 图、FK 关系与基数、搜索/自动布局/JOIN SQL | `src/core/erDiagram.ts`、`src/dialogs/ErDiagramDialog.ts` | ✅ | 元数据逐表读取（并发 6）；建模关系仅会话内标注，不写库；无 Layers/新建表工程流 |
+| 关系图：表结构图 + 工程 ER 图、FK 关系与基数、搜索/自动布局/JOIN SQL | [图模型](<../../src/core/erDiagram.ts>)、[关系图](<../../src/dialogs/ErDiagramDialog.ts>)、[右侧编辑器](<../../src/ui/ErTableEditor.ts>) | ✅ 既有图功能；⏳ 本次渐进加载现场验收 | MySQL/PG 批量目录、其它适配器回退并发 4；图元数据缓存 5 分钟；右侧先只读摘要、完整基线后台补齐且在途最多 2；建模关系不写库，TiDB 结构保存继续拒绝 |
 | 后台任务中心：导入/导出/SQL 文件/转储/备份/数据生成/同步/字典/更新统一登记 | `src/core/backgroundTasks.ts`、`src/ui/TaskCenterPanel.ts` | ✅ | 进度取自各任务现有回执通道；点击已完成任务打开详情或产物目录 |
 
 ### 4.3 传输、同步与工具
@@ -274,7 +326,7 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 | 更新弹窗：参考图样式、跳过指定版本、后台自动下载/下次启动前安装 | [弹窗](<../../src/dialogs/UpdateDialog.ts>)、[偏好/安全门](<../../src/core/updatePreferences.ts>)、[启动入口](<../../src/main.ts>) | ⏳ | 技术回归和隔离浏览器通过；运行期间不自动重启；真实跨版本与用户视觉验收未执行 |
 | 软件更新：检查/下载(SHA-256+断点续传)/换名替换重启/清理旧版 | `src-tauri/src/updater.rs`、`src/dialogs/UpdateDialog.ts` | ✅ | 清单挂自有镜像仓库 Navkit-drivers（可用 feed.json/环境变量覆盖）；换名替换参考 magpie，落位失败自动回滚；未做真实大版本跨级演练 |
 | 自动运行：任务保存、到期执行、历史 | `src-tauri/src/commands.rs`、`src/core/scheduler*`、`src-tauri/src/scheduler_offline.rs` | 🚧 | Cron/DST/lease/DAG/离线安装计划内核已接；系统任务注册与真实 headless 运行未做 |
-| 用户管理：MySQL 协议族 `mysql.user` 真实数据、编辑用户与权限管理（常规/高级/成员属于/成员/服务器权限/权限/SQL 预览） | `src-tauri/src/db_users.rs`、`src/dialogs/UserDialog.ts` | ✅ | 仅 MySQL 协议族；角色页依赖 MySQL 8.0+ 的 `mysql.role_edges` |
+| 用户管理：MySQL 协议族 `mysql.user` 真实数据、编辑用户与权限管理（常规/高级/成员属于/成员/服务器权限/权限/SQL 预览） | [列表命令](<../../src-tauri/src/commands.rs#L2365-L2377>)、[用户读取/编辑](<../../src-tauri/src/db_users.rs>)、[用户对话框](<../../src/dialogs/UserDialog.ts>) | ✅ 既有 MySQL 历史；⏳ 本次 MySQL/TiDB 兼容追补 | BUG-TIDB-USERS-001：正常 MySQL 保留原查询且不查字段目录，仅未知列时探测、缺失属性留空；本次厂商现场未验证、不外推高级写入语法；角色页依赖 `mysql.role_edges` |
 | 服务器监控、数据生成、日志检索 | `src-tauri/src/commands.rs` | ✅ | — |
 | 通用：最近打开、收藏夹、设置、全中文界面 | `src/dialogs/SettingsDialog.ts`、`src-tauri/src/storage.rs` | ✅ | — |
 
@@ -326,6 +378,11 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 | ID | 任务 | 已落地 | 待办 |
 |---|---|---|---|
+| BUG-UPD-BUSY-001 | 标题栏更新/重启遮罩、loading 与防重复点击 | [徽标状态](<../../src/ui/UpdateBadge.ts>)、[加载样式](<../../src/styles/update-badge.css>)、[定向回归](<../../tools/tests/update-badge.test.mjs>)、[实际 Chrome 验证](<../../tools/tests/update-badge-browser.mjs>)；更新相关 48/48、隔离浏览器四组与前端构建/离线库检查通过 | 用户桌面视觉与真实更新现场验收 ⏳；未重建 exe/发布，无数据库迁移 |
+| BUG-UI-POLISH-001 / BUG-STRUCT-SYNC-MYSQL-001 | 查询结果页脚（含每页条数下拉与分隔线）、表设计默认值下拉、备份成功卡、MySQL 结构同步身份查询 | [结果页脚](<../../src/core/App.ts>)、[页脚样式](<../../src/styles/base.css>)、[单页状态上限](<../../src/core/queryResultPages.ts>)、[默认值单元格](<../../src/ui/TableDesigner.ts>)、[可搜索输入](<../../src/ui/SearchableInput.ts>)、[备份成功卡](<../../src/dialogs/BackupDialog.ts>)、[身份查询转义](<../../src-tauri/src/structure_server_metadata.rs>)；前端定向 231/231、两个真实 Chrome 布局脚本、Rust 结构同步契约 6/0/2 ignored 与离线库检查通过 | 用户桌面/原 MySQL 连接现场验收 ⏳；未重建 exe/发布，无数据库迁移 |
+| STORY-ER-LOAD-001 / BUG-ER-LOAD-001 | 关系图右侧完整设计读取慢 | [摘要/基线状态](<../../src/ui/ErTableEditor.ts>)、[有界调度](<../../src/core/erDesignReadQueue.ts>)、[原生目录与预算](<../../src-tauri/src/table_workflows_native.rs>)；TiDB 首次少 4 条 SQL，前端 140/140、Rust 66/0/4 ignored、构建与离线检查通过 | 原 TiDB/其它厂商及桌面现场验收 ⏳；scoped_db 初始化/SQLite 目录读取不含本次原生预算；未重建 exe/发布 |
+| BUG-COLUMN-LIST-001 | 显示字段悬浮/分割线/备注控件对齐 | [共享局部样式](<../../src/ui/data-grid-controls.css#L16-L30>)、[实际浏览器回归](<../../tools/tests/data-grid-controls.test.mjs#L115-L185>)；两种宿主×有/无排序四组布局交互通过，相关 93/93、前端构建和离线库检查通过 | 用户视觉/完整桌面现场验收 ⏳；不改业务事件，无数据库迁移，未重建 exe/发布 |
+| BUG-TIDB-USERS-001 | TiDB 用户列表缺失 ssl_type 等列 | [实际字段探测/列表读取/七列映射及回归](<../../src-tauri/src/db_users.rs#L208-L275>)、[命令接线](<../../src-tauri/src/commands.rs#L2365-L2377>)；正常 MySQL 原路径保持、仅未知列回退；Rust 13/0/1 ignored、直接用户 Node 14/14、前端构建通过；扩展查询夹具失败见 §三 | TiDB 原实例及桌面程序现场验收 ⏳；未重建 exe/发布、不更改账号写入或系统表 |
 | STORY-UPD-001 | 更新弹窗与安全自动更新 | [参考图弹窗](<../../src/dialogs/UpdateDialog.ts>)、[更新偏好](<../../src/core/updatePreferences.ts>)、[启动门禁](<../../src/main.ts>)、[后端身份/哈希](<../../src-tauri/src/updater.rs>)；41 项更新定向回归、隔离浏览器布局/交互通过 | 用户视觉验收与真实跨版本自动安装 ⏳；不含 exe 重建/发布 |
 | STREAM-PREVIEW-PERF-01 | 旧完整回执与流式200行性能评估 | [stream_preview_bench_tests.rs](../../src-tauri/src/stream_preview_bench_tests.rs#L300)、隔离UUID夹具/有界播种脚本、同一亿行表五档真实服务测量、54逐轮记录、缓存截断拒绝门、逐轮真实释放；结论与证据见§三 | 流式前端另行决定⏳；本机MySQL取消回归原因待诊断🚧 |
 | PL-01 | 只读连接执行保护 | SQLite 实际只读、authorizer、保存配置权威门禁 | 远端/驱动复杂只读复核 🚧 |
@@ -395,6 +452,11 @@ NavKit 是 **Tauri 2 + Rust + 原生 TypeScript** 的桌面数据库客户端，
 
 | 原件 | 合并内容 |
 |---|---|
+| active/BUG-UPD-BUSY-001-update-badge.md | 2026-11-19 合并已确认按钮范围、AC-01～04、集中忙碌状态/重启回执保护、48 项回归和实际 Chrome 四组结果至 §三/§五；用户桌面待验，过程原件删除 |
+| active/STORY-ER-LOAD-001.md | 2026-11-19 合并用户授权范围、AC-01～06、通用摘要/排队/刷新安全、TiDB SQL 精简、原生预算/公开租约等待、主代理 140 项前端与 66 项 Rust 集成结果、4 项实库 ignored 和源码交付边界至 §三/§四/§五；开发完成、现场待验，过程原件删除 |
+| active/BUG-COLUMN-LIST-001.md | 2026-11-18 合并范围、首行控件对齐/整行 hover/相邻分割线方案、AC-BUG-COLUMN-LIST-001-01/02/03/04、实际 Chrome 四组/定向 93 项与构建结果至 §三/§五；用户视觉待验，过程原件删除 |
+| active/BUG-TIDB-USERS-001-mysql-followup.md | 2026-11-18 用户提醒 MySQL 影响后，合并原 MySQL 查询优先/未知列回退、AC-05/06/07、Rust 13/0/1 ignored、直接用户 Node 14/14、扩展查询夹具失败及实库显式验收边界；过程原件删除 |
+| active/BUG-TIDB-USERS-001.md | 2026-11-18 合并缺列根因、只读实际字段探测方案、AC-BUG-TIDB-USERS-001-01/02/03/04、Rust/Node 定向回归与交付边界至 §三/§四/§五；TiDB 现场仍为 ⏳，过程原件删除 |
 | active/STORY-UPD-001-update-dialog.md | 2026-11-18 合并已确认参考图样式、跳过版本、后台自动下载/下次启动前安装、清单身份绑定及安装前重校验、41 项定向回归与隔离浏览器证据至 §三/§四/§五；真实跨版本与用户视觉待验，过程原件删除 |
 | active/structure-sync-p1-p3.md | 2026-11-17 合并 P1 风险确认、SQLite 保数据重建、MySQL/PG owned 结构通道与备份恢复边界到 §三/§四/PL-10/§六；完整 UI 1487/0/2 skipped、最终结构 81/0/3 ignored、C1 4/4、构建与文档检查；实库和桌面未验不计通过，过程原件删除 |
 | NavKit-完整任务书.md | 产品事实、界面版式基准约束 |

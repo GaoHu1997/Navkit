@@ -1,4 +1,29 @@
 use super::*;
+#[tokio::test]
+async fn metadata_lease_budget_reports_busy_without_releasing_the_current_owner(){
+    let registry=crate::manual_transaction::Registry::default();
+    let owner=registry.ordinary(&["busy"]).await.unwrap();
+    let waiting=metadata_lease(&registry,"busy",std::time::Duration::from_millis(20)).await;
+    assert_eq!(waiting.err().unwrap().code,"TABLE_METADATA_BUSY_TIMEOUT");
+    assert!(registry.try_ordinary(&["busy"]).await.unwrap().is_none());
+    drop(owner);
+    let next=metadata_lease(&registry,"busy",std::time::Duration::from_secs(1)).await.unwrap();
+    assert!(registry.try_ordinary(&["busy"]).await.unwrap().is_none());
+    drop(next);
+    assert!(registry.try_ordinary(&["busy"]).await.unwrap().is_some());
+}
+#[tokio::test]
+async fn metadata_lease_waiter_can_be_cancelled_without_retaining_or_stealing_the_lock(){
+    let registry=crate::manual_transaction::Registry::default();
+    let owner=registry.ordinary(&["busy"]).await.unwrap();
+    {
+        let waiting=metadata_lease(&registry,"busy",std::time::Duration::from_secs(15));
+        tokio::pin!(waiting);
+        tokio::select!{biased; _=&mut waiting=>panic!("the current owner still holds the connection"),_=tokio::task::yield_now()=>{}}
+    }
+    drop(owner);
+    assert!(registry.try_ordinary(&["busy"]).await.unwrap().is_some());
+}
 use crate::execution::Registry;
 use sqlx::sqlite::{SqlitePoolOptions,SqliteConnectOptions};
 struct Fixture{path:std::path::PathBuf,pool:SqlitePool,db:Arc<Db>,binding:Binding,manual:crate::manual_transaction::Registry,registry:Registry}

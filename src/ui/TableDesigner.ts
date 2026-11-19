@@ -275,55 +275,27 @@ export class TableDesigner {
     for (const choice of [...new Set([value, ...choices])]) { const option = document.createElement("option"); option.value = choice; option.textContent = choice || "（未设置）"; el.appendChild(option); }
     el.value = value; el.addEventListener("change", () => { set(el.value); this.changed(); }); return el;
   }
-  /** 默认值单元格：一个框同时承担回显与手动输入，右侧箭头只负责给候选。
-   *  选中候选后直接写回该框，不再拼第二个输入框。 */
+  /** 默认值单元格：整格就是一个可输入的下拉——点任意位置展开候选，输入即筛选，
+   *  没有匹配候选时保留用户键入的表达式（不强制从候选里选）。
+   *  交互与外键「本表字段」一致；候选项来自该字段类型的 defaultChoices。 */
   private defaultCell(column: DesignerColumn, label: string): HTMLElement {
     const wrap = document.createElement("div"); wrap.className = "designer-default-cell";
     const field = this.input(column.default_value ?? "", label + " 默认值", value => { column.default_value = value; }, column.deleted);
     field.className = "designer-default-input";
     field.placeholder = "NULL（空）";
-    field.title = "可直接输入任意默认值表达式，例如 CURRENT_TIMESTAMP、' ' 或 0。";
-    const pick = document.createElement("button"); pick.type = "button"; pick.className = "designer-default-pick";
-    pick.setAttribute("aria-label", label + " 默认值候选");
-    pick.title = "选择候选默认值";
-    pick.disabled = field.disabled;
-    pick.innerHTML = POPOVER_CHEVRON;
-    pick.addEventListener("click", event => {
-      event.preventDefault();
-      if (pick.disabled) return;
-      if (isPopoverOpenFor(pick)) { closePopover(); return; }
-      this.openDefaultChoices(pick, column, field, label);
-    });
-    wrap.append(field, pick);
+    field.title = "点击展开候选；也可以直接键入任意表达式，例如 CURRENT_TIMESTAMP、' ' 或 0。";
+    // 每个字段一个 datalist：候选随该字段的类型变化，不与其它字段共享。
+    const list = document.createElement("datalist"); list.id = `${this.id}-default-${column.key}`;
+    for (const choice of defaultChoices(column.data_type)) { const option = document.createElement("option"); option.value = choice; list.appendChild(option); }
+    field.setAttribute("list", list.id);
+    // 让候选浮层宽度等于单元格宽度（SearchableInput 读取该标记），箭头只是装饰。
+    field.setAttribute("data-search-width", "field");
+    // 打开时列出该类型的全部候选；回显的表达式不当作筛选词。
+    field.setAttribute("data-search-open-all", "");
+    const chevron = document.createElement("span");
+    chevron.className = "designer-default-chevron"; chevron.setAttribute("aria-hidden", "true"); chevron.innerHTML = POPOVER_CHEVRON;
+    wrap.append(field, chevron, list);
     return wrap;
-  }
-  /** 默认值候选浮层：候选随类型变化（整数 0/1、时间 CURRENT_*、字符 ' '），选中即回显并关闭。 */
-  private openDefaultChoices(anchor: HTMLButtonElement, column: DesignerColumn, field: HTMLInputElement, label: string): void {
-    const choices = defaultChoices(column.data_type);
-    anchor.classList.add("open");
-    openPopover({
-      anchor,
-      className: "choices",
-      width: 232,
-      ariaLabel: label + " 默认值候选",
-      onClose: () => anchor.classList.remove("open"),
-      render: body => {
-        for (const choice of choices) {
-          const option = document.createElement("button"); option.type = "button"; option.className = "popover-option";
-          if ((column.default_value ?? "") === choice) option.classList.add("current");
-          const value = document.createElement("span"); value.className = "popover-option-value"; value.textContent = choice;
-          option.appendChild(value);
-          option.addEventListener("click", () => {
-            column.default_value = choice; field.value = choice;
-            this.changed(); this.render(); closePopover();
-          });
-          body.appendChild(option);
-        }
-        const hint = document.createElement("p"); hint.className = "popover-hint";
-        hint.textContent = "也可以直接在默认值框里键入任意表达式。";
-        body.appendChild(hint);
-      },
-    });
   }
   /** 扩展列：自增 / 无符号 / 填充零不再各占一列，收进这一格的浮层里。
    *  只有 MySQL 家族提供这些属性；类型不支持时对应项在浮层里置灰。 */
@@ -524,6 +496,8 @@ export class TableDesigner {
           onChange(columns, descending); render();
         });
         dirSel.classList.add("designer-index-order");
+        // 排序只有 ASC / DESC 两项，不需要搜索框；保留原生下拉的点击即选。
+        dirSel.setAttribute("data-no-search", "");
         const del = this.button("×", () => { const removed = columns.splice(i, 1)[0]; descending = descending.filter(n => n !== removed); cursor = Math.max(0, i - 1); onChange(columns, descending); render(); }, this.editReason());
         del.className = "designer-index-remove"; del.setAttribute("aria-label", "删除" + pos);
         rowEl.append(colSel, dirSel, del); list.appendChild(rowEl);

@@ -26,12 +26,12 @@ fn mysql_and_mariadb_keep_read_only_transactions() {
 fn read_only_transaction_call_sites_probe_the_server_dialect() {
     // 打开表设计（table_workflows_native）与数据对比共用同一判定；
     // 任一路径漏掉探测都会在 TiDB 上退回 1235。
-    for (name, source) in [
-        ("table_workflows_native.rs", include_str!("table_workflows_native.rs")),
-        ("sync_diff.rs", include_str!("sync_diff.rs")),
-    ] {
-        assert!(source.contains("mysql_read_only_unsupported"), "{name} 必须识别 TiDB 并跳过 READ ONLY 事务");
-    }
+    // table_workflows_native 经会话级 MysqlEvidence 证据（内部仍是 db::mysql_read_only_unsupported），
+    // sync_diff 在池化连接上直接判定。
+    let native = include_str!("table_workflows_native.rs");
+    assert!(native.contains("read_only_unsupported"), "table_workflows_native.rs 必须经 MysqlEvidence 探测识别 TiDB 并跳过 READ ONLY 事务");
+    assert!(native.contains("metadata::MysqlEvidence::probe"), "table_workflows_native.rs 必须用会话证据复用探测结果");
+    assert!(include_str!("sync_diff.rs").contains("mysql_read_only_unsupported"), "sync_diff.rs 必须识别 TiDB 并跳过 READ ONLY 事务");
 }
 
 #[test]
@@ -60,7 +60,8 @@ fn tidb_save_path_refuses_noop_server_locks() {
     assert!(!mysql_noop_lock_unsupported("8.0.36", "MySQL Community Server - GPL"));
     assert!(!mysql_noop_lock_unsupported("10.11.6-MariaDB", "mariadb.org binary distribution"));
     let native = include_str!("table_workflows_native.rs");
-    assert!(native.contains("mysql_noop_lock_unsupported"), "保存路径必须识别 noop 锁方言");
+    // 保存路径经 MysqlEvidence::probe(...).read_only_unsupported() 判 TiDB（内部同一 noop 方言判定），发送锁语句前拒绝。
+    assert!(native.contains("read_only_unsupported"), "保存路径必须识别 noop 锁方言");
     assert!(native.contains("TABLE_MYSQL_LOCK_UNSUPPORTED"), "保存拒绝必须给出明确错误码");
     // 能力列表也要提前标记不可保存，让界面在发送任何 DDL 前禁用保存。
     assert!(include_str!("table_workflows_native_metadata.rs").contains("dialect_write_reason"));

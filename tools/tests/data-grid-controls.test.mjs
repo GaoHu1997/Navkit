@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import ts from 'typescript';
 
@@ -109,6 +110,78 @@ test('field rows expose a trailing drag handle that reorders only through the su
   items[2].fire('drop');
   assert.deepEqual(moves, [['a', 'c']]);
   assert.equal(items[0].classList.contains('dragging'), false);
+});
+
+test('actual browser field rows highlight, separate and align controls with the name above comments', { timeout: 30000 }, async t => {
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ executablePath: process.env.BROWSER_EXE || 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 800, height: 560 }, deviceScaleFactor: 1 });
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const css = ['../../src/styles/base.css', '../../src/ui/query-result-panel.css', '../../src/ui/data-grid-controls.css']
+    .map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n');
+  const source = fs.readFileSync(new URL('../../src/ui/ColumnSidebar.ts', import.meta.url), 'utf8').replace('export class ColumnSidebar', 'class ColumnSidebar');
+  const script = ts.transpile(source + '\nglobalThis.ColumnSidebar = ColumnSidebar;', { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.ES2022 });
+  const output = new URL('../../artifacts/column-sidebar-layout/', import.meta.url); fs.mkdirSync(output, { recursive: true });
+  for (const host of ['data-grid-controls', 'qr-panel']) for (const sortable of [true, false]) {
+    await page.setContent('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><button id="trigger">显示字段</button><main id="host" style="display:flex;flex-direction:row;width:760px;height:480px"><div style="flex:1;min-width:0"></div></main></body></html>');
+    await page.addStyleTag({ content: css }); await page.addScriptTag({ content: script, type: 'module' });
+    await page.evaluate(({ host, sortable }) => {
+      document.getElementById('host').className = host;
+      const columns = [{ id: 'id', name: 'id' }, { id: 'trade_type', name: 'trade_type', comment: '交易类型' },
+        { id: 'description', name: 'description_with_a_very_long_field_name_that_must_truncate', comment: '这是多行备注，复选框与拖拽块应当保持在字段名首行。\n' + 'long_comment_'.repeat(10) }];
+      let hidden = new Set(); globalThis.moves = [];
+      const reorder = (from, to) => { moves.push([from, to]); const at = columns.findIndex(column => column.id === from), target = columns.findIndex(column => column.id === to); columns.splice(target, 0, columns.splice(at, 1)[0]); };
+      globalThis.sidebar = new ColumnSidebar('layout-columns', () => columns, () => new Set(hidden), ids => { hidden = new Set(ids); }, sortable ? reorder : undefined);
+      document.getElementById('host').append(sidebar.el); sidebar.toggle(document.getElementById('trigger'));
+    }, { host, sortable });
+    const rows = page.locator('.column-sidebar-list > *');
+    const metrics = await rows.evaluateAll(elements => elements.map(element => {
+      const name = element.querySelector('.column-sidebar-name'), input = element.querySelector('input'), handle = element.querySelector('.column-sidebar-drag');
+      const rect = node => node.getBoundingClientRect(), center = node => rect(node).top + rect(node).height / 2;
+      const note = element.querySelector('.column-sidebar-comment'), style = getComputedStyle(element);
+      return { checkboxOffset: center(input) - center(name), handleOffset: handle ? center(handle) - center(name) : null,
+        checkboxSize: [rect(input).width, rect(input).height], borderWidth: style.borderBottomWidth, borderColor: style.borderBottomColor,
+        height: rect(element).height, noteBelow: !note || rect(note).top >= rect(name).bottom,
+        overflow: element.scrollWidth - element.clientWidth, truncates: name.scrollWidth > name.clientWidth };
+    }));
+    for (const [index, metric] of metrics.entries()) {
+      assert.ok(Math.abs(metric.checkboxOffset) <= 0.5, `${host} row ${index}: checkbox centered on name`);
+      if (sortable) assert.ok(Math.abs(metric.handleOffset) <= 0.5, `${host} row ${index}: handle centered on name`);
+      assert.deepEqual(metric.checkboxSize, [16, 16]); assert.equal(metric.borderWidth, index < 2 ? '1px' : '0px');
+      if (index < 2) assert.equal(metric.borderColor, 'rgb(232, 235, 239)');
+      assert.equal(metric.noteBelow, true); assert.ok(metric.overflow <= 1);
+    }
+    assert.ok(metrics[0].height < metrics[1].height && metrics[1].height < metrics[2].height); assert.equal(metrics[2].truncates, true);
+    const background = index => rows.nth(index).evaluate(element => getComputedStyle(element).backgroundColor);
+    await page.mouse.move(0, 0); assert.equal(await background(1), 'rgba(0, 0, 0, 0)');
+    for (const selector of ['.column-sidebar-name', '.column-sidebar-comment', ...(sortable ? ['.column-sidebar-drag'] : [])]) {
+      await rows.nth(1).locator(selector).hover(); assert.equal(await background(1), 'rgb(241, 243, 246)', `${host}: full row feedback on ${selector}`);
+    }
+    if (host === 'data-grid-controls' && sortable) await page.locator('.column-sidebar').screenshot({ path: fileURLToPath(new URL('hover.png', output)) });
+    await page.mouse.move(0, 0); assert.equal(await background(1), 'rgba(0, 0, 0, 0)');
+    const checkboxes = page.locator('.column-sidebar-row input'); await checkboxes.nth(1).focus();
+    assert.equal(await background(1), 'rgb(241, 243, 246)');
+    assert.equal(await checkboxes.nth(1).evaluate(element => getComputedStyle(element).outlineStyle), 'solid');
+    await page.keyboard.press('Space'); assert.equal(await checkboxes.nth(1).isChecked(), false);
+    assert.equal(await checkboxes.nth(1).evaluate(element => document.activeElement === element), true);
+    await checkboxes.nth(2).uncheck(); assert.equal(await checkboxes.nth(0).isDisabled(), true);
+    await page.getByRole('button', { name: '全选 / 恢复全部字段' }).click(); assert.equal(await page.locator('.column-sidebar-row input:checked').count(), 3);
+    if (sortable) {
+      const handle = rows.nth(1).locator('.column-sidebar-drag'); await handle.focus(); await page.keyboard.press('Alt+ArrowUp');
+      assert.deepEqual(await page.evaluate(() => moves), [['trade_type', 'id']]);
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.columnId), 'trade_type');
+      await rows.nth(0).locator('.column-sidebar-drag').dispatchEvent('dragstart'); await rows.nth(2).dispatchEvent('dragover'); await rows.nth(2).hover();
+      assert.equal(await background(2), 'rgb(242, 247, 254)', 'drop target stays distinct from hover');
+      assert.match(await rows.nth(2).evaluate(element => getComputedStyle(element).boxShadow), /inset/);
+      await rows.nth(2).dispatchEvent('drop'); assert.deepEqual(await page.evaluate(() => moves), [['trade_type', 'id'], ['trade_type', 'description']]);
+    }
+    await page.getByRole('searchbox', { name: '搜索字段' }).fill('missing'); assert.equal(await rows.textContent(), '没有匹配字段');
+    await page.getByRole('searchbox', { name: '搜索字段' }).fill(''); assert.equal(await rows.count(), 3);
+    await page.getByRole('searchbox', { name: '搜索字段' }).focus(); await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.column-sidebar').isVisible(), false); assert.equal(await page.locator('#trigger').evaluate(element => document.activeElement === element), true);
+  }
+  assert.deepEqual(errors, []);
 });
 
 test('last visible column is disabled while hidden columns remain available; Escape returns focus', () => {

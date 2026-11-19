@@ -576,7 +576,7 @@ test('real query result controls page from spool and keep exact keyboard accessi
   assert.equal(view.grid.data.rows.length, 200); assert.equal(view.grid.data.rows[0][0], '200');
   assert.equal(view.grid.data.rowNumberOffset, 200);
   assert.equal(view.statusInfo().pageText, '共 10001 行');
-  assert.equal(view.pageNumberInput.value, "2"); assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 共 10001 行');
+  assert.equal(view.pageNumberInput.value, "2"); assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s（共 10001 行）');
   assert.equal(view.pageCountEl.textContent, '/ 51 页');
   view.resultTabsEl.children[2].fire('click'); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(tab.activeResult, 1); assert.equal(view.grid.data.rows[0][0], '0');
@@ -596,7 +596,7 @@ for (const sql of ['UPDATE t SET value = 1', 'DELETE FROM t', 'INSERT INTO t VAL
       assert.equal(tab.activeResult, -1);
       assert.deepEqual(view.resultTabsEl.children.map(child => child.textContent), ['消息']);
       assert.equal(view.grid.el.style.display, 'none'); assert.equal(view.messagesEl.style.display, '');
-      assert.equal(view.footerStatusEl.textContent, `运行耗时 0.125s | 影响 ${affected} 行`);
+      assert.equal(view.footerStatusEl.textContent, `运行耗时 0.125s（影响 ${affected} 行）`);
       assert.equal(view.resultPager.style.display, 'flex'); assert.equal(view.pageControls.style.display, 'none');
       assert.equal(view.pageSizeSelect.parentElement.style.display, 'none');
       assert.match(view.lastMessages[0].text, new RegExp(`影响 ${affected} 行`));
@@ -611,7 +611,7 @@ test('invalid or missing backend affected counts stay unknown instead of NaN or 
     const { view, api, renderResults } = queryHarness(); view.renderResults = renderResults;
     api.executeSql = async () => ({ elapsed_ms: 125, messages: [], sets: [{ columns: [], rows: [], total: 0, affected, message: '' }] });
     await view.execute('UPDATE t SET value = 1', false);
-    assert.equal(view.footerStatusEl.textContent, '运行耗时 0.125s | 影响行数未知');
+    assert.equal(view.footerStatusEl.textContent, '运行耗时 0.125s（影响行数未知）');
     assert.match(view.lastMessages[0].text, /影响行数未知/);
     view.destroy();
   }
@@ -624,7 +624,7 @@ test('empty SELECT and writes with RETURNING remain real result sets', async () 
     await view.execute(sql, false); await readOnlyResultsSettled(view, evidenceCalls);
     assert.equal(tab.activeResult, 0);
     assert.deepEqual(view.resultTabsEl.children.map(child => child.textContent), ['消息', '结果 1']);
-    assert.equal(view.footerStatusEl.textContent, `运行耗时 0.125s | 共 ${rows.length} 行`);
+    assert.equal(view.footerStatusEl.textContent, `运行耗时 0.125s（共 ${rows.length} 行）`);
     assert.equal(view.pageControls.style.display, 'flex');
     view.destroy();
   }
@@ -646,7 +646,7 @@ test('mixed batches hide receipts without renumbering cache, evidence and export
   await view.exportResultSnapshot(exportOptions, view.captureResultExport());
   assert.equal(calls.find(call => call[0] === 'export-spool')[3], 1);
   view.resultTabsEl.children[0].fire('click');
-  assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 影响 7 行');
+  assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s（影响 7 行）');
   assert.equal(view.pageControls.style.display, 'none');
   view.resultTabsEl.children[2].fire('click');
   assert.equal(view.resultTabsEl.children[2].focused, true);
@@ -767,7 +767,7 @@ test('manual page entry validates boundaries and jumps via cached offsets withou
   const { view, api, calls, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
   api.executeSql = async (_id, sql) => { calls.push(['execute', sql]); return spoolResult('numbered', [10001]); }; await view.execute('SELECT value FROM t', false);
   await readOnlyResultsSettled(view, evidenceCalls);
-  assert.equal(view.pageNumberInput.value, '1'); assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s | 共 10001 行');
+  assert.equal(view.pageNumberInput.value, '1'); assert.equal(view.footerStatusEl.textContent, '运行耗时 0.001s（共 10001 行）');
   assert.equal(view.resultPager.children[0], view.footerStatusEl);
   assert.equal(view.pageCountEl.textContent, '/ 51 页');
   assert.equal(view.pageControls.children[2].className, 'grid-pager-position');
@@ -818,22 +818,28 @@ test('page-size changes load cache atomically, reset navigation and stay isolate
   assert.equal(pages.pageOffset(0, 11), 10000); assert.deepEqual(reads, [[200, 200], [0, 500], [0, 1000]]);
 });
 
-test('query page-size selector has fixed choices and reloads cache without SQL, blocking busy/dirty changes', async () => {
+test('query page-size selector offers 100/200/500/1000/2000 and reloads cache from the first page without SQL', async () => {
   const { view, api, calls, evidenceCalls, renderResults } = queryHarness(); view.renderResults = renderResults;
   api.executeSql = async (_id, sql) => { calls.push(['execute', sql]); return spoolResult('sized', [10001]); };
   await view.execute('SELECT value FROM t', false); await readOnlyResultsSettled(view, evidenceCalls);
-  assert.deepEqual(view.pageSizeSelect.children.map(option => option.value), ['200', '500', '1000']);
+  assert.deepEqual(view.pageSizeSelect.children.map(option => option.value), ['100', '200', '500', '1000', '2000']);
+  assert.equal(view.pageSizeSelect.value, '200');
+  assert.equal(view.pageSizeSelect.parentElement.children[1].textContent, '条');
   view.pageSizeSelect.value = '500'; view.pageSizeSelect.fire('change');
   await new Promise(resolve => setImmediate(resolve)); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.grid.data.rows.length, 500); assert.equal(view.pageNumberInput.value, '1'); assert.equal(view.pageSizeSelect.value, '500');
   await view.loadResultPage('next'); await readOnlyResultsSettled(view, evidenceCalls);
   assert.equal(view.resultPages.page(0).offset, 500);
-  view.pageSizeSelect.value = '1000'; view.pageSizeSelect.fire('change');
+  view.pageSizeSelect.value = '2000'; view.pageSizeSelect.fire('change');
   await new Promise(resolve => setImmediate(resolve)); await readOnlyResultsSettled(view, evidenceCalls);
-  assert.equal(view.resultPages.page(0).offset, 0); assert.equal(view.grid.data.rows.length, 1000);
+  assert.equal(view.resultPages.page(0).offset, 0); assert.equal(view.grid.data.rows.length, 2000);
+  assert.equal(view.resultPages.pageLimit(0), 2000);
+  // 非候选值不生效：直接恢复为当前值，不发起读取
   const before = calls.filter(call => call[0] === 'fetch').length;
+  view.pageSizeSelect.value = '1234'; view.pageSizeSelect.fire('change');
+  assert.equal(view.pageSizeSelect.value, '2000'); assert.equal(calls.filter(call => call[0] === 'fetch').length, before);
   view.running = true; view.renderResultPager(); assert.equal(view.pageSizeSelect.disabled, true);
-  view.pageSizeSelect.value = '200'; view.pageSizeSelect.fire('change'); assert.equal(view.pageSizeSelect.value, '1000');
+  view.pageSizeSelect.value = '200'; view.pageSizeSelect.fire('change'); assert.equal(view.pageSizeSelect.value, '2000');
   view.running = false; view.controlledResult = { dirty: true }; view.renderResultPager(); assert.equal(view.pageSizeSelect.disabled, true);
   view.pageSizeSelect.value = '200'; view.pageSizeSelect.fire('change');
   assert.equal(calls.filter(call => call[0] === 'fetch').length, before); assert.equal(calls.filter(call => call[0] === 'execute').length, 1);

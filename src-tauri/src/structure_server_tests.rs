@@ -14,6 +14,12 @@ fn entry(request: &StructureSyncRequest, binding: &StructureReviewBinding) -> Ar
     for d in ["'Keep  Case'::text", "42", "now()", "'It''s literal'::character varying"] { assert!(plan::safe_default(d, true).is_ok(), "{d}"); }
     for d in ["dangerous()", "'x' || evil()", "'x'::evil", "NULL; DROP TABLE t", "'unclosed"] { assert!(plan::safe_default(d, true).is_err()); }
 }
+#[test] fn mysql_identity_alias_escapes_reserved_database_keyword() {
+    // MySQL 8 把 DATABASE 列为保留字：别名不加反引号会让整条身份查询 1064，
+    // 从而把「语法错误」误报成 STRUCTURE_MYSQL_UUID_UNPROVEN。
+    assert!(metadata::MYSQL_IDENTITY_SQL.contains("DATABASE() AS `database`"));
+    assert!(!metadata::MYSQL_IDENTITY_SQL.contains("AS database"));
+}
 #[test] fn postgres_only_proven_lossless_widen_is_executable() {
     for (a, b) in [("smallint", "integer"), ("integer", "bigint"), ("character varying(40)", "character varying(120)"), ("character varying(40)", "text"), ("numeric(10,2)", "numeric(20,2)")] { assert!(plan::pg_lossless_type(a,b), "{a} → {b}"); }
     for (a, b) in [("bigint", "integer"), ("character varying(120)", "character varying(40)"), ("numeric(20,4)", "numeric(20,2)"), ("numeric", "numeric(20,2)"), ("double precision", "real"), ("integer", "text"), ("timestamp without time zone", "timestamp(2) without time zone")] { assert!(!plan::pg_lossless_type(a,b), "{a} → {b}"); }

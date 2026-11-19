@@ -20,6 +20,8 @@ interface OpenInput {
   active: number;
   /** 用户用方向键/Home/End 明确移动过选中项（默认高亮不算）。 */
   navigated: boolean;
+  /** 打开时的初始筛选词覆盖：`data-search-open-all` 的控件先列全部候选，输入后才过滤。 */
+  queryOverride: string | null;
   savedList: string | null;
   composing: boolean;
   restore: () => void;
@@ -136,7 +138,7 @@ export function installSearchableInputs(root: InputRoot = document): () => void 
   };
 
   const render = (state: OpenInput): void => {
-    const { token } = segmentOf(state.input);
+    const { token } = state.queryOverride === null ? segmentOf(state.input) : { token: state.queryOverride };
     const query = token.toLocaleLowerCase();
     state.values = query ? state.all.filter(value => value.toLocaleLowerCase().includes(query)) : state.all.slice();
     state.rows = state.values.map((value, index) => {
@@ -164,14 +166,16 @@ export function installSearchableInputs(root: InputRoot = document): () => void 
     const width = viewport?.width ?? win.innerWidth, height = viewport?.height ?? win.innerHeight;
     const below = Math.max(0, top + height - rect.bottom - 12), above = Math.max(0, rect.top - top - 12);
     const upwards = below < 200 && above > below;
-    const panelWidth = Math.min(Math.max(rect.width, 240), width - 16);
+    // data-search-width="field"：格子内的可输入下拉要跟单元格同宽，不套 240 的最小浮层宽度。
+    const sameWidth = state.input.getAttribute("data-search-width") === "field";
+    const panelWidth = sameWidth ? Math.max(0, Math.min(rect.width, width - 16)) : Math.min(Math.max(rect.width, 240), width - 16);
     state.panel.style.width = `${Math.max(0, panelWidth)}px`;
     state.panel.style.maxHeight = `${Math.min(360, upwards ? above : below)}px`;
     state.panel.style.left = `${Math.max(left + 8, Math.min(rect.left, left + width - panelWidth - 8))}px`;
     state.panel.style.top = `${upwards ? rect.top - state.panel.getBoundingClientRect().height - 4 : rect.bottom + 4}px`;
   };
 
-  const open = (input: HTMLInputElement): void => {
+  const open = (input: HTMLInputElement, fromInput = false): void => {
     if (!available(input) || !input.getClientRects().length) return;
     if (opened?.input === input) { render(opened); position(opened); return; }
     close();
@@ -193,7 +197,10 @@ export function installSearchableInputs(root: InputRoot = document): () => void 
     const savedList = input.getAttribute("list");
     const saved = ["role", "aria-expanded", "aria-controls", "aria-haspopup", "aria-autocomplete", "aria-activedescendant"]
       .map(attr => [attr, input.getAttribute(attr)] as const);
-    const state: OpenInput = { input, panel, list: ul, status, all: values, values: [], rows: [], active: -1, navigated: false, savedList, composing: false,
+    const state: OpenInput = { input, panel, list: ul, status, all: values, values: [], rows: [], active: -1, navigated: false,
+      // 单元格式下拉（表设计器默认值）打开时列全部候选：回显的表达式不适合当作筛选词。
+      // 由打字触发的打开直接用当前输入过滤。
+      queryOverride: !fromInput && input.hasAttribute("data-search-open-all") ? "" : null, savedList, composing: false,
       restore: () => {
         if (savedList !== null && !input.hasAttribute("list")) input.setAttribute("list", savedList);
         saved.forEach(([attr, value]) => { if (value === null) input.removeAttribute(attr); else input.setAttribute(attr, value); });
@@ -226,6 +233,15 @@ export function installSearchableInputs(root: InputRoot = document): () => void 
     return node instanceof HTMLInputElement && root.contains(node) && usable(node) ? node : null;
   };
 
+  /** 浮层的空白区与「没有匹配」提示也算点外部：它们常盖住下方相邻的单元格，
+   *  不关掉的话用户无法直接点到被盖住的输入框。候选项与列表本身不算。 */
+  const dismissTarget = (target: EventTarget | null): boolean => {
+    const state = opened;
+    if (!state || !(target instanceof Node)) return true;
+    if (!state.panel.contains(target)) return true;
+    return target === state.panel || (target instanceof Element && !!target.closest(".searchable-select-empty"));
+  };
+
   root.addEventListener("pointerdown", e => {
     const input = owner(e);
     if (input && (e as PointerEvent).button === 0) {
@@ -234,14 +250,14 @@ export function installSearchableInputs(root: InputRoot = document): () => void 
       if (available(input)) open(input);
       return;
     }
-    if (opened && !(e.target instanceof Node && opened.panel.contains(e.target))) close();
+    if (opened && dismissTarget(e.target)) close();
   }, { capture: true, signal: listeners.signal });
   // 自由输入是主路径：不拦截输入，只在值变化后刷新建议。
   root.addEventListener("input", e => {
     const input = owner(e);
     if (!input || writing) return;
-    if (opened?.input === input) { render(opened); position(opened); }
-    else if (input.value.trim() && available(input)) open(input);
+    if (opened?.input === input) { opened.queryOverride = null; render(opened); position(opened); }
+    else if (input.value.trim() && available(input)) open(input, true);
   }, { capture: true, signal: listeners.signal });
   root.addEventListener("compositionstart", e => {
     if (opened?.input === e.target) opened.composing = true;
@@ -292,8 +308,8 @@ export function installSearchableInputs(root: InputRoot = document): () => void 
     }
   }, { capture: true, signal: listeners.signal });
   doc.addEventListener("pointerdown", e => {
-    // root 是 document 时上面的处理器已经处理过输入框自身；这里只负责浮层之外。
-    if (opened && e.target !== opened.input && !(e.target instanceof Node && opened.panel.contains(e.target))) close();
+    // root 是 document 时上面的处理器已经处理过输入框自身；这里只负责浮层之外与浮层空白区。
+    if (opened && e.target !== opened.input && dismissTarget(e.target)) close();
   }, { capture: true, signal: listeners.signal });
   doc.addEventListener("scroll", e => {
     const state = opened;

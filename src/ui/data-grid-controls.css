@@ -13,14 +13,17 @@
 .column-sidebar button, .column-sidebar input[type=search] { min-height: 26px; font: inherit; color: inherit; border: 1px solid var(--border); border-radius: var(--r-1); background: var(--bg-surface); }
 .column-sidebar input[type=search] { width: 100%; min-width: 0; padding: 0 var(--sp-2); }
 .column-sidebar .column-sidebar-list { display: flex; flex: 1; flex-direction: column; flex-wrap: nowrap; align-items: stretch; min-height: 0; max-height: none; overflow: auto; padding: 0; gap: 0; }
-.column-sidebar-row { display: flex; align-items: flex-start; gap: var(--sp-2); min-height: 26px; padding: 4px 0; flex-shrink: 0; cursor: pointer; }
+/* 名称、复选框和拖拽块共享首行轨道；备注只向下扩展，不改变控件位置。 */
+.column-sidebar-row { box-sizing: border-box; display: flex; align-items: flex-start; gap: var(--sp-2); min-height: 26px; padding: var(--sp-1); flex-shrink: 0; cursor: pointer; }
 .column-sidebar-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.column-sidebar-name { font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-sidebar-name { font-size: var(--fs-12); line-height: var(--h-tree-row); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column-sidebar-comment { color: var(--text-secondary); font-size: var(--fs-11); line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
-.column-sidebar-row input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent-500); }
-.column-sidebar-item { display: flex; align-items: flex-start; gap: var(--sp-2); flex: 0 0 auto; border-radius: var(--r-1); }
-.column-sidebar-item > .column-sidebar-row { flex: 1; min-width: 0; }
-.column-sidebar .column-sidebar-drag { flex: 0 0 24px; width: 24px; min-height: 24px; margin-top: 3px; padding: 0; border-color: transparent; background: transparent; color: var(--text-tertiary); font-size: 18px; line-height: 1; cursor: grab; }
+.column-sidebar .column-sidebar-row input[type=checkbox] { width: var(--sp-4); height: var(--sp-4); margin: calc((var(--h-tree-row) - var(--sp-4)) / 2) 0 0; flex-shrink: 0; accent-color: var(--accent-500); }
+.column-sidebar-item { display: flex; align-items: flex-start; gap: var(--sp-2); flex: 0 0 auto; padding: 0 var(--sp-1); }
+.column-sidebar-list > .column-sidebar-item:not(:last-child), .column-sidebar-list > .column-sidebar-row:not(:last-child) { border-bottom: 1px solid var(--border-subtle); }
+.column-sidebar-item:hover, .column-sidebar-item:focus-within, .column-sidebar-list > .column-sidebar-row:hover, .column-sidebar-list > .column-sidebar-row:focus-within { background: var(--bg-hover); }
+.column-sidebar-item > .column-sidebar-row { flex: 1; min-width: 0; padding: var(--sp-1) 0; }
+.column-sidebar .column-sidebar-drag { flex: 0 0 var(--h-tree-row); width: var(--h-tree-row); height: var(--h-tree-row); min-height: var(--h-tree-row); margin: var(--sp-1) 0 0; padding: 0; border-color: transparent; background: transparent; color: var(--text-tertiary); font-size: 18px; line-height: 1; cursor: grab; }
 .column-sidebar .column-sidebar-drag:hover { background: var(--bg-hover); color: var(--text); }
 .column-sidebar-item.dragging .column-sidebar-drag { cursor: grabbing; }
 .column-sidebar-item.drag-over { background: var(--accent-50); box-shadow: inset 0 -2px var(--accent-500); }

@@ -238,8 +238,15 @@ async fn read_owned(db:Arc<Db>,binding:Binding,table:String,read_only:bool,ordin
 
     }).await
 }
+// 目录读取进入 owned 会话之前也可能等待其它工具的 ordinary lease；未取租约不发目录 SQL。
+const METADATA_LEASE_BUDGET:std::time::Duration=std::time::Duration::from_secs(15);
+async fn metadata_lease(registry:&crate::manual_transaction::Registry,id:&str,budget:std::time::Duration)->CmdResult<OrdinaryLease>{
+    tokio::time::timeout(budget,registry.ordinary(&[id])).await
+        .map_err(|_|AppError::coded("TABLE_METADATA_BUSY_TIMEOUT","连接仍有数据库操作在运行，读取表设计等待超时；请稍后重试，未发送目录查询"))?
+        .map_err(AppError::from)
+}
 async fn read_context(state:&AppState,id:&str,schema:&str,table:&str,owner:&str,principal:&str,writable:bool)->CmdResult<Stored>{
-    validate_identity(schema,table,owner).map_err(AppError::from)?;let cfg=commands::saved_config(state,id)?;require_table_design_dialect(&cfg.kind).map_err(|e|AppError::coded("TABLE_DESIGN_DIALECT_UNSUPPORTED",e.to_string()))?;if writable&&cfg.read_only{return Err(AppError::coded("READ_ONLY_VIOLATION","只读连接禁止表操作"));}let binding=commands::execution_binding(state,&cfg,principal,owner,schema)?;let ordinary=state.manual_transactions.ordinary(&[id]).await?;state.executions.require_quiescent(id)?;let db=commands::scoped_db(state,id,schema).await?;
+    validate_identity(schema,table,owner).map_err(AppError::from)?;let cfg=commands::saved_config(state,id)?;require_table_design_dialect(&cfg.kind).map_err(|e|AppError::coded("TABLE_DESIGN_DIALECT_UNSUPPORTED",e.to_string()))?;if writable&&cfg.read_only{return Err(AppError::coded("READ_ONLY_VIOLATION","只读连接禁止表操作"));}let binding=commands::execution_binding(state,&cfg,principal,owner,schema)?;let ordinary=metadata_lease(&state.manual_transactions,id,METADATA_LEASE_BUDGET).await?;state.executions.require_quiescent(id)?;let db=commands::scoped_db(state,id,schema).await?;
     // MySQL 的库级读取返回 `id@database` 派生池；用基础 id 比对会误判端点已变。
     let key=commands::physical_key(id,schema,db.as_ref());
     if !state.connection_runtime.matches(&key,&binding.fingerprint,&db){return Err(AppError::coded("TABLE_RUNTIME_CHANGED","实际物理池与已保存端点不符"));}

@@ -2,7 +2,11 @@
 use super::*;
 use serde::Serialize;
 use crate::{models::{ColumnInfo, IndexInfo, TableSchema}, structure_execution::metadata::{PhysicalDatabaseIdentity, PhysicalTableIdentity}};
-#[derive(Clone)] pub(super) struct Physical { pub server: String, pub database: String, pub kind: String }
+#[derive(Clone)]
+pub(super) struct Physical { pub server: String, pub database: String, pub kind: String }
+/// MySQL 8 物理库身份查询。`database` 是 MySQL 8 保留字：别名必须加反引号，
+/// 否则整条 SELECT 会以 1064 语法错误失败，被误报成「server_uuid 未证明」。
+pub(super) const MYSQL_IDENTITY_SQL: &str = "SELECT CAST(@@server_uuid AS CHAR) AS server, DATABASE() AS `database`, CAST(@@version AS CHAR) AS version, CAST(@@version_comment AS CHAR) AS comment";
 #[derive(Clone, Serialize)] pub(super) struct Snapshot {
     pub schema: TableSchema, pub identity: PhysicalTableIdentity, pub revision: String,
     pub physical_table: String, pub unsupported: Vec<String>, pub evidence: Vec<Vec<Record>>,
@@ -15,7 +19,9 @@ pub(super) async fn physical(s: &mut Session) -> Result<Physical> {
         ensure!(rows.len() == 1, "STRUCTURE_PG_DATABASE_IDENTITY_UNKNOWN");
         Ok(Physical { server: format!("postgres-cluster:{}:instance:{}", get(&rows[0], "server")?, get(&rows[0], "instance")?), database: get(&rows[0], "database")?.into(), kind: "postgres-server".into() })
     } else {
-        let rows = s.rows("SELECT CAST(@@server_uuid AS CHAR) AS server, DATABASE() AS database, CAST(@@version AS CHAR) AS version, CAST(@@version_comment AS CHAR) AS comment").await
+        // MySQL 8 保留字 DATABASE 作为别名必须加反引号；这里只证明物理库身份，不改鉴权流程。
+        // 保留 `{e:#}` 的完整原因链：真实语法/权限错误必须原样透出，不能被身份文案吞掉。
+        let rows = s.rows(MYSQL_IDENTITY_SQL).await
             .map_err(|e| anyhow!("STRUCTURE_MYSQL_UUID_UNPROVEN: 仅 MySQL 8 server_uuid 认证，MariaDB/TiDB 不降级伪造身份：{e:#}"))?;
         ensure!(rows.len() == 1, "STRUCTURE_MYSQL_IDENTITY_UNKNOWN"); let r = &rows[0];
         let uuid = uuid::Uuid::parse_str(get(r, "server")?).map_err(|_| anyhow!("STRUCTURE_MYSQL_UUID_UNPROVEN"))?;

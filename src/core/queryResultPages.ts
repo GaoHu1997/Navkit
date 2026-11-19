@@ -22,7 +22,7 @@ export class QueryResultPages {
   private pages: QueryResultPage[] = [];
   private generation = 0;
 
-  constructor(limit = 200) { this.limit = Math.max(1, Math.min(1000, Math.floor(limit) || 200)); }
+  constructor(limit = 200) { this.limit = Math.max(1, Math.min(2000, Math.floor(limit) || 200)); }
   get busy(): boolean { return this.pages.some(page => page.loading); }
   page(index: number): QueryResultPage | null { return this.pages[index] ?? null; }
 
@@ -70,7 +70,7 @@ export class QueryResultPages {
     read: (scope: QuerySpoolScope, index: number, offset: number, limit: number) => Promise<QueryRowsPage>,
     limit = this.pageLimit(index)): Promise<boolean> {
     const page = this.page(index), scope = this.scope, result = this.result, generation = this.generation;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !page || !scope || !result || page.loading || offset < 0 || offset >= page.total && page.total !== 0) return false;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000 || !page || !scope || !result || page.loading || offset < 0 || offset >= page.total && page.total !== 0) return false;
     const request = ++page.request;
     page.loading = true; page.message = "";
     try {

@@ -1,6 +1,6 @@
 /**
  * 标题栏「更新」徽标：检测到新版本时以绿色「更新」出现；点击下载时边框加粗并沿边框生长为进度条；
- * 下载校验完成变为橘黄色「重启」，点击换名替换程序并重启。
+ * 下载校验完成变为橘黄色「重启」，点击换名替换程序并重启。下载/校验/重启均显示内部遮罩与加载环并禁用按钮。
  *
  * 复用「软件更新」对话框的后端通道：update_check / update_download / update_status / update_apply，
  * 下载进度优先取 update-progress 事件，事件不可用时轮询 update_status 兜底。
@@ -27,7 +27,7 @@ const POLL_INTERVAL_MS = 700;
 
 export type UpdateBadgeNotify = (kind: "success" | "error" | "info", text: string) => void;
 
-type BadgePhase = "hidden" | "available" | "downloading" | "ready";
+type BadgePhase = "hidden" | "available" | "downloading" | "ready" | "applying";
 
 /** 圆角矩形路径：起点在顶部中点、顺时针，进度自顶部向右生长。 */
 function ringPath(w: number, h: number, pad: number, r: number): string {
@@ -95,11 +95,19 @@ export class UpdateBadge {
     this.labelEl.className = "ub-lb";
     this.labelEl.textContent = "更新";
 
-    ub.append(frame, this.labelEl);
+    const loading = document.createElement("span");
+    loading.className = "ub-loading";
+    loading.setAttribute("aria-hidden", "true");
+    const spinner = document.createElement("span");
+    spinner.className = "ub-spinner";
+    loading.append(spinner);
+
+    ub.append(frame, this.labelEl, loading);
     el.append(ub);
     el.addEventListener("click", () => void this.onClick());
 
     this.el = el;
+    this.setPhase("hidden");
     this.renderProgress(0);
   }
 
@@ -133,7 +141,7 @@ export class UpdateBadge {
   }
 
   private hasActiveUpdate(): boolean {
-    return this.phase === "downloading" || this.phase === "ready";
+    return this.phase === "downloading" || this.phase === "ready" || this.phase === "applying";
   }
 
   /** 静默检查新版本；网络/未配置更新源时保持原状，不打扰用户。 */
@@ -154,8 +162,10 @@ export class UpdateBadge {
   }
 
   private async restoreStatus(): Promise<void> {
+    const generation = this.generation;
     try {
       const status = await api.updateStatus();
+      if (generation !== this.generation || this.hasActiveUpdate()) return;
       if (status.phase === "ready") this.setReady();
       else if (status.phase === "downloading") this.enterDownloading(status.done, status.total);
     } catch {
@@ -167,10 +177,14 @@ export class UpdateBadge {
     this.phase = phase;
     this.el.dataset.phase = phase;
     this.el.hidden = phase === "hidden";
+    const busy = phase === "downloading" || phase === "applying";
+    this.el.disabled = busy;
+    this.el.setAttribute("aria-busy", String(busy));
   }
 
   /** 发现新版本：显示绿色「更新」。 */
   setAvailable(manifest: UpdateManifest | null): void {
+    if (this.phase === "applying") return;
     this.manifest = manifest;
     if (manifest && isUpdateSkipped(manifest.version)) { this.hide(); return; }
     this.setPhase("available");
@@ -187,6 +201,7 @@ export class UpdateBadge {
   }
 
   private enterDownloading(done: number, total: number): void {
+    if (this.phase === "applying" || this.phase === "ready") return;
     this.setPhase("downloading");
     this.labelEl.textContent = "更新";
     const pct = total > 0 ? (done / total) * 100 : 0;
@@ -196,6 +211,7 @@ export class UpdateBadge {
   }
 
   private setReady(): void {
+    if (this.phase === "applying") return;
     this.stopPolling();
     this.stopProgressListener();
     this.setPhase("ready");
@@ -212,6 +228,8 @@ export class UpdateBadge {
   }
 
   private async onClick(): Promise<void> {
+    // 原生 disabled 阻止用户输入；状态入口同时防止程序派发重复 click。
+    if (this.el.disabled) return;
     if (this.phase === "available") {
       await this.download();
       return;
@@ -241,13 +259,18 @@ export class UpdateBadge {
   }
 
   private async apply(): Promise<void> {
-    this.el.disabled = true;
+    if (this.phase !== "ready") return;
+    this.setPhase("applying");
     this.el.title = "正在重启并安装更新…";
+    this.el.setAttribute("aria-label", "正在重启并安装更新");
     try {
       await api.updateApply(readUpdatePreferences().pendingInstall?.sha256);
+      // 成功回执不代表应用已退出，保持忙碌，避免重复安装。
     } catch (e) {
-      this.el.disabled = false;
-      this.el.title = "点击重启并安装更新";
+      this.setPhase("ready");
+      this.setReady();
+      this.el.title = "重启安装失败，点击重试：" + String(e);
+      this.el.setAttribute("aria-label", "重启安装失败，点击重试");
       this.notify?.("error", "重启安装失败：" + String(e));
     }
   }
@@ -261,11 +284,13 @@ export class UpdateBadge {
         const { listen } = await import("@tauri-apps/api/event");
         if (cancelled) return;
         unlisten = await listen<UpdateProgressEvent>("update-progress", (event) => {
+          if (cancelled || this.phase === "applying") return;
           const p = event.payload;
           if (p.phase === "downloading") this.enterDownloading(p.done, p.total);
           else if (p.phase === "verifying") {
             this.renderProgress(100);
             this.el.title = "正在校验更新包…";
+            this.el.setAttribute("aria-label", "正在校验更新包");
           } else if (p.phase === "ready") {
             this.setReady();
           } else if (p.phase === "error") {
@@ -284,10 +309,13 @@ export class UpdateBadge {
 
   private startPolling(): void {
     this.stopPolling();
+    const generation = this.generation;
     this.pollTimer = window.setInterval(() => {
+      if (this.phase !== "downloading") return;
       void api
         .updateStatus()
         .then((status) => {
+          if (generation !== this.generation || this.phase !== "downloading") return;
           if (status.phase === "ready") this.setReady();
           else if (status.phase === "downloading") this.enterDownloading(status.done, status.total);
         })

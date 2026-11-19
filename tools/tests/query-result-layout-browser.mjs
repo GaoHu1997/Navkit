@@ -35,6 +35,10 @@ try {
   await page.evaluate(async () => {
     window.__PAGER_CALLS__ = [];
     const mock = window.__PREVIEW_MOCK__;
+    // 这个 fixture 验证的是本次执行缓存（spool）分页，不是服务器分页规划。
+    mock.plan_query_pagination = () => ({ mode: 'unsupported', sql: null, reason: 'fixture uses spool pagination' });
+    mock.count_query_page = () => ({ supported: false, total: null, reason: 'fixture spool pagination' });
+    mock.plan_query_keyset = () => ({ supported: false, reason: 'fixture spool pagination' });
     mock.execute_sql = args => {
       window.__PAGER_CALLS__.push(['sql', args.sql]);
       return { elapsed_ms: 456, messages: [], spool_id: crypto.randomUUID(), sets: [{
@@ -65,12 +69,12 @@ try {
   assert.equal(await page.locator('.result-preview-note:visible').count(), 0);
   assert.equal(await pager.locator('.query-page-range').count(), 0);
   const footerStatus = pager.locator('.query-footer-status');
-  assert.equal(await footerStatus.innerText(), '运行耗时 0.456s | 共 100001 行');
+  assert.equal(await footerStatus.innerText(), '运行耗时 0.456s（共 100001 行）');
   assert.doesNotMatch(await page.locator('.statusbar').innerText(), /运行耗时|共 100001 行/);
-  const footerPosition = await pager.evaluate(el => ({ left: el.getBoundingClientRect().left, statusLeft: el.querySelector('.query-footer-status').getBoundingClientRect().left, inputLeft: el.querySelector('input').getBoundingClientRect().left }));
+  const footerPosition = await pager.evaluate(el => ({ left: el.getBoundingClientRect().left, statusLeft: el.querySelector('.query-footer-status').getBoundingClientRect().left, inputLeft: el.querySelector('.query-page-number').getBoundingClientRect().left }));
   assert(footerPosition.statusLeft - footerPosition.left <= 10);
   assert(footerPosition.inputLeft > footerPosition.statusLeft);
-  const dimensions = await pager.evaluate(el => ({ gap: getComputedStyle(el).gap, controlGap: getComputedStyle(el.querySelector('.grid-pager')).gap, input: { width: el.querySelector('input').getBoundingClientRect().width, height: el.querySelector('input').getBoundingClientRect().height }, buttons: [...el.querySelectorAll('button')].map(b => ({ width: b.getBoundingClientRect().width, height: b.getBoundingClientRect().height })), height: el.getBoundingClientRect().height }));
+  const dimensions = await pager.evaluate(el => ({ gap: getComputedStyle(el).gap, controlGap: getComputedStyle(el.querySelector('.grid-pager')).gap, input: { width: el.querySelector('.query-page-number').getBoundingClientRect().width, height: el.querySelector('.query-page-number').getBoundingClientRect().height }, buttons: [...el.querySelectorAll('button')].map(b => ({ width: b.getBoundingClientRect().width, height: b.getBoundingClientRect().height })), height: el.getBoundingClientRect().height }));
   assert.equal(dimensions.gap, '4px'); assert.equal(dimensions.controlGap, '4px');
   assert.deepEqual(dimensions.input, { width: 40, height: 22 });
   assert(dimensions.buttons.every(b => b.width === 22 && b.height === 22));
@@ -78,7 +82,7 @@ try {
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).offset === 100000);
   assert.equal(await input.inputValue(), '501');
   assert.equal(await pageCount.innerText(), '/ 501 页');
-  assert.equal(await footerStatus.innerText(), '运行耗时 0.456s | 共 100001 行');
+  assert.equal(await footerStatus.innerText(), '运行耗时 0.456s（共 100001 行）');
   assert.equal(await firstRowNumber.innerText(), '100001');
   await input.fill('2'); await input.press('Tab');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).offset === 200);
@@ -91,13 +95,31 @@ try {
   assert.equal(calls.filter(c => c[0] === 'sql').length, 1);
   assert.deepEqual(calls.filter(c => c[0] === 'page').map(c => c[1]), [100000, 200]);
   const pageSize = pager.getByRole('combobox', { name: '每页条数' });
-  assert.deepEqual(await pageSize.locator('option').evaluateAll(nodes => nodes.map(n => n.value)), ['200', '500', '1000']);
-  const sizePosition = await pager.evaluate(el => ({ selectRight: el.querySelector('select').getBoundingClientRect().right, firstButtonLeft: el.querySelector('button').getBoundingClientRect().left }));
-  assert(sizePosition.selectRight < sizePosition.firstButtonLeft);
+  assert.deepEqual(await pageSize.locator('option').evaluateAll(nodes => nodes.map(n => n.value)), ['100', '200', '500', '1000', '2000']);
+  assert.equal(await pageSize.inputValue(), '200');
+  assert.equal(await pager.locator('.query-page-size-unit').innerText(), '条');
+  // 每页条数与翻页控件之间有竖分隔线，且落在两者之间
+  const dividerLayout = await pager.evaluate(el => {
+    const size = el.querySelector('.query-page-size').getBoundingClientRect();
+    const divider = el.querySelector('.query-pager-divider');
+    if (!divider) return null;
+    const box = divider.getBoundingClientRect();
+    const first = el.querySelector('.grid-pager button').getBoundingClientRect();
+    return { width: box.width, height: box.height, sizeRight: size.right, dividerLeft: box.left, dividerRight: box.right, firstButtonLeft: first.left, background: getComputedStyle(divider).backgroundColor };
+  });
+  assert.ok(dividerLayout, 'page-size and pager must be separated by a divider');
+  assert.equal(dividerLayout.width, 1);
+  assert.ok(dividerLayout.dividerLeft > dividerLayout.sizeRight, 'divider sits after the page-size control');
+  assert.ok(dividerLayout.dividerRight < dividerLayout.firstButtonLeft, 'divider sits before pager buttons');
+  assert.notEqual(dividerLayout.background, 'rgba(0, 0, 0, 0)');
   await pageSize.selectOption('500');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).rows.length === 500);
   assert.equal(await input.inputValue(), '1'); assert.equal(await pageCount.innerText(), '/ 201 页');
   assert.equal(await firstRowNumber.innerText(), '1');
+  await pageSize.selectOption('2000');
+  await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).rows.length === 2000);
+  assert.equal(await pageCount.innerText(), '/ 51 页');
+  assert.equal(await pageSize.inputValue(), '2000');
   await pageSize.selectOption('1000');
   await page.waitForFunction(() => !window.__APP__.activeView().resultBusy() && window.__APP__.activeView().resultPages.page(0).rows.length === 1000);
   assert.equal(await pageCount.innerText(), '/ 101 页');
@@ -147,7 +169,7 @@ try {
   await page.evaluate(() => completePage()); await page.waitForFunction(() => !window.__APP__.activeView().resultBusy());
   assert.equal(await overlay.isVisible(), false); assert.equal(await page.evaluate(() => window.__APP__.activeView().grid.el.inert), false);
   await input.press('Tab');
-  await page.locator('.toast').waitFor({ state: 'detached', timeout: 15000 });
+  await page.waitForFunction(() => document.querySelectorAll('.toast').length === 0, null, { timeout: 15000 });
   await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
   await page.screenshot({ path: path.join(root, 'artifacts/query-result-pagination.png') });
   const queryId = await page.evaluate(() => window.__APP__.activeTabId);
@@ -184,7 +206,8 @@ try {
     assert.equal(await page.locator('.grid-wrap:visible').count(), 0);
     assert.equal(await pager.locator('.grid-pager:visible').count(), 0);
     assert.equal(await pager.getByRole('combobox', { name: '每页条数' }).count(), 0);
-    assert.equal(await footerStatus.innerText(), `运行耗时 0.125s | 影响 ${affected} 行`);
+    assert.equal(await pager.locator('.query-pager-divider:visible').count(), 0);
+    assert.equal(await footerStatus.innerText(), `运行耗时 0.125s（影响 ${affected} 行）`);
     const footerBottomGap = await pager.evaluate(el => Math.abs(el.getBoundingClientRect().bottom - el.parentElement.getBoundingClientRect().bottom));
     assert(footerBottomGap < 1, 'message statistics remain at the bottom of the output area');
     assert.match(await page.locator('.result-messages:visible').innerText(), new RegExp(`影响 ${affected} 行`));
@@ -192,7 +215,7 @@ try {
   await page.screenshot({ path: path.join(root, 'artifacts/query-result-mutation-messages.png') });
   assert.deepEqual(errors, []);
   console.log('PASS browser table preview: query isolation, other table isolation, original-table restoration, close remains closed');
-  console.log(JSON.stringify({ passed: ['central millisecond timer grows every 50ms', 'top execution status removed', 'execution and page-loading centered overlays', 'no success toast or top running message', 'compact controls', 'left result-footer time and total rows', 'table-style page-count suffix', 'non-rowset writes show messages and affected rows only', '200/500/1000 page-size selection', 'absolute row numbers across pages', 'hidden completion banner', 'Enter and blur jumps', 'invalid-page validation', 'no SQL rerun'], dimensions, screenshot: 'artifacts/query-result-pagination.png' }));
+  console.log(JSON.stringify({ passed: ['central millisecond timer grows every 50ms', 'top execution status removed', 'execution and page-loading centered overlays', 'no success toast or top running message', 'compact controls', 'left result-footer time and total rows', 'table-style page-count suffix', 'non-rowset writes show messages and affected rows only', 'page-size dropdown 100/200/500/1000/2000 with 条 unit and divider', 'absolute row numbers across pages', 'hidden completion banner', 'Enter and blur jumps', 'invalid-page validation', 'no SQL rerun'], dimensions, divider: dividerLayout, screenshot: 'artifacts/query-result-pagination.png' }));
 } catch (error) {
   console.log(await page.evaluate(() => ({ errors: document.body.innerText.slice(-4000), tab: window.__APP__?.activeTab, status: window.__APP__?.activeView()?.executionStatusEl?.textContent })));
   throw error;

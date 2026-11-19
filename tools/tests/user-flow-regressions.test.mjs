@@ -270,7 +270,7 @@ function gridView(hidden = []) {
 }
 function queryView() {
   const context = environment();
-  runTs(`${stripImports(fs.readFileSync(path.join(root, 'src/core/queryResultPages.ts'), 'utf8'))}\nglobalThis.QueryView = class { ${members('QueryTabView', ['resultPages', 'exporting', 'pageButtons', 'resultBusy', 'activeResultTab', 'currentSet', 'statusInfo', 'releaseSpool', 'updateResultLoading', 'renderResultPager', 'renderResults', 'renderMessages', 'runningMessageText', 'requestControlledResult', 'disposeControlledResult', 'allowResultReplacement'])} };`, context);
+  runTs(`${stripImports(fs.readFileSync(path.join(root, 'src/core/queryResultPages.ts'), 'utf8'))}\nglobalThis.QueryView = class { ${members('QueryTabView', ['resultPages', 'exporting', 'pageButtons', 'resultBusy', 'activeResultTab', 'currentSet', 'statusInfo', 'releaseSpool', 'updateResultLoading', 'renderResultPager', 'renderResults', 'renderMessages', 'runningMessageText', 'requestControlledResult', 'disposeControlledResult', 'allowResultReplacement', 'footerStatsText'])} };`, context);
   const view = new context.QueryView(); const make = () => context.document.createElement('div');
   let statuses = 0, toolbars = 0;
   const first = { columns: [{ name: 'first_marker' }], rows: [['FIRST']], total: 1, has_rows: true };
@@ -279,7 +279,7 @@ function queryView() {
   Object.assign(view, { tab: { activeResult: 0, title: 'Query', results: { sets: [first, second], elapsed_ms: 25 } },
     executionClockStartedAt: null, executionLabelEl: make(), executionTimerEl: make(),
     editor: { getSelection: () => '', getSql: () => 'SELECT' }, running: false, lastMessages: [{ text: 'OK', error: false }], resultRatio: 0.5,
-    resultTabsEl: make(), resultSplitter: make(), resultBody: make(), messagesEl: make(), cellPreviewEl: make(), gridPreviewNoteEl: make(), resultPager: make(), pageControls: make(), pageCountEl: make(), pageNumberInput: make(), pageSizeSelect: Object.assign(make(), { parentElement: make() }), footerStatusEl: make(), pageErrorEl: make(),
+    resultTabsEl: make(), resultSplitter: make(), resultBody: make(), messagesEl: make(), cellPreviewEl: make(), gridPreviewNoteEl: make(), resultPager: make(), pageControls: make(), pageCountEl: make(), pageNumberInput: make(), pageSizeSelect: Object.assign(make(), { parentElement: make() }), footerStatusEl: make(), pagerDividerEl: make(), pageErrorEl: make(),
     // 结果证据面板宿主（工作树新增）；fixture 提供空元素，证据请求走显式拒绝
     resultPanelHost: make(), resultRecoveryTools: make(), resultEvidenceRequest: 0, resultEvidenceLoading: false,
     app: { renderStatus: () => statuses++, notifyToolbar: () => toolbars++, skipNullState: () => false, showGridLinesState: () => false },

@@ -47,6 +47,8 @@ export function openBackupDialog(
   let loading = false;
   let loadError = "";
   let closed = false;
+  // 对话框构造会先聚焦内部控件；必须在构造前记住打开它的元素，关闭后焦点才能回去。
+  const previousFocus = document.activeElement as HTMLElement | null;
 
   // 对象树：分组根行常显、可折叠、可全选；叶子默认全选（备份默认包含全部对象）。
   const tree = new ObjectTree({ ariaLabel: "选择备份对象" });
@@ -224,35 +226,37 @@ export function openBackupDialog(
     sumConsistency.value = consistency.selectedOptions[0]?.textContent || "兼容逻辑转储";
   }
 
-  /** 成功结果使用本次命令回执的实际路径，不推测文件名或查找列表中的最新文件。 */
+  /** 成功结果使用本次命令回执的实际路径，不推测文件名或查找列表中的最新文件。
+   *  布局：左侧图标 + 右侧标题/统计，下方单独一行存储位置；不再占满整页，避免撑出滚动条。 */
   function showSuccess(rows: number, bytes: number, savedPath: string, warnings: string[], restoreSubmitFocus: boolean): void {
     status.classList.add("is-success");
+    const main = document.createElement("div");
+    main.className = "backup-success-main";
     const icon = document.createElement("div");
     icon.className = "backup-success-icon";
     icon.setAttribute("aria-hidden", "true");
     icon.innerHTML = '<svg viewBox="0 0 32 32"><path d="m8 16 5 5 11-11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const text = document.createElement("div");
+    text.className = "backup-success-text";
     const title = document.createElement("div");
     title.className = "backup-success-title";
     title.textContent = "备份成功";
     const result = document.createElement("div");
     result.className = "backup-success-result";
     result.textContent = `已备份 ${rows} 行数据，文件大小 ${(bytes / 1024).toFixed(1)} KB`;
+    text.append(title, result);
+    main.append(icon, text);
     const location = document.createElement("div");
     location.className = "backup-success-location";
     location.textContent = `存储位置：${savedPath}`;
     location.title = savedPath;
-    const hint = document.createElement("div");
-    hint.className = "backup-success-hint";
-    hint.textContent = warnings.length
-      ? `备份文件已保存；${warnings.length} 张表被跳过，见下方警告`
-      : "备份文件已保存，可关闭此窗口";
-    const children: HTMLElement[] = [icon, title, result, location, hint];
-    if (warnings.length) {
+    const children: HTMLElement[] = [main, location];
+    const skipped = Array.isArray(warnings) ? warnings : [];
+    if (skipped.length) {
       const warning = document.createElement("div");
       warning.className = "backup-success-warning";
       warning.setAttribute("role", "alert");
-      warning.textContent = warnings.join("\n");
-      warning.style.cssText = "white-space:pre-wrap;color:var(--warn-600);max-height:120px;overflow:auto;";
+      warning.textContent = `备份文件已保存；${skipped.length} 张表被跳过：\n${skipped.join("\n")}`;
       children.push(warning);
     }
     status.replaceChildren(...children);
@@ -345,7 +349,7 @@ export function openBackupDialog(
   dlg.body.append(wizard.stepsEl, wizard.bodyEl);
   dlg.footer.prepend(...wizard.buttons());
   dlg.body.querySelector<HTMLInputElement>("input")?.focus();
-  accessibleDialog(dlg, "新建备份");
+  accessibleDialog(dlg, "新建备份", previousFocus);
   dlg.onClose(() => { closed = true; });
   return dlg;
 }

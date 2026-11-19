@@ -106,7 +106,54 @@
   transform: translateY(0.5px);
 }
 
+/* 内部遮罩不盖住边框进度，不改变文字胶囊尺寸。 */
+.update-badge .ub-loading {
+  position: absolute;
+  inset: 3px;
+  z-index: 2;
+  display: none;
+  place-items: center;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #1f9254;
+  pointer-events: none;
+}
+
+.update-badge[aria-busy="true"] .ub-loading {
+  display: grid;
+}
+.update-badge[aria-busy="true"] .ub-lb {
+  opacity: 0;
+}
+.update-badge .ub-spinner {
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ub-spin 0.8s linear infinite;
+}
+
+/* 安装过程中保留橘黄语义，与就绪状态一致。 */
+.update-badge[data-phase="applying"] .ub {
+  background: rgba(224, 122, 0, 0.11);
+}
+.update-badge[data-phase="applying"] .ub-track {
+  stroke: rgba(224, 122, 0, 0.46);
+  stroke-width: 1.2;
+}
+.update-badge[data-phase="applying"] .ub-loading {
+  color: #b45f00;
+}
 .update-badge:disabled {
-  cursor: default;
-  opacity: 0.75;
+  cursor: wait;
+  opacity: 1;
+}
+
+@keyframes ub-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-badge .ub-spinner { animation: none; }
 }

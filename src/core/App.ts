@@ -9191,9 +9191,12 @@ class QueryTabView extends TabView {
   private pageControls: HTMLElement;
   private pageCountEl: HTMLElement;
   private pageSizeSelect: HTMLSelectElement;
+  private pagerDividerEl: HTMLElement;
   private footerStatusEl: HTMLElement;
   private pageErrorEl: HTMLElement;
   private pageButtons: HTMLButtonElement[] = [];
+  /** 每页条数候选：固定集合，默认 200（第二项）。 */
+  static readonly PAGE_SIZE_CHOICES: readonly number[] = [100, 200, 500, 1000, 2000];
   private readonly resultPages = new QueryResultPages();
   private controlledResult: QueryResultPanel | null = null;
   private controlledResultContext: QueryResultIpcContext | null = null;
@@ -9526,23 +9529,31 @@ class QueryTabView extends TabView {
     this.footerStatusEl.setAttribute("role", "status");
     this.footerStatusEl.setAttribute("aria-live", "polite");
     this.resultPager.appendChild(this.footerStatusEl);
+    // 每页条数：固定候选下拉（100 / 200 / 500 / 1000 / 2000），单位「条」跟在框后；与右侧翻页控件用竖线分隔。
     const pageSizeLabel = document.createElement("label");
     pageSizeLabel.className = "query-page-size-label"; pageSizeLabel.textContent = "每页";
     this.pageSizeSelect = document.createElement("select");
     this.pageSizeSelect.className = "query-page-size";
     this.pageSizeSelect.setAttribute("aria-label", "每页条数");
     this.pageSizeSelect.title = "切换每页条数并回到首页（读取本次查询缓存，不重新执行 SQL）";
-    for (const size of [200, 500, 1000]) {
+    for (const size of QueryTabView.PAGE_SIZE_CHOICES) {
       const option = document.createElement("option"); option.value = String(size); option.textContent = String(size);
       this.pageSizeSelect.appendChild(option);
     }
     this.pageSizeSelect.addEventListener("change", () => {
       const size = Number(this.pageSizeSelect.value);
-      if (![200, 500, 1000].includes(size) || this.pageSizeSelect.disabled || this.resultBusy() || this.disposed) { this.renderResultPager(); return; }
+      if (!QueryTabView.PAGE_SIZE_CHOICES.includes(size) || this.pageSizeSelect.disabled || this.resultBusy() || this.disposed) { this.renderResultPager(); return; }
       if (size !== this.resultPages.pageLimit(this.activeResultTab)) void this.loadResultPage("first", size);
     });
-    pageSizeLabel.appendChild(this.pageSizeSelect);
+    const pageSizeUnit = document.createElement("span");
+    pageSizeUnit.className = "query-page-size-unit"; pageSizeUnit.textContent = "条";
+    pageSizeLabel.append(this.pageSizeSelect, pageSizeUnit);
     this.resultPager.appendChild(pageSizeLabel);
+    // 每页条数与翻页控件之间的一条竖分隔线，避免两组控件挤在一起。
+    const pagerDivider = document.createElement("span");
+    pagerDivider.className = "query-pager-divider"; pagerDivider.setAttribute("aria-hidden", "true");
+    this.pagerDividerEl = pagerDivider;
+    this.resultPager.appendChild(pagerDivider);
     this.pageErrorEl = document.createElement("span");
     this.pageErrorEl.className = "query-page-error"; this.pageErrorEl.hidden = true;
     this.pageErrorEl.id = `query-page-error-${tab.id}`;
@@ -9782,12 +9793,12 @@ class QueryTabView extends TabView {
     }
   }
 
-  /** 结果页底部统计。 */
-  statusInfo(): { sql: string; pageText: string; elapsed: string } {
+  /** 结果页底部统计：只保留运行耗时、总行数与正在进行的操作，页码由右侧分页控件表达。 */
+  statusInfo(): { sql: string; pageText: string; elapsed: string; progress: string } {
     const set = this.currentSet(), page = this.resultPages.page(this.activeResultTab);
     const result = this.tab.results;
     const receipts = result?.sets.filter(item => !item.columns.length) ?? [];
-    const progress = page?.loading ? " · 正在读取缓存…" : this.exporting ? " · 正在导出完整缓存…" : "";
+    const progress = page?.loading ? "正在读取缓存…" : this.exporting ? "正在导出完整缓存…" : "";
     const affected = receipts.reduce((sum, item) => sum + item.affected, 0);
     const affectedKnown = receipts.every(item => Number.isSafeInteger(item.affected) && item.affected >= 0)
       && Number.isSafeInteger(affected);
@@ -9797,9 +9808,16 @@ class QueryTabView extends TabView {
       : receipts.length ? affectedKnown ? `影响 ${affected} 行` : "影响行数未知" : "";
     return {
       sql: this.editor.getSelection() || this.editor.getSql(),
-      pageText: rows + progress,
+      pageText: rows,
       elapsed: rows && result ? `运行耗时 ${(result.elapsed_ms / 1000).toFixed(3)}s` : "",
+      progress,
     };
+  }
+
+  /** 左下角统计文案：`运行耗时 0.456s（共 100001 行）`；耗时或行数缺一时只显示已有项。 */
+  private footerStatsText(elapsed: string, detail: string, progress = ""): string {
+    const stats = elapsed && detail ? `${elapsed}（${detail}）` : elapsed || detail;
+    return [stats, progress].filter(Boolean).join(" · ");
   }
 
   /** 当前激活的结果集。 */
@@ -10215,6 +10233,7 @@ class QueryTabView extends TabView {
     this.resultPager.style.display = visible || !!info.elapsed ? "flex" : "none";
     this.pageControls.style.display = visible ? "flex" : "none";
     this.pageSizeSelect.parentElement!.style.display = visible ? "inline-flex" : "none";
+    this.pagerDividerEl.style.display = visible ? "" : "none";
     this.resultPager.setAttribute("aria-busy", String(!!page?.loading));
     if (this.serverPage) {
       const size = this.serverPage.limit;
@@ -10240,8 +10259,8 @@ class QueryTabView extends TabView {
         ? `共 ${pageCount} 页；输入页码后按 Enter 或移开焦点跳转`
         : "服务器分页总数统计中，返回后可跳页");
       const rowsText = this.serverPageTotal !== null ? `共 ${this.serverPageTotal} 行`
-        : this.serverPageTotalCounting ? "总数统计中…" : "总行数未知";
-      this.footerStatusEl.textContent = [info.elapsed, `第 ${pageNo} 页 · 本页 ${page?.total ?? 0} 行（${rowsText}）`].filter(Boolean).join(" | ");
+        : this.serverPageTotalCounting ? `本页 ${page?.total ?? 0} 行（总数统计中…）` : `本页 ${page?.total ?? 0} 行（总行数未知）`;
+      this.footerStatusEl.textContent = this.footerStatsText(info.elapsed, rowsText, info.progress);
       this.pageButtons.forEach((button, index) => {
         button.disabled = busy || (index <= 1 ? !hasPrev : index === 3 ? !totalKnown || onLastPage : !hasNext);
         button.title = index === 3
@@ -10259,7 +10278,7 @@ class QueryTabView extends TabView {
     const count = this.resultPages.pageCount(this.activeResultTab);
     this.pageCountEl.textContent = `/ ${count} 页`;
     this.pageNumberInput.setAttribute("aria-description", `共 ${count} 页；输入页码后按 Enter 或移开焦点跳转`);
-    this.footerStatusEl.textContent = [info.elapsed, info.pageText].filter(Boolean).join(" | ");
+    this.footerStatusEl.textContent = this.footerStatsText(info.elapsed, info.pageText, info.progress);
     this.pageButtons.forEach((button, index) => {
       // 首屏0行时允许首页读取重试（超大单行也可直接导出）。
       button.disabled = blocked || page!.total === 0 || (index <= 1 ? page!.offset === 0 && page!.rows.length > 0 : index === 2

@@ -1,7 +1,7 @@
 //! 原生表工作流。目录、CAS、DDL、验证始终使用同一物理会话。
 use anyhow::{anyhow, ensure, Result};
 use sqlx::{Row, Column, ValueRef, Connection, Executor};
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, sync::Arc, time::{Duration,Instant}};
 use sha2::{Digest, Sha256};
 use futures::TryStreamExt;
 use crate::{db::{self,Db}, models::{DbKind,MultiResult}, execution::{self,Binding,Entry}, manual_transaction::OrdinaryLease, error::{AppError,CmdResult}, design::{self,TableDesign,DesignStep,DesignStepResult,DesignReceipt}, table_workflows::{self as workflow,Stored,TableWork,BoundResult,TableDesignReceipt,TableOperationReceipt}};
@@ -10,37 +10,44 @@ use crate::{db::{self,Db}, models::{DbKind,MultiResult}, execution::{self,Bindin
 pub(crate) type Record=BTreeMap<String,Option<String>>;
 pub(crate) fn get<'a>(r:&'a Record,k:&str)->Result<&'a str>{r.get(k).and_then(|v|v.as_deref()).ok_or_else(||anyhow!("TABLE_METADATA_REQUIRED: {k}"))}
 pub(crate) fn opt(r:&Record,k:&str)->Result<Option<String>>{r.get(k).cloned().ok_or_else(||anyhow!("TABLE_METADATA_FIELD_MISSING: {k}"))}
-pub(crate) enum Session {Mysql(sqlx::pool::PoolConnection<sqlx::MySql>,Option<String>),Pg(sqlx::pool::PoolConnection<sqlx::Postgres>,Option<metadata::PgEvidence>)}
+pub(crate) enum Session {Mysql(sqlx::pool::PoolConnection<sqlx::MySql>,Option<String>,Option<metadata::MysqlEvidence>),Pg(sqlx::pool::PoolConnection<sqlx::Postgres>,Option<metadata::PgEvidence>)}
 impl Session {
     pub(crate) fn kind(&self)->DbKind{DbKind::of(if matches!(self,Self::Mysql(..)){"mysql"}else{"postgresql"})}
     pub(crate) async fn acquire(db:&Db)->Result<Self>{
     let __sql_history_context = crate::sql_history::db_context(db);
-    crate::sql_history::scope(__sql_history_context, async {match db{Db::Mysql(p)=>Ok(Self::Mysql(p.acquire().await?,None)),Db::Postgres(p)=>Ok(Self::Pg(p.acquire().await?,None)),_=>Err(anyhow!("TABLE_NATIVE_ADAPTER_UNSUPPORTED"))}
+    crate::sql_history::scope(__sql_history_context, async {match db{Db::Mysql(p)=>Ok(Self::Mysql(p.acquire().await?,None,None)),Db::Postgres(p)=>Ok(Self::Pg(p.acquire().await?,None)),_=>Err(anyhow!("TABLE_NATIVE_ADAPTER_UNSUPPORTED"))}
     }).await
 }
     /// PG 方言能力探测结果按物理会话缓存：同一 owned 会话里保存表设计会多次 snapshot
     /// （before/每步 DDL 后/after），重复探测 pg_catalog 没有意义。
     pub(crate) fn pg_evidence(&self)->Option<metadata::PgEvidence>{match self{Self::Pg(_,e)=>*e,_=>None}}
     pub(crate) fn set_pg_evidence(&mut self,e:metadata::PgEvidence){if let Self::Pg(_,slot)=self{*slot=Some(e);}}
+    // 每次 acquire 都建立新证据槽；不把能力缓存带到下一次租用或另一端点。
+    pub(crate) fn mysql_evidence(&self)->Option<metadata::MysqlEvidence>{match self{Self::Mysql(_,_,e)=>*e,_=>None}}
+    pub(crate) fn set_mysql_evidence(&mut self,e:metadata::MysqlEvidence){if let Self::Mysql(_,_,slot)=self{*slot=Some(e);}}
     /// `SET SESSION` 走文本协议：TiDB 等方言对绑定参数的 SET 支持不一致，sql_mode 值来自服务端且已转义。
-    async fn setup(&mut self)->Result<()>{if let Self::Mysql(c,mode)=self{let old:String=crate::sql_history::query_scalar("SELECT @@session.sql_mode").fetch_one(&mut **c).await?;*mode=Some(old.clone());if !old.split(',').any(|v|v=="NO_BACKSLASH_ESCAPES"){let wanted=if old.is_empty(){"NO_BACKSLASH_ESCAPES".into()}else{format!("{old},NO_BACKSLASH_ESCAPES")};(&mut **c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&wanted)).as_str()).await?;}}Ok(())}
+    async fn setup(&mut self)->Result<()>{if let Self::Mysql(c,mode,_)=self{let old:String=crate::sql_history::query_scalar("SELECT @@session.sql_mode").fetch_one(&mut **c).await?;*mode=Some(old.clone());if !old.split(',').any(|v|v=="NO_BACKSLASH_ESCAPES"){let wanted=if old.is_empty(){"NO_BACKSLASH_ESCAPES".into()}else{format!("{old},NO_BACKSLASH_ESCAPES")};(&mut **c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&wanted)).as_str()).await?;}}Ok(())}
+    async fn restore_mode(&mut self)->Result<()>{if let Self::Mysql(c,Some(mode),_)=self{(&mut **c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(mode)).as_str()).await?;}Ok(())}
     pub(crate) async fn rows(&mut self,sql:&str)->Result<Vec<Record>>{
         macro_rules! read {($conn:expr,$extra:ty)=>{{let rows=crate::sql_history::query(sql).fetch_all(&mut **$conn).await?;let mut out=Vec::new();for row in rows{let mut r=Record::new();for (i,c) in row.columns().iter().enumerate(){let v=if row.try_get_raw(i)?.is_null(){None}else if let Ok(s)=row.try_get::<String,_>(i){Some(s)}else if let Ok(bytes)=row.try_get::<Vec<u8>,_>(i){Some(String::from_utf8(bytes).map_err(|_|anyhow!("TABLE_METADATA_UTF8_INVALID: {}",c.name()))?)}else if let Ok(n)=row.try_get::<i64,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<i32,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<$extra,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<bool,_>(i){Some(if n{"1"}else{"0"}.into())}else if let Ok(n)=row.try_get::<chrono::NaiveDateTime,_>(i){Some(n.to_string())}else if let Ok(n)=row.try_get::<chrono::DateTime<chrono::Utc>,_>(i){Some(n.naive_utc().to_string())}else{return Err(anyhow!("TABLE_METADATA_DECODE_FAILED: {}",c.name()));};ensure!(r.insert(c.name().to_string(),v).is_none(),"TABLE_METADATA_DUPLICATE_FIELD");}out.push(r);}Ok(out)}};}
-        match self{Self::Mysql(c,_)=>read!(c,u64),Self::Pg(c,_)=>read!(c,i16)}
+        match self{Self::Mysql(c,_,_)=>read!(c,u64),Self::Pg(c,_)=>read!(c,i16)}
     }
     /// MySQL 协议族的只读快照事务。
     ///
     /// TiDB 只把 `START TRANSACTION READ ONLY` 当 noop 兼容占位（默认 1235），
     /// 该方言降级为普通事务；一致性仍由 MVCC 快照保证，本路径只发 SELECT/SHOW。
     async fn begin_read(&mut self)->Result<()>{
-        let server=self.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
-        if db::mysql_read_only_unsupported(&server,""){return self.execute("START TRANSACTION").await.map(|_|());}
+        if metadata::MysqlEvidence::probe(self).await?.read_only_unsupported(){return self.execute("START TRANSACTION").await.map(|_|());}
         self.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").await?;self.execute("START TRANSACTION READ ONLY").await?;Ok(())
     }
     /// MySQL 侧走文本协议：START TRANSACTION / LOCK TABLES / UNLOCK TABLES 不在服务端预处理白名单内（1295）。
-    pub(crate) async fn execute(&mut self,sql:&str)->Result<u64>{match self{Self::Mysql(c,_)=>Ok((&mut **c).execute(sql).await?.rows_affected()),Self::Pg(c,_)=>Ok(crate::sql_history::query(sql).execute(&mut **c).await?.rows_affected())}}
+    pub(crate) async fn execute(&mut self,sql:&str)->Result<u64>{match self{Self::Mysql(c,_,_)=>Ok((&mut **c).execute(sql).await?.rows_affected()),Self::Pg(c,_)=>Ok(crate::sql_history::query(sql).execute(&mut **c).await?.rows_affected())}}
     pub(crate) async fn scalar(&mut self,sql:&str)->Result<String>{let r=self.rows(sql).await?;ensure!(r.len()==1&&r[0].len()==1,"TABLE_METADATA_SCALAR_REQUIRED");r[0].values().next().unwrap().clone().ok_or_else(||anyhow!("TABLE_METADATA_NULL_SCALAR"))}
-    pub(crate) async fn release(self,destroy:bool)->Result<()>{match self{Self::Mysql(mut c,mode)=>{if destroy{c.close_on_drop();c.close().await?;}else{if let Some(mode)=mode{if let Err(e)=(&mut *c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&mode)).as_str()).await{c.close_on_drop();let _=c.close().await;return Err(e.into());}}c.return_to_pool().await;}},Self::Pg(mut c,_)=>{if destroy{c.close_on_drop();c.close().await?;}else{c.return_to_pool().await;}}}Ok(())}
+    pub(crate) async fn release(self,destroy:bool)->Result<()>{match self{Self::Mysql(mut c,mode,_)=>{if destroy{c.close_on_drop();c.close().await?;}else{if let Some(mode)=mode{if let Err(e)=(&mut *c).execute(format!("SET SESSION sql_mode={}",db::quote_literal(&mode)).as_str()).await{c.close_on_drop();let _=c.close().await;return Err(e.into());}}c.return_to_pool().await;}},Self::Pg(mut c,_)=>{if destroy{c.close_on_drop();c.close().await?;}else{c.return_to_pool().await;}}}Ok(())}
+    // detach 后立即 drop 原生连接，直接关闭 socket；不能只依赖 PoolConnection::Drop
+    // 启动的后台 graceful close，否则 ordinary lease 会早于真实物理销毁释放。
+    fn destroy_now(self){match self{Self::Mysql(c,_,_)=>drop(c.detach()),Self::Pg(c,_)=>drop(c.detach())}}
+    async fn return_clean(self){match self{Self::Mysql(mut c,_,_)=>c.return_to_pool().await,Self::Pg(mut c,_)=>c.return_to_pool().await}}
     async fn digest(&mut self,before:&Stored,table:&str)->Result<(u64,String)>{
         let kind=self.kind();let full=db::qualified(&kind,&before.public.schema.database,table);
         let mut fields=Vec::new();
@@ -49,7 +56,7 @@ impl Session {
         let sql=format!("SELECT {} FROM {full} ORDER BY {}",fields.join(","),(1..=fields.len()).map(|i|i.to_string()).collect::<Vec<_>>().join(","));
         let mut hash=Sha256::new();let mut count=0u64;
         macro_rules! stream {($c:expr)=>{{let mut rows=crate::sql_history::query(&sql).fetch(&mut **$c);while let Some(row)=rows.try_next().await?{for i in 0..fields.len(){let s:String=row.try_get(i)?;hash.update((s.len() as u64).to_le_bytes());hash.update(s.as_bytes());}count+=1;}}};}
-        match self{Self::Mysql(c,_)=>stream!(c),Self::Pg(c,_)=>stream!(c)}hash.update(count.to_le_bytes());Ok((count,format!("{:x}",hash.finalize())))
+        match self{Self::Mysql(c,_,_)=>stream!(c),Self::Pg(c,_)=>stream!(c)}hash.update(count.to_le_bytes());Ok((count,format!("{:x}",hash.finalize())))
     }
 }
 #[derive(Clone,serde::Serialize)] pub(crate) struct NativeMetadata {
@@ -58,15 +65,61 @@ impl Session {
 pub(crate) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)->Result<Stored>{metadata::snapshot(s,b,table,readonly).await}
 pub(crate) fn design_steps(b:&Stored,d:&TableDesign)->Result<(Vec<DesignStep>,bool)>{plan::design_steps(b,d)}
 pub(crate) fn operation_steps(b:&Stored,o:&workflow::TableOperation)->Result<Vec<DesignStep>>{plan::operation_steps(b,o)}
+#[derive(Clone,Copy)]
+struct ReadBudget{acquire:Duration,read:Duration,cleanup:Duration}
+const READ_BUDGET:ReadBudget=ReadBudget{acquire:Duration::from_secs(15),read:Duration::from_secs(30),cleanup:Duration::from_secs(5)};
+// guard 先于 lease 析构。任何提前返回、取消或 panic 都隔离/销毁尚未证明清洁的连接。
+struct OwnedReadSession(Option<Session>);
+impl OwnedReadSession{
+    fn session(&mut self)->&mut Session{self.0.as_mut().expect("owned read session")}
+    async fn return_clean(&mut self){self.0.take().expect("owned read session").return_clean().await;}
+}
+impl Drop for OwnedReadSession{fn drop(&mut self){if let Some(s)=self.0.take(){s.destroy_now();}}}
+async fn read_complete(s:&mut Session,b:&Binding,table:&str,readonly:bool)->Result<Stored>{
+    s.setup().await?;
+    if matches!(s,Session::Pg(..)){s.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY").await?;}
+    else{ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");s.begin_read().await?;}
+    // 同事务 MDL/MVCC 固定对象，不能拆成多个池连接并发读目录。
+    s.rows(&format!("SELECT * FROM {} LIMIT 0",db::qualified(&s.kind(),&b.namespace,table))).await?;
+    snapshot(s,b,table,readonly).await
+}
 pub(crate) async fn read_owned(db:Arc<Db>,b:Binding,table:String,readonly:bool,ordinary:OrdinaryLease)->CmdResult<Stored>{
+    read_owned_with_budget(db,b,table,readonly,ordinary,READ_BUDGET).await
+}
+async fn read_owned_with_budget(db:Arc<Db>,b:Binding,table:String,readonly:bool,ordinary:OrdinaryLease,budget:ReadBudget)->CmdResult<Stored>{
     let __sql_history_context = crate::sql_history::db_context(db.as_ref());
     crate::sql_history::scope(__sql_history_context, async {
-    crate::sql_history::spawn(async move{let _lease=ordinary;let mut s=Session::acquire(&db).await.map_err(AppError::from)?;let pg=matches!(s,Session::Pg(..));
-        let result:Result<Stored>=async{s.setup().await?;if pg{s.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY").await?;}else{ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");s.begin_read().await?;}
-            // MySQL MDL 在事务存续期间固定对象，防止 SHOW CREATE 与目录混代。
-            s.rows(&format!("SELECT * FROM {} LIMIT 0",db::qualified(&s.kind(),&b.namespace,&table))).await?;snapshot(&mut s,&b,&table,readonly).await}.await;
-        let rollback=s.execute("ROLLBACK").await;let destroy=rollback.is_err();s.release(destroy).await.map_err(|e|unknown(format!("TABLE_METADATA_CLOSE_UNKNOWN: {e:#}")))?;rollback.map_err(|e|unknown(format!("TABLE_METADATA_ROLLBACK_UNKNOWN: {e:#}")))?;result.map_err(AppError::from)
-    }).await.map_err(|e|unknown(format!("TABLE_METADATA_TASK_INTERRUPTED: {e}")))?
+    // 调用方 future 被丢弃时只关闭 interest，不 abort 资源 owner；owner 自行销毁连接后才释放 lease。
+    let (mut interest,caller_alive)=tokio::sync::oneshot::channel::<()>();
+    let worker=crate::sql_history::spawn(async move{
+        let _lease=ordinary;
+        let acquired=tokio::select!{biased;
+            _=interest.closed()=>return Err(AppError::coded("TABLE_METADATA_CANCELLED_BEFORE_ACQUIRE","完整表设计读取已取消，尚未取得会话")),
+            r=tokio::time::timeout(budget.acquire,Session::acquire(&db))=>r,
+        };
+        let s=acquired.map_err(|_|AppError::coded("TABLE_METADATA_ACQUIRE_TIMEOUT",format!("获取完整表设计会话超时（{} ms），未发布基线",budget.acquire.as_millis())))?.map_err(AppError::from)?;
+        let mut owned=OwnedReadSession(Some(s));
+        let result=tokio::select!{biased;
+            _=interest.closed()=>return Err(unknown("TABLE_METADATA_CANCELLED: 会话已隔离并销毁；服务端回滚效果未确认，未发布基线")),
+            r=tokio::time::timeout(budget.read,read_complete(owned.session(),&b,&table,readonly))=>r,
+        }.map_err(|_|unknown(format!("TABLE_METADATA_READ_TIMEOUT: 完整读取超时（{} ms）；会话已隔离并销毁，服务端回滚效果未确认，未发布基线",budget.read.as_millis())))?;
+        let cleanup=async{
+            owned.session().execute("ROLLBACK").await.map_err(|e|unknown(format!("TABLE_METADATA_ROLLBACK_UNKNOWN: {e:#}")))?;
+            owned.session().restore_mode().await.map_err(|e|unknown(format!("TABLE_METADATA_SQL_MODE_UNKNOWN: {e:#}")))?;
+            // SQLx 0.8 的 return_to_pool 将 raw 移入 Floating；取消该 future 同步 drop raw，
+            // 不后台归还原连接。超时包括 ping/after_release/池维护，lease 持有到 future 析构。
+            owned.return_clean().await;
+            Ok::<(),AppError>(())
+        };
+        tokio::select!{biased;
+            _=interest.closed()=>return Err(unknown("TABLE_METADATA_CLEANUP_CANCELLED: 会话未安全退回则隔离并销毁；服务端回滚效果未确认，未发布基线")),
+            r=tokio::time::timeout(budget.cleanup,cleanup)=>r,
+        }.map_err(|_|unknown(format!("TABLE_METADATA_CLEANUP_TIMEOUT: 清理超时（{} ms）；会话未安全退回则隔离并销毁，未发布基线",budget.cleanup.as_millis())))??;
+        result.map_err(AppError::from)
+    });
+    let result=worker.await.map_err(|e|unknown(format!("TABLE_METADATA_TASK_INTERRUPTED: {e}")))?;
+    drop(caller_alive);
+    result
 
     }).await
 }
@@ -93,8 +146,7 @@ async fn apply(s:&mut Session,b:&Binding,entry:&Arc<Entry>,work:&TableWork,steps
         ensure!(s.scalar("SELECT @@session.autocommit").await?=="1","TABLE_SESSION_TRANSACTION_ACTIVE");
         // TiDB 的 GET_LOCK/LOCK TABLES 只是 noop 兼容功能，拿不到任何并发证明；
         // 必须在发送第一条锁语句和 DDL 之前拒绝，不能先 GET_LOCK 再失败。
-        let server=s.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
-        if db::mysql_noop_lock_unsupported(&server,""){return Err(AppError::coded("TABLE_MYSQL_LOCK_UNSUPPORTED","TiDB 的 GET_LOCK/LOCK TABLES 只是 noop 兼容功能，无法证明并发安全；表结构保存已拒绝，读取与预览仍可用").into());}
+        if metadata::MysqlEvidence::probe(s).await?.read_only_unsupported(){return Err(AppError::coded("TABLE_MYSQL_LOCK_UNSUPPORTED","TiDB 的 GET_LOCK/LOCK TABLES 只是 noop 兼容功能，无法证明并发安全；表结构保存已拒绝，读取与预览仍可用").into());}
         let lock=plan::lock_name(b,table);ensure!(s.scalar(&format!("SELECT GET_LOCK({},10)",db::quote_literal(&lock))).await?=="1","TABLE_CAS_LOCK_BUSY");
         // LOCK TABLES 跨隐式提交持有服务端元数据写锁；同会话每条 DDL 后重新核验完整定义。
         s.execute(&format!("LOCK TABLES {full} WRITE")).await?;
@@ -159,3 +211,5 @@ pub(crate) async fn run(db:Arc<Db>,entry:Arc<Entry>,ordinary:OrdinaryLease,work:
 
 #[cfg(test)]
 #[path="table_workflows_native_tests.rs"] mod tests;
+#[cfg(test)]
+#[path="table_workflows_native_read_tests.rs"] mod read_tests;

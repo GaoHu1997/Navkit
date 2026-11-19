@@ -14,18 +14,29 @@ fn undefined_column(e:&anyhow::Error)->bool{
 /// MySQL 协议族方言能力。MySQL 8 有 `@@server_uuid` 与 `information_schema.INNODB_TABLES`；
 /// MariaDB 用 `INNODB_SYS_TABLES`；TiDB 用 `TABLES.TIDB_TABLE_ID` 且没有触发器。
 /// `server_uuid` 是兼容变量，不能据此把 TiDB 当成原生 MySQL。
-struct MysqlEvidence{tidb:bool,server_uuid:bool}
+#[derive(Clone,Copy)]
+pub(crate) struct MysqlEvidence{tidb:bool,server_uuid:bool,server_id:bool}
 impl MysqlEvidence{
-    async fn probe(s:&mut Session)->Result<Self>{
+    pub(crate) async fn probe(s:&mut Session)->Result<Self>{
+        if let Some(e)=s.mysql_evidence(){return Ok(e);}
         let server=s.scalar("SELECT CONCAT(COALESCE(@@version,''),' ',COALESCE(@@version_comment,''))").await?;
-        Ok(Self{tidb:db::mysql_read_only_unsupported(&server,""),server_uuid:!s.rows("SHOW VARIABLES LIKE 'server_uuid'").await?.is_empty()})
+        let server_uuid=!s.rows("SHOW VARIABLES LIKE 'server_uuid'").await?.is_empty();
+        let server_id=!server_uuid&&!s.rows("SHOW VARIABLES LIKE 'server_id'").await?.is_empty();
+        let evidence=Self{tidb:db::mysql_read_only_unsupported(&server,""),server_uuid,server_id};
+        s.set_mysql_evidence(evidence);
+        Ok(evidence)
     }
+    pub(crate) fn read_only_unsupported(&self)->bool{self.tidb}
     fn requires_innodb_identity(&self)->bool{!self.tidb&&self.server_uuid}
 }
 /// TiDB 的 INNODB_* 只是兼容目录，不能用其空行或占位 ID 证明表身份。
-/// 识别 TiDB 后只查官方 TABLES.TIDB_TABLE_ID；其余方言按真实 InnoDB 目录逐个尝试。
-fn mysql_table_id_sqls(e:&MysqlEvidence,ns:&str,tn:&str,raw:&str)->Vec<String>{
-    if e.tidb{return vec![format!("SELECT CAST(TIDB_TABLE_ID AS CHAR) AS id FROM information_schema.TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}")];}
+/// TiDB 表 ID 随属性一次读取；其余方言按真实 InnoDB 目录逐个尝试。
+fn mysql_table_sql(e:&MysqlEvidence,ns:&str,tn:&str)->String{
+    let id=if e.tidb{", CAST(TIDB_TABLE_ID AS CHAR) AS id"}else{""};
+    format!("SELECT TABLE_TYPE AS kind, ENGINE AS engine, TABLE_COLLATION AS collation, ROW_FORMAT AS row_format, CREATE_OPTIONS AS extra, TABLE_COMMENT AS comment, CAST(CREATE_TIME AS CHAR) AS created{id} FROM information_schema.TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}")
+}
+fn mysql_table_id_sqls(e:&MysqlEvidence,raw:&str)->Vec<String>{
+    if e.tidb{return vec![];}
     vec![
         format!("SELECT CAST(TABLE_ID AS CHAR) AS id FROM information_schema.INNODB_TABLES WHERE NAME={}",db::quote_literal(raw)),
         format!("SELECT CAST(ID AS CHAR) AS id FROM information_schema.INNODB_SYS_TABLES WHERE NAME={}",db::quote_literal(raw)),
@@ -80,17 +91,23 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
         if evidence.tidb{dialect_write_reason=Some("TiDB 的 GET_LOCK/RELEASE_LOCK/LOCK TABLES 只是 noop 兼容功能，无法证明并发安全；表结构保存明确拒绝，读取与复制预览仍可用".into());}
         // MySQL 8 用 @@server_uuid；MariaDB/TiDB/OceanBase 缺少该变量时退到 @@server_id，仍缺则留空，
         // 身份由 host/port/db/sql_mode 等其余列共同构成，不能因方言缺一个兼容变量就拒绝读取。
-        let server=if evidence.server_uuid{"@@server_uuid"}else if !s.rows("SHOW VARIABLES LIKE 'server_id'").await?.is_empty(){"CAST(@@server_id AS CHAR)"}else{"''"};
+        let server=if evidence.server_uuid{"@@server_uuid"}else if evidence.server_id{"CAST(@@server_id AS CHAR)"}else{"''"};
         let identity=s.rows(&format!("SELECT {server} AS server, @@hostname AS host, @@port AS port, DATABASE() AS db, @@sql_mode AS mode, @@lower_case_table_names AS names, @@session.character_set_client AS charset_client, @@session.collation_connection AS collation_connection")).await?;
         ensure!(identity.len()==1&&get(&identity[0],"db")?==b.namespace,"TABLE_NAMESPACE_CHANGED");
-        // SHOW GRANTS 本身不会把无 TRIGGER 权限误报为空触发器目录；TiDB 没有触发器，
-        // 其 TRIGGERS 目录恒为空是方言事实，不要求 TRIGGER 权限才能发布完整定义。
-        let grants=s.rows("SHOW GRANTS").await?;
-        let schema_scope=format!("{}.*",ident(&k,&b.namespace));let table_scope=full.clone();
-        let visible=grants.iter().flat_map(|r|r.values().flatten()).any(|g|{let upper=g.to_ascii_uppercase();let privilege=upper.split(" ON ").next().unwrap_or("");(privilege.contains("ALL PRIVILEGES")||privilege.split([',',' ']).any(|p|p=="TRIGGER"))&&(g.contains(" ON *.* TO ")||g.contains(&format!(" ON {schema_scope} TO "))||g.contains(&format!(" ON {table_scope} TO ")))});
-        if evidence.tidb{limitations.push("TiDB 不支持触发器；触发器目录按方言事实为空".into());}else{ensure!(visible,"TABLE_TRIGGER_VISIBILITY_UNPROVEN: 需要可证明的直接 TRIGGER/ALL 权限；角色授权目录未认证，不能发布空触发器");}
-        let table_rows=s.rows(&format!("SELECT TABLE_TYPE AS kind, ENGINE AS engine, TABLE_COLLATION AS collation, ROW_FORMAT AS row_format, CREATE_OPTIONS AS extra, TABLE_COMMENT AS comment, CAST(CREATE_TIME AS CHAR) AS created FROM information_schema.TABLES WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn}")).await?;
-        ensure!(table_rows.len()==1&&get(&table_rows[0],"kind")?=="BASE TABLE","TABLE_BASE_TABLE_REQUIRED");let mut tr=table_rows[0].clone();tr.insert("session_sql_mode".into(),Some(get(&identity[0],"mode")?.into()));
+        // 只有版本证实无触发器的 TiDB 可以跳过权限/目录；其余厂商保持直接权限门禁。
+        if evidence.tidb{limitations.push("TiDB 不支持触发器；触发器目录按方言事实为空".into());}else{
+            let grants=s.rows("SHOW GRANTS").await?;
+            let schema_scope=format!("{}.*",ident(&k,&b.namespace));let table_scope=full.clone();
+            let visible=grants.iter().flat_map(|r|r.values().flatten()).any(|g|{let upper=g.to_ascii_uppercase();let privilege=upper.split(" ON ").next().unwrap_or("");(privilege.contains("ALL PRIVILEGES")||privilege.split([',',' ']).any(|p|p=="TRIGGER"))&&(g.contains(" ON *.* TO ")||g.contains(&format!(" ON {schema_scope} TO "))||g.contains(&format!(" ON {table_scope} TO ")))});
+            ensure!(visible,"TABLE_TRIGGER_VISIBILITY_UNPROVEN: 需要可证明的直接 TRIGGER/ALL 权限；角色授权目录未认证，不能发布空触发器");
+        }
+        let table_rows=s.rows(&mysql_table_sql(&evidence,&ns,&tn)).await?;
+        let mut table_id=if evidence.tidb{mysql_table_id(&table_rows)?}else{None};
+        ensure!(!evidence.tidb||table_id.is_some(),"TABLE_MYSQL_PHYSICAL_IDENTITY_UNPROVEN: TiDB 未返回 TABLES.TIDB_TABLE_ID，无法证明物理表身份");
+        ensure!(table_rows.len()==1&&get(&table_rows[0],"kind")?=="BASE TABLE","TABLE_BASE_TABLE_REQUIRED");let mut tr=table_rows[0].clone();
+        // 表 ID 仍只参与物理身份；不要因合并 SQL 改变既有定义基线的 hash 输入。
+        if evidence.tidb{tr.remove("id");}
+        tr.insert("session_sql_mode".into(),Some(get(&identity[0],"mode")?.into()));
         mysql_session_environment(&mut tr,&identity[0])?;
         let create=s.rows(&format!("SHOW CREATE TABLE {full}")).await?;ensure!(create.len()==1,"TABLE_DEFINITION_UNKNOWN");let ddl=get(&create[0],"Create Table")?.to_string();
         let cr=s.rows(&format!("SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IF(IS_NULLABLE='YES',1,0) AS nullable, COLUMN_DEFAULT AS `default`, IF(EXTRA LIKE '%auto_increment%',1,0) AS auto, COLUMN_COMMENT AS comment, EXTRA AS extra, GENERATION_EXPRESSION AS `generated`, COLLATION_NAME AS collation, ORDINAL_POSITION AS ordinal FROM information_schema.COLUMNS WHERE TABLE_SCHEMA={ns} AND TABLE_NAME={tn} ORDER BY ORDINAL_POSITION")).await?;
@@ -103,14 +120,13 @@ pub(super) async fn snapshot(s:&mut Session,b:&Binding,table:&str,readonly:bool)
         let fkrows=s.rows(&format!("SELECT k.CONSTRAINT_NAME AS name,k.COLUMN_NAME AS col,k.REFERENCED_TABLE_NAME AS ref_table,k.REFERENCED_TABLE_SCHEMA AS ref_schema,k.REFERENCED_COLUMN_NAME AS ref_col,r.UPDATE_RULE AS on_update,r.DELETE_RULE AS on_delete FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME AND r.TABLE_NAME=k.TABLE_NAME WHERE k.TABLE_SCHEMA={ns} AND k.TABLE_NAME={tn} AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME,k.ORDINAL_POSITION")).await?;
         let mut fks=BTreeMap::<String,ForeignKeyInfo>::new();for r in &fkrows{let name=get(r,"name")?.into();let f=fks.entry(name).or_insert(ForeignKeyInfo{name:get(r,"name")?.into(),columns:vec![],ref_table:get(r,"ref_table")?.into(),ref_schema:Some(get(r,"ref_schema")?.into()),ref_columns:vec![],on_update:Some(get(r,"on_update")?.into()),on_delete:Some(get(r,"on_delete")?.into())});f.columns.push(get(r,"col")?.into());f.ref_columns.push(get(r,"ref_col")?.into());}
         let checks=crate::table_objects::extract_checks(&ddl)?;
-        let triggerrows=s.rows(&format!("SELECT TRIGGER_NAME AS name,ACTION_TIMING AS timing,EVENT_MANIPULATION AS event,ACTION_STATEMENT AS body,ACTION_ORIENTATION AS orientation,ACTION_ORDER AS ordering,SQL_MODE AS mode,DEFINER AS definer,CHARACTER_SET_CLIENT AS charset,COLLATION_CONNECTION AS collation FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA={ns} AND EVENT_OBJECT_TABLE={tn} ORDER BY ACTION_TIMING,EVENT_MANIPULATION,ACTION_ORDER,TRIGGER_NAME")).await?;
+        let triggerrows=if evidence.tidb{Vec::new()}else{s.rows(&format!("SELECT TRIGGER_NAME AS name,ACTION_TIMING AS timing,EVENT_MANIPULATION AS event,ACTION_STATEMENT AS body,ACTION_ORIENTATION AS orientation,ACTION_ORDER AS ordering,SQL_MODE AS mode,DEFINER AS definer,CHARACTER_SET_CLIENT AS charset,COLLATION_CONNECTION AS collation FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA={ns} AND EVENT_OBJECT_TABLE={tn} ORDER BY ACTION_TIMING,EVENT_MANIPULATION,ACTION_ORDER,TRIGGER_NAME")).await?};
         let mut raw_triggers=Vec::new();let mut triggers=Vec::new();for r in triggerrows{let mut r=r;let name=get(&r,"name")?.to_string();let raw=s.rows(&format!("SHOW CREATE TRIGGER {}",db::qualified(&k,&b.namespace,&name))).await?;ensure!(raw.len()==1,"TABLE_TRIGGER_DEFINITION_UNKNOWN");let statement=get(&raw[0],"SQL Original Statement")?.to_string();r.insert("definition".into(),Some(statement.clone()));triggers.push(TriggerInfo{name,timing:Some(get(&r,"timing")?.into()),event:Some(get(&r,"event")?.into()),statement});raw_triggers.push(r);}
         let options=TableOptionsDesign{engine:Some(get(&tr,"engine")?.into()),charset:Some(get(&tr,"collation")?.split('_').next().ok_or_else(||anyhow!("TABLE_CHARSET_UNKNOWN"))?.into()),collation:Some(get(&tr,"collation")?.into()),row_format:Some(get(&tr,"row_format")?.into()),..Default::default()};
         let objects=ConstraintSet{checks,triggers,completeness:"complete".into(),limitations:vec![],table_definition:Some(ddl.clone())};
         // 物理表 ID 是“表未被 DROP+CREATE 重建”的证据；方言没有该证据时降级为目录身份并保留限制。
         let physical=crate::object_catalog::revision(&identity);
-        let mut table_id=None;
-        for sql in mysql_table_id_sqls(&evidence,&ns,&tn,&format!("{}/{}",b.namespace,table)){
+        for sql in mysql_table_id_sqls(&evidence,&format!("{}/{}",b.namespace,table)){
             match s.rows(&sql).await{
                 Ok(rows)=>match mysql_table_id(&rows)?{Some(id)=>{table_id=Some(id);break;},None=>continue},
                 Err(e) if missing_relation(&e)||undefined_column(&e)=>continue,
@@ -251,12 +267,13 @@ fn default_expression(part:&str)->Result<Option<String>>{
     #[test]fn mysql_table_id_sqls_use_official_catalog(){
         // TiDB 的物理表 ID 在 information_schema.TABLES.TIDB_TABLE_ID，
         // 不是兼容的 INNODB_* 或旧 TIDB 目录；混用会让 TiDB 表设计读不出身份。
-        let tidb=mysql_table_id_sqls(&MysqlEvidence{tidb:true,server_uuid:true},"`db`","`t`","db/t");
-        assert_eq!(tidb.len(),1);
-        assert!(tidb[0].contains("information_schema.TABLES")&&tidb[0].contains("TIDB_TABLE_ID"));
-        assert!(tidb[0].contains("TABLE_SCHEMA=`db`")&&tidb[0].contains("TABLE_NAME=`t`"));
-        assert!(!tidb[0].contains("INNODB")&&!tidb[0].contains(concat!("TIDB","_TABLES")));
-        let innodb=mysql_table_id_sqls(&MysqlEvidence{tidb:false,server_uuid:true},"`db`","`t`","db/t");
+        let evidence=MysqlEvidence{tidb:true,server_uuid:true,server_id:false};
+        let tidb=mysql_table_sql(&evidence,"'db'","'t'");
+        assert!(tidb.contains("information_schema.TABLES")&&tidb.contains("TIDB_TABLE_ID"));
+        assert!(tidb.contains("TABLE_SCHEMA='db'")&&tidb.contains("TABLE_NAME='t'"));
+        assert!(!tidb.contains("INNODB")&&!tidb.contains(concat!("TIDB","_TABLES")));
+        assert!(mysql_table_id_sqls(&evidence,"db/t").is_empty());
+        let innodb=mysql_table_id_sqls(&MysqlEvidence{tidb:false,server_uuid:true,server_id:false},"db/t");
         assert_eq!(innodb.len(),2);
         assert!(innodb[0].contains("information_schema.INNODB_TABLES WHERE NAME='db/t'"));
         assert!(innodb[1].contains("information_schema.INNODB_SYS_TABLES WHERE NAME='db/t'"));
@@ -264,9 +281,9 @@ fn default_expression(part:&str)->Result<Option<String>>{
     }
     #[test]fn tidb_is_not_treated_as_native_mysql_even_with_server_uuid(){
         // TiDB 也暴露兼容的 @@server_uuid；不能因此要求 InnoDB TABLE_ID 或走原生强制校验。
-        assert!(!MysqlEvidence{tidb:true,server_uuid:true}.requires_innodb_identity());
-        assert!(MysqlEvidence{tidb:false,server_uuid:true}.requires_innodb_identity());
-        assert!(!MysqlEvidence{tidb:false,server_uuid:false}.requires_innodb_identity());
+        assert!(!MysqlEvidence{tidb:true,server_uuid:true,server_id:false}.requires_innodb_identity());
+        assert!(MysqlEvidence{tidb:false,server_uuid:true,server_id:false}.requires_innodb_identity());
+        assert!(!MysqlEvidence{tidb:false,server_uuid:false,server_id:true}.requires_innodb_identity());
     }
     #[test]fn mysql_table_id_rejects_empty_ambiguous_and_invalid(){
         let row=|id:&str|{let mut r=Record::new();r.insert("id".into(),Some(id.into()));r};

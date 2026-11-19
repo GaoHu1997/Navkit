@@ -214,6 +214,66 @@ async fn user_table_columns(pool: &sqlx::MySqlPool) -> anyhow::Result<BTreeSet<S
     Ok(rows.iter().map(|row| text(&cells(row), 0).to_ascii_lowercase()).collect())
 }
 
+/// 列表仅取展示字段，避免读取认证字符串等敏感列（BUG-TIDB-USERS-001）。
+fn user_list_sql(columns: &BTreeSet<String>) -> String {
+    let mut selected = vec!["user".to_string(), "host".to_string()];
+    for optional in [
+        "ssl_type", "max_questions", "max_updates", "max_connections",
+        "max_user_connections", "super_priv",
+    ] {
+        selected.push(if columns.contains(optional) {
+            optional.to_string()
+        } else {
+            // TiDB 等兼容协议缺列时保留结果位置；NULL 表示未知而不是 0/无权限。
+            format!("NULL AS {optional}")
+        });
+    }
+    format!("SELECT {} FROM mysql.user ORDER BY user, host", selected.join(", "))
+}
+
+fn user_list_entry(values: &[Option<String>]) -> Vec<String> {
+    let super_user = match text(values, 7).to_ascii_uppercase().as_str() {
+        "Y" => "是",
+        "N" => "否",
+        _ => "",
+    };
+    vec![
+        format!("{}@{}", text(values, 0), text(values, 1)),
+        text(values, 2),
+        text(values, 3),
+        text(values, 4),
+        text(values, 5),
+        text(values, 6),
+        super_user.to_string(),
+    ]
+}
+
+// 正常 MySQL 保留原查询，不增加目录请求/权限依赖（BUG-TIDB-USERS-001 追补）。
+const MYSQL_USER_LIST_SQL: &str =
+    "SELECT user, host, ssl_type, max_questions, max_updates, max_connections, \
+     max_user_connections, Super_priv FROM mysql.user ORDER BY user, host";
+
+fn user_list_requires_column_probe(sql_state: Option<&str>) -> bool {
+    // MySQL 未知列 1054；权限、网络、表不存在等错误不得误触发降级。
+    sql_state == Some("42S22")
+}
+
+pub(crate) async fn read_user_list(pool: &sqlx::MySqlPool) -> anyhow::Result<Vec<Vec<String>>> {
+    let rows = match crate::sql_history::query(MYSQL_USER_LIST_SQL).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            let sql_state = error.as_database_error().and_then(|database| database.code());
+            if !user_list_requires_column_probe(sql_state.as_deref()) {
+                return Err(error.into());
+            }
+            let columns = user_table_columns(pool).await?;
+            crate::sql_history::query(&user_list_sql(&columns)).fetch_all(pool).await?
+        }
+    };
+    // mysql.user 的 User/Host 可能为 VARBINARY，沿用元数据文本解码（BUG-R1-012）。
+    Ok(rows.iter().map(|row| user_list_entry(&cells(row))).collect())
+}
+
 async fn read_account(
     pool: &sqlx::MySqlPool,
     columns: &BTreeSet<String>,
@@ -716,6 +776,147 @@ pub async fn apply_db_user_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn column_set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn user_list_mysql_fast_path_keeps_original_sql() {
+        assert_eq!(MYSQL_USER_LIST_SQL,
+            "SELECT user, host, ssl_type, max_questions, max_updates, max_connections, max_user_connections, Super_priv FROM mysql.user ORDER BY user, host");
+    }
+
+    #[test]
+    fn user_list_only_unknown_column_state_triggers_probe() {
+        assert!(user_list_requires_column_probe(Some("42S22")));
+        for code in [None, Some("28000"), Some("42000"), Some("42S02"), Some("08S01"), Some("HY000"), Some("HYT00"), Some("1054")] {
+            assert!(!user_list_requires_column_probe(code), "must not probe on {code:?}");
+        }
+    }
+
+    #[test]
+    fn user_list_full_mysql_columns_preserve_projection() {
+        let columns = column_set(&[
+            "user", "host", "ssl_type", "max_questions", "max_updates",
+            "max_connections", "max_user_connections", "super_priv", "authentication_string",
+        ]);
+        assert_eq!(user_list_sql(&columns),
+            "SELECT user, host, ssl_type, max_questions, max_updates, max_connections, max_user_connections, super_priv FROM mysql.user ORDER BY user, host");
+    }
+
+    #[test]
+    fn user_list_sparse_tidb_columns_use_null_aliases() {
+        let columns = column_set(&["user", "host", "super_priv", "authentication_string"]);
+        assert_eq!(user_list_sql(&columns),
+            "SELECT user, host, NULL AS ssl_type, NULL AS max_questions, NULL AS max_updates, NULL AS max_connections, NULL AS max_user_connections, super_priv FROM mysql.user ORDER BY user, host");
+    }
+
+    #[test]
+    fn user_list_mixed_columns_keep_positions_and_ignore_unrelated_names() {
+        let columns = column_set(&["user", "host", "max_updates", "max_user_connections", "evil; DROP TABLE user"]);
+        assert_eq!(user_list_sql(&columns),
+            "SELECT user, host, NULL AS ssl_type, NULL AS max_questions, max_updates, NULL AS max_connections, max_user_connections, NULL AS super_priv FROM mysql.user ORDER BY user, host");
+    }
+
+    #[test]
+    fn user_list_mysql_values_and_super_flags_are_preserved() {
+        let mut values = ["应用@租户", "%", "ANY", "11", "22", "33", "44", "Y"]
+            .iter().map(|value| Some(value.to_string())).collect::<Vec<_>>();
+        assert_eq!(user_list_entry(&values), vec!["应用@租户@%", "ANY", "11", "22", "33", "44", "是"]);
+        values[7] = Some("n".to_string());
+        assert_eq!(user_list_entry(&values)[6], "否");
+        values[7] = Some("unknown".to_string());
+        assert_eq!(user_list_entry(&values)[6], "");
+    }
+
+    #[test]
+    fn user_list_missing_values_are_not_fabricated() {
+        let values = vec![Some("".to_string()), Some("localhost".to_string()), None, None, None, None, None, None];
+        assert_eq!(user_list_entry(&values), vec!["@localhost", "", "", "", "", "", ""]);
+    }
+
+    // 实际执行同一 SELECT 投影，验证缺列不报错；SQLite 模拟目录不是 TiDB 实库认证。
+    async fn list_fixture(ddl: &str, insert: &str, columns: &[&str]) -> Vec<Vec<String>> {
+        list_fixture_sql(ddl, insert, &user_list_sql(&column_set(columns))).await
+    }
+
+    async fn list_fixture_sql(ddl: &str, insert: &str, sql: &str) -> Vec<Vec<String>> {
+        use sqlx::Row;
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::query("ATTACH DATABASE ':memory:' AS mysql").execute(&pool).await.unwrap();
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+        sqlx::query(insert).execute(&pool).await.unwrap();
+        let rows = sqlx::query(sql).fetch_all(&pool).await.unwrap();
+        let out = rows.iter().map(|row| {
+            let values = (0..8).map(|index| row.try_get::<Option<String>, _>(index).unwrap()).collect::<Vec<_>>();
+            user_list_entry(&values)
+        }).collect();
+        pool.close().await;
+        out
+    }
+
+    #[tokio::test]
+    async fn user_list_sparse_projection_executes_without_missing_columns() {
+        let rows = list_fixture(
+            "CREATE TABLE mysql.user (user TEXT, host TEXT)",
+            "INSERT INTO mysql.user VALUES ('z', '%'), ('应用', 'localhost'), ('a', '%')",
+            &["user", "host"],
+        ).await;
+        assert_eq!(rows, vec![
+            vec!["a@%", "", "", "", "", "", ""],
+            vec!["z@%", "", "", "", "", "", ""],
+            vec!["应用@localhost", "", "", "", "", "", ""],
+        ]);
+    }
+
+    #[tokio::test]
+    async fn user_list_mixed_projection_executes_with_real_values() {
+        let rows = list_fixture(
+            "CREATE TABLE mysql.user (user TEXT, host TEXT, Max_updates TEXT, Super_priv TEXT)",
+            "INSERT INTO mysql.user VALUES ('app', '%', '29', 'Y'), ('app', 'localhost', '0', 'N')",
+            &["user", "host", "max_updates", "super_priv"],
+        ).await;
+        assert_eq!(rows, vec![
+            vec!["app@%", "", "", "29", "", "", "是"],
+            vec!["app@localhost", "", "", "0", "", "", "否"],
+        ]);
+    }
+
+    #[tokio::test]
+    async fn user_list_full_mysql_fast_path_executes_without_losing_values() {
+        let rows = list_fixture_sql(
+            "CREATE TABLE mysql.user (User TEXT, Host TEXT, ssl_type TEXT, max_questions TEXT, max_updates TEXT, max_connections TEXT, max_user_connections TEXT, Super_priv TEXT, authentication_string TEXT)",
+            "INSERT INTO mysql.user VALUES ('app', '%', 'X509', '4294967295', '22', '33', '44', 'Y', 'must-not-read'), ('app', 'localhost', '', '0', '0', '0', '0', 'N', 'must-not-read')",
+            MYSQL_USER_LIST_SQL,
+        ).await;
+        assert_eq!(rows, vec![
+            vec!["app@%", "X509", "4294967295", "22", "33", "44", "是"],
+            vec!["app@localhost", "", "0", "0", "0", "0", "否"],
+        ]);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicit isolated NAVKIT_DB_USERS_MYSQL_URL; read-only mysql.user comparison, not offline acceptance"]
+    async fn user_list_real_mysql_matches_original_query() {
+        let url = std::env::var("NAVKIT_DB_USERS_MYSQL_URL")
+            .expect("explicit isolated MySQL URL is required");
+        let pool = sqlx::mysql::MySqlPoolOptions::new().max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect(&url).await.expect("connect to authorized isolated MySQL");
+        let original = sqlx::query(MYSQL_USER_LIST_SQL).fetch_all(&pool).await
+            .expect("original MySQL user query must succeed");
+        let expected = original.iter().map(|row| user_list_entry(&cells(row))).collect::<Vec<_>>();
+        let actual = read_user_list(&pool).await.expect("new user-list reader must succeed");
+        // 不在失败日志里输出真实账号/主机。
+        assert!(actual == expected, "new MySQL list must match original query exactly");
+        let missing_column = format!("SELECT navkit_missing_{} FROM mysql.user", uuid::Uuid::new_v4().simple());
+        let error = sqlx::query(&missing_column).fetch_all(&pool).await.unwrap_err();
+        let code = error.as_database_error().and_then(|database| database.code());
+        assert!(user_list_requires_column_probe(code.as_deref()), "real unknown-column error must trigger probe");
+        pool.close().await;
+    }
 
     fn privilege(name: &str, granted: bool) -> DbUserPrivilege {
         DbUserPrivilege { name: name.to_string(), granted, grantable: false }

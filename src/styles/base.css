@@ -1979,8 +1979,9 @@ svg {
 }
 .query-page-size-label { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .query-page-size {
+  width: 72px;
+  min-width: 0;
   height: var(--h-control-sm);
-  min-width: 60px;
   padding: 0 var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
@@ -1991,6 +1992,15 @@ svg {
 }
 .query-page-size:disabled { color: var(--text-disabled); }
 .query-page-size:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
+.query-page-size-unit { color: var(--text-tertiary); }
+/* 每页条数与翻页按钮之间的竖分隔线：1px 发丝线，居中对齐控件高度。 */
+.query-pager-divider {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+}
 .query-page-number:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 1px; }
 .query-page-number[aria-invalid="true"] { border-color: var(--danger-500); }
 .query-page-number:disabled { color: var(--text-disabled); }
